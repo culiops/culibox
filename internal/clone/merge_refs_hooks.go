@@ -461,19 +461,23 @@ func (s *refSink) readRecipeName(rel, kind string) {
 //
 // In a make file (kind "make") no "key:" is stripped: a rule line
 // ("targets: prerequisites") is a header, whose prerequisites are targets and
-// not commands (#370 M1), so only what follows its ";" is read; a header whose
-// prerequisites hold "$", a backtick or "=" (a function call, a target-specific
-// variable) is read whole, as is every recipe line (tab-indented, or continued
-// with a backslash), every line of a define block and every other line. A make
-// file that sets .RECIPEPREFIX
-// has recipe lines a header could be mistaken for, so none of its lines is
-// taken as a header.
+// not commands (#370 M1, R18). A path-shaped prerequisite (a "/", a leading ".",
+// a script extension) is always refused; a plain one, and the header line
+// itself, is read as a command only once any make file of the scan uses an
+// automatic variable, .RECIPEPREFIX or a computed variable name (makeLater).
+// What follows a header's ";" is read; a header whose prerequisites hold "$", a
+// backtick or "=" (a function call, a target-specific variable) is read whole,
+// as is every recipe line (tab-indented, or continued with a backslash), every
+// line of a define block and every other line.
 func (s *refSink) scanRecipesIn(data []byte, dir, kind string) {
 	lines := strings.Split(string(data), "\n")
 	includesIndent := -1 // indent of a Taskfile "includes:" key, -1 outside it
 	entryIndent := -1    // indent of its entries, -1 until the first
 	isMake := kind == "make"
-	headers := isMake && !strings.Contains(string(data), ".RECIPEPREFIX")
+	if isMake && makeAutoUse(data) {
+		s.setMakeAuto()
+	}
+	headers := isMake
 	cont := contNone // how the next line continues this one
 	define := 0      // depth of make define ... endef: its text may be a recipe
 	for i, line := range lines {
@@ -539,6 +543,7 @@ func (s *refSink) scanRecipesIn(data []byte, dir, kind string) {
 			switch {
 			case prev == contSkip: // more prerequisites
 				if !strings.ContainsAny(t, "$`;=") {
+					s.makePrereqs(t, t, dir)
 					if cont == contRead {
 						cont = contSkip
 					}
@@ -547,17 +552,20 @@ func (s *refSink) scanRecipesIn(data []byte, dir, kind string) {
 			case prev == contRead || strings.HasPrefix(line, "\t"): // a recipe line
 			default:
 				if rest, ok := makeRuleHeader(t); ok {
-					switch j := strings.IndexByte(rest, ';'); {
-					case strings.ContainsAny(rest, "$`="):
+					if strings.ContainsAny(rest, "$`=") {
+						s.makeLater(t, dir) // the whole line, for a recipe prefix
 						t = rest
-					case j >= 0:
-						t = rest[j+1:] // "target: prereqs ; recipe"
-					default:
+						break
+					}
+					pre, recipe, hasRecipe := strings.Cut(rest, ";")
+					s.makePrereqs(t, pre, dir)
+					if !hasRecipe {
 						if cont == contRead {
 							cont = contSkip
 						}
 						continue
 					}
+					t = recipe // "target: prereqs ; recipe"
 				}
 			}
 			if t = strings.TrimSpace(t); t == "" {
@@ -644,6 +652,90 @@ const (
 	contRead // a recipe or other line: read
 	contSkip // a header's prerequisites: not commands
 )
+
+// makePrereqs reads the prerequisites pre of the make header line (or its
+// continued line) whole: each path-shaped word is refused now, and whole and pre
+// are read as commands once the scan's make files can run a prerequisite
+// (makeLater).
+func (s *refSink) makePrereqs(whole, pre, dir string) {
+	for _, w := range strings.Fields(pre) {
+		if strings.Contains(w, "/") || strings.HasPrefix(w, ".") || hasScriptExt(w) {
+			s.pathArg(w)
+			if dir != "." {
+				s.pathArg(path.Join(dir, w))
+			}
+		}
+	}
+	s.makeLater(whole, dir)
+	if pre != whole {
+		s.makeLater(pre, dir)
+	}
+}
+
+// makeLater reads c (a make line in folder dir) as a recipe command now when a
+// make file of this scan uses an automatic variable, .RECIPEPREFIX or a computed
+// variable name (makeAuto), else keeps it until one does (setMakeAuto): such a
+// file can run a prerequisite ("bash $<") or turn a header into a recipe line.
+// Past mergeRefLines kept lines the scan fails.
+func (s *refSink) makeLater(c, dir string) {
+	if s.makeAuto {
+		s.recipeCommand(c, dir)
+		return
+	}
+	if len(s.makeKept) >= mergeRefLines {
+		s.fail(errScanCap)
+		return
+	}
+	s.makeKept = append(s.makeKept, [2]string{c, dir})
+}
+
+// setMakeAuto marks the scan's make files as able to run a prerequisite and
+// reads every line makeLater kept.
+func (s *refSink) setMakeAuto() {
+	if s.makeAuto {
+		return
+	}
+	s.makeAuto = true
+	kept := s.makeKept
+	s.makeKept = nil
+	for _, k := range kept {
+		s.recipeCommand(k[0], k[1])
+	}
+}
+
+// recipeCommand reads a recipe line of a file in folder dir, which may run there.
+func (s *refSink) recipeCommand(t, dir string) {
+	s.command(t)
+	if dir != "." {
+		s.command("cd " + dir + " && " + t)
+	}
+}
+
+// makeAutoRE is an automatic variable that names a prerequisite: $< $^ $+ $?
+// $* $| and their $(<D) / ${^F} forms.
+var makeAutoRE = regexp.MustCompile(`\$[<^+?*|]|\$[({][<^+?*|]`)
+
+// makeAutoUse reports whether a make file uses an automatic variable, sets
+// .RECIPEPREFIX, or assigns or defines a variable whose name is computed ("$(R)
+// = x", "define $(N)"), which could be either (#370 R18).
+func makeAutoUse(data []byte) bool {
+	if makeAutoRE.Match(data) || bytes.Contains(data, []byte(".RECIPEPREFIX")) {
+		return true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "\t") {
+			continue
+		}
+		t := strings.TrimSpace(line)
+		if f := strings.Fields(t); len(f) > 1 && (f[0] == "define" || f[1] == "define") && strings.Contains(t, "$") {
+			return true
+		}
+		if i := strings.IndexByte(t, '='); i > 0 && strings.Contains(t[:i], "$") {
+			return true
+		}
+	}
+	return false
+}
 
 // makeRuleHeader returns what follows the colon of a make rule line ("targets:
 // prerequisites", "targets:: ...", "a b &: ..."), ok false for any other line:

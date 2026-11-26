@@ -924,6 +924,15 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"make target-specific shell variable: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint: V := $(shell ./tools/u.sh)\nlint:\n\ttrue\n"}, "tools/u.sh", true},
 		{"make define block: a line in it is read whole", map[string]string{".claude/settings.json": hookSettings("make lint"), "Makefile": "define RUN\n./tools/d.sh: arg\nendef\nlint:\n\t$(RUN)\n"}, "tools/d.sh", true},
 		{"make after a define block: prerequisites skipped", map[string]string{".claude/settings.json": hookSettings("make lint"), "build.sh": "h\n", "Makefile": "define RUN\ntrue\nendef\nlint: build\n\t$(RUN)\n"}, "build.sh", false},
+		{"make path prerequisite read by $<: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: tools/x.sh\n\tbash $<\n"}, "tools/x.sh", true},
+		{"make path prerequisite: always refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: tools/p.sh\n\ttrue\n"}, "tools/p.sh", true},
+		{"make leading-dot prerequisite: always refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: .tools/q\n\ttrue\n"}, ".tools/q", true},
+		{"make plain prerequisite run by ./$<: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "x: foo\n\t./$<\n"}, "foo", true},
+		{"make plain prerequisite, ${^} in the file: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: foo\n\techo ${^}\n"}, "foo", true},
+		{"make plain prerequisite, $(<D) in the file: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: foo\n\tcd $(<D)\n"}, "foo", true},
+		{"make plain prerequisite, $? in an include read later: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "mk/a.mk": "x:\n\techo $?\n", "Makefile": "lint: foo\n\ttrue\ninclude mk/a.mk\n"}, "foo", true},
+		{"make plain prerequisite, computed variable name: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "$(R)PREFIX = >\nlint: foo\n\ttrue\n"}, "foo", true},
+		{"make plain prerequisite, no automatic variable: foo merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: foo\n\ttrue\n"}, "foo", false},
 		{"make .RECIPEPREFIX: every line read", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": ".RECIPEPREFIX = >\nlint:\n>build.sh x: y\n"}, "build.sh", true},
 	}
 	for _, c := range cases {

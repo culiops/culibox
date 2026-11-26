@@ -114,6 +114,8 @@ type refSink struct {
 	scriptSeen map[string]bool              // "folder\x00name": a package script already run
 	scriptsRun int                          // package scripts read, against mergeRefScripts
 	recipeSeen map[string]bool              // "folder\x00file": a recipe file already read
+	makeAuto   bool                         // a make file read uses an automatic variable (makeAutoUse)
+	makeKept   [][2]string                  // make lines (line, folder) read once makeAuto is set
 	npmrcWs    map[string]bool              // folder -> its .npmrc sets a workspace key, read once
 
 	inEnv   bool     // an environment value is being read: what it names is not shown
