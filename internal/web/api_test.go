@@ -1441,6 +1441,17 @@ func TestAPI_HostOwnLoginUnknownKindIs400(t *testing.T) {
 	}
 }
 
+func TestAPI_HostOwnLoginKindTheProfileDoesNotBindIs400(t *testing.T) {
+	refusal := fmt.Errorf("profile %q: host_own_login names github, which this profile does not bind: %w", "p", box.ErrUnboxableWorkspace)
+	m := &mockSvc{spawnErr: refusal}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host","host_own_login":["github"]}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "does not bind") {
+		t.Fatalf("code %d body %s, want 400 with the refusal", rec.Code, rec.Body)
+	}
+}
+
 func TestAPI_SpawnActorFromCredential(t *testing.T) {
 	for kind, want := range map[credKind]string{credBearer: "bearer", credCookie: "web"} {
 		m := &mockSvc{}

@@ -12,7 +12,7 @@ const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 const { spawnPayload } = require("../static/spawnform.js");
 
-const BOUND = { name: "infra", runtime: "host", github_owners: ["acme"], aws_connections: ["sandbox"] };
+const BOUND = { name: "infra", runtime: "host", github_owners: ["acme"], aws_connections: ["sandbox"], github_permissions: { contents: "read" } };
 
 function page(over) {
   const doc = { activeElement: null };
@@ -74,6 +74,15 @@ test("renderSpawnOwnLogin: desktop Host draws a row per kind with 'Use the bindi
   assert.equal(gh.length, 2);
   assert.equal(gh[0].checked, true);
   assert.notEqual(gh[1].checked, true);
+  // the note goes while GitHub is on this machine's login, and comes back with the binding
+  pg.run('spawnOwnLoginSet("github", true)');
+  assert.ok(!pg.el.textContent.includes("cannot push"), pg.el.textContent);
+  pg.run('spawnOwnLoginSet("github", false)');
+  assert.ok(pg.el.textContent.includes("cannot push (contents: read)"), pg.el.textContent);
+  // the real contents value, not a fixed "read"
+  pg.box.profile = Object.assign({}, BOUND, { github_permissions: {} });
+  pg.run("renderSpawnOwnLogin()");
+  assert.ok(pg.el.textContent.includes("cannot push (contents: none)"), pg.el.textContent);
   // a writable binding has no note
   pg.box.profile = Object.assign({}, BOUND, { github_write: true });
   pg.run("renderSpawnOwnLogin()");
@@ -114,6 +123,21 @@ test("picking 'Use this machine's login' redraws the cards and the reach box; a 
   assert.deepEqual(pg.run("spawnOwnLoginPicked()"), []);
 });
 
+test("picking a radio keeps keyboard focus on the same option (#375)", () => {
+  const pg = page();
+  pg.run("renderSpawnOwnLogin()");
+  const find = () => radios(pg.el).find((r) => r.attrs.name === "ownlogin-github" && r.attrs.value === "machine");
+  const mine = find();
+  mine.focus();
+  assert.equal(pg.box.document.activeElement, mine);
+  mine.checked = true;
+  mine.onchange({ target: mine });
+  const now = pg.box.document.activeElement;
+  assert.ok(now && now.attrs.name === "ownlogin-github" && now.attrs.value === "machine", "focus stays on the changed input");
+  assert.ok(pg.el.contains(now), "and that input is in the form");
+  assert.equal(now.checked, true);
+});
+
 test("the payload carries the pick on desktop Host only (#375)", () => {
   const pg = page();
   pg.run('spawnOwnLoginSet("github", true)');
@@ -143,4 +167,9 @@ test("#spawn-ownlogin is hidden on the phone like #spawn-reach and sits before i
   assert.ok(a > 0 && a < html.indexOf('id="spawn-reach"'));
   assert.match(html, /<div class="span2" id="spawn-ownlogin" role="group" aria-label="Credentials on Host" hidden><\/div>/);
   assert.match(read("desktop.css"), /#spawn > #spawn-ownlogin \{ order: 10; \}/);
+});
+
+test("radios in the form have their own small-box rule, so #spawn input { width: 100% } does not stretch them (#375)", () => {
+  const css = read("app.css");
+  assert.match(css, /#spawn label\.spawn-check input\[type="radio"\] \{[^}]*width: 16px;[^}]*flex: none;/);
 });

@@ -117,7 +117,12 @@ const hostCredLine = "This session runs on the host, not in a box: these are the
 
 // hostNoPushLine is added to a Host note whose GitHub binding cannot push: the
 // user's way to a push is this machine's own login (#375).
-const hostNoPushLine = "GitHub refuses a push through the GitHub binding (contents: read); to push from Host, the user can start a session with \"Use this machine's login\" for GitHub."
+func hostNoPushLine(contents string) string {
+	if contents == "" {
+		contents = "none"
+	}
+	return "GitHub refuses a push through the GitHub binding (contents: " + contents + "); to push from Host, the user can start a session with \"Use this machine's login\" for GitHub."
+}
 
 // hostOwnLoginLine names the kinds the user took from this machine's own login
 // for this session (own: "github" / "aws").
@@ -131,7 +136,7 @@ func hostOwnLoginLine(own []string) string {
 			labels = append(labels, "AWS")
 		}
 	}
-	return "For " + strings.Join(labels, " and ") + " the user chose this machine's own login for this session: use it."
+	return "Exception to that, for this session only: for " + strings.Join(labels, " and ") + " the user chose this machine's own login, so use it."
 }
 
 // hostCredGuidance is credGuidance for a bound Host session: the same note and
@@ -147,7 +152,7 @@ func hostCredGuidance(bs config.Bindings, own []string) string {
 		s += " " + hostOwnLoginLine(own)
 	}
 	if bs.GitHub != nil && !bs.GitHub.PushRoute() {
-		s += " " + hostNoPushLine
+		s += " " + hostNoPushLine(bs.GitHub.EffectivePermissions()["contents"])
 	}
 	return s
 }

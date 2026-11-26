@@ -1350,18 +1350,21 @@ test("paintReachRows: a row's danger part is its own red span, also after a PROD
 });
 
 // --- #375: a Host session on this machine's own login ---------------------------------------------------------------
-const { ownLoginChoices, OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, OWN_LOGIN_NO_PUSH, OWN_LOGIN_VALUE } = require("../static/spawnpreview.js");
+const { ownLoginChoices, OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, ownLoginNoPush, OWN_LOGIN_VALUE } = require("../static/spawnpreview.js");
 
 test("ownLoginChoices: GitHub then AWS, the read-only note, never tokens (#375)", () => {
   assert.deepEqual(ownLoginChoices({ github_owners: ["acme"], aws_connections: ["a"], tokens: ["t"] }),
-    [{ kind: "github", label: "GitHub", note: "This binding cannot push (contents: read)" }, { kind: "aws", label: "AWS", note: "" }]);
+    [{ kind: "github", label: "GitHub", note: "This binding cannot push (contents: none)" }, { kind: "aws", label: "AWS", note: "" }]);
   assert.equal(ownLoginChoices({ github_owners: ["acme"], github_write: true })[0].note, "");
   assert.deepEqual(ownLoginChoices({ aws_inline: { name: "x" } }).map((c) => c.kind), ["aws"]);
   assert.deepEqual(ownLoginChoices({ tokens: ["t"] }), []);
   assert.deepEqual(ownLoginChoices(null), []);
   assert.equal(OWN_LOGIN_BINDING, "Use the binding");
   assert.equal(OWN_LOGIN_MACHINE, "Use this machine's login");
-  assert.equal(OWN_LOGIN_NO_PUSH, "This binding cannot push (contents: read)");
+  assert.equal(ownLoginNoPush({ contents: "read" }), "This binding cannot push (contents: read)");
+  assert.equal(ownLoginNoPush({}), "This binding cannot push (contents: none)");
+  assert.equal(ownLoginNoPush(undefined), "This binding cannot push (contents: none)");
+  assert.equal(ownLoginChoices({ github_owners: ["acme"], github_permissions: { contents: "none" } })[0].note, "This binding cannot push (contents: none)");
   assert.equal(OWN_LOGIN_VALUE, "this machine's login");
 });
 

@@ -411,12 +411,12 @@ function reachWorkHome(p, repo) {
 // binding, so they never are). GitHub carries a note when its binding cannot push.
 const OWN_LOGIN_BINDING = "Use the binding";
 const OWN_LOGIN_MACHINE = "Use this machine's login";
-const OWN_LOGIN_NO_PUSH = "This binding cannot push (contents: read)";
+const ownLoginNoPush = (perms) => "This binding cannot push (contents: " + ((perms && perms.contents) || "none") + ")";
 const OWN_LOGIN_VALUE = "this machine's login";
 function ownLoginChoices(profile) {
   const p = profile || {};
   const out = [];
-  if (spawnNames(p.github_owners).length) out.push({ kind: "github", label: "GitHub", note: p.github_write === true ? "" : OWN_LOGIN_NO_PUSH });
+  if (spawnNames(p.github_owners).length) out.push({ kind: "github", label: "GitHub", note: p.github_write === true ? "" : ownLoginNoPush(p.github_permissions) });
   if (spawnNames(p.aws_connections).length || p.aws_inline) out.push({ kind: "aws", label: "AWS", note: "" });
   return out;
 }
@@ -662,5 +662,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, OWN_LOGIN_NO_PUSH, OWN_LOGIN_VALUE, ownLoginChoices, spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, OWN_LOGIN_VALUE, ownLoginNoPush, ownLoginChoices, spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

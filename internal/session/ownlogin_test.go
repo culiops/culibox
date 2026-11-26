@@ -481,7 +481,70 @@ func TestHostOwnLoginGuidanceInTheSpawnFlags(t *testing.T) {
 	h := newHostFlagHarness(t, true, nil)
 	h.m.SetSpawnAudit(&fakeSpawnAudit{})
 	_, args := spawnHostFlagsSpec(t, h, ownSpec(t, launcher.OwnLoginAWS))
-	if got := argAfter(args, "--append-system-prompt"); !strings.Contains(got, "For AWS the user chose this machine's own login") {
+	if got := argAfter(args, "--append-system-prompt"); !strings.Contains(got, "for AWS the user chose this machine's own login") {
 		t.Fatalf("note = %q", got)
+	}
+}
+
+// A box session's record that was hand-edited to carry host_own_login is restored without it, and a Restart of it keeps
+// every binding on the broker and writes no host_own_login audit row (a containment pin: only Host may take a login).
+func TestTamperedBoxRecordKeepsEveryBindingAndWritesNoRow(t *testing.T) {
+	l := boundDropsLauncher([]string{"sh", "-c", "sleep 30"}, config.RuntimeBox)
+	h := ownLoginHarness(t, l)
+	fb := newFakeBackend()
+	h.m.backend = fb
+	s, err := h.m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Actor: "web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	if s.Runtime != config.RuntimeBox || s.GitHub == nil {
+		t.Fatalf("fixture: runtime=%s github=%v", s.Runtime, s.GitHub)
+	}
+	sc, err := openSidecar(h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := sc.all()[s.ID]
+	md.HostOwnLogin = []string{launcher.OwnLoginGitHub, launcher.OwnLoginAWS}
+	md.HostOwnActor = "web"
+	sc.put(s.ID, md)
+
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(h.path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(h.boxes)
+	m2.SetBroker(h.hooks)
+	m2.SetEgress(h.eg)
+	m2.SetEgressAll(true)
+	m2.SetContextCheck(func(string) (*box.FileID, error) { return nil, nil })
+	fa := &fakeSpawnAudit{}
+	m2.SetSpawnAudit(fa)
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not restored")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if r.HostOwnLogin != nil || r.Info().HostOwnLogin != nil || r.hostOwnActor != "" {
+		t.Fatalf("a box record restored own=%q actor=%q", r.Info().HostOwnLogin, r.hostOwnActor)
+	}
+	r.mu.Lock()
+	r.status = statusExited
+	r.mu.Unlock()
+	ns, err := m2.Restart(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m2.Kill(ns.ID) })
+	if ns.Runtime != config.RuntimeBox || ns.HostOwnLogin != nil || ns.GitHub == nil || (ns.AWS == nil && len(ns.AWSConns) == 0) {
+		t.Fatalf("restarted: runtime=%s own=%q github=%v aws=%v conns=%v", ns.Runtime, ns.HostOwnLogin, ns.GitHub, ns.AWS, ns.AWSConns)
+	}
+	if recs := fa.records(); len(recs) != 0 {
+		t.Fatalf("audit rows = %+v, want none", recs)
 	}
 }

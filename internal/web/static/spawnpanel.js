@@ -268,6 +268,10 @@ function spawnOwnLoginPicked() {
 function renderSpawnOwnLogin() {
   const box = $("spawn-ownlogin");
   if (!box) return;
+  // The rebuild below replaces the focused radio: remember it and focus its twin, so arrow keys keep working.
+  const ae = typeof document !== "undefined" ? document.activeElement : null;
+  const fname = ae && ae.getAttribute && box.contains && box.contains(ae) ? ae.getAttribute("name") : null;
+  const fval = fname ? ae.getAttribute("value") : null;
   const choices = spawnPanelOn() && spawnCurrentTier() === "host" ? ownLoginChoices(currentProfile()) : [];
   if (!choices.length) {
     box.hidden = true;
@@ -293,10 +297,14 @@ function renderSpawnOwnLogin() {
     };
     opts.append(opt("binding", OWN_LOGIN_BINDING, !mine), opt("machine", OWN_LOGIN_MACHINE, mine));
     row.append(spawnPanelEl("div", "sr-own-k", c.label), opts);
-    if (c.note) row.append(spawnPanelEl("div", "sr-own-note", c.note));
+    if (c.note && !mine) row.append(spawnPanelEl("div", "sr-own-note", c.note));
     kids.push(row);
   }
   box.replaceChildren(...kids);
+  if (fname) {
+    const again = box.querySelector('input[name="' + fname + '"][value="' + fval + '"]');
+    if (again && again.focus) again.focus();
+  }
 }
 
 // renderSpawnReach paints the "This agent will be able to" box for what the form
