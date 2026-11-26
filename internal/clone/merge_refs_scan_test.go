@@ -589,6 +589,12 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 		{"hook npx eslint: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "", "eslint.config.js", true},
 		{"mcp bash -c node: srvz.js", map[string]string{".mcp.json": mcpCmd("bash", "-c", "node srvz"), "srvz.js": "h\n"}, nil, "", "srvz.js", true},
 		{"hook uv run pytest: pytest.ini", map[string]string{".claude/settings.json": hookSettings("uv run pytest -q"), "pytest.ini": "h\n"}, nil, "", "pytest.ini", true},
+		{"hook npx -y yarn: package.json", map[string]string{".claude/settings.json": hookSettings("npx -y yarn install")}, nil, "", "package.json", true},
+		{"mcp uvx poetry: pyproject.toml", map[string]string{".mcp.json": mcpCmd("uvx", "poetry", "run", "pytest")}, nil, "", "pyproject.toml", true},
+		{"hook cross-env node server: server.js", map[string]string{".claude/settings.json": hookSettings("cross-env NODE_ENV=test node server"), "server.js": "h\n"}, nil, "", "server.js", true},
+		{"hook timeout node server: server.js", map[string]string{".claude/settings.json": hookSettings("timeout 60 node server"), "server.js": "h\n"}, nil, "", "server.js", true},
+		{"hook $PY script: srvp.py", map[string]string{".claude/settings.json": hookSettings("$PY srvp"), "srvp.py": "h\n"}, nil, "", "srvp.py", true},
+		{"hook pnpm --filter exec eslint: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("pnpm --filter web exec eslint ."), "eslint.config.js": "h\n"}, nil, "", "eslint.config.js", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -618,7 +624,9 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 				if _, err := f.WriteString(c.gitConfig); err != nil {
 					t.Fatal(err)
 				}
-				f.Close()
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			before := x.tip()
 			x.box("main", map[string]string{c.change: "box\n"})

@@ -119,6 +119,23 @@ func TestParseCommand(t *testing.T) {
 		{"uv run pytest -q", nil, nil, []string{"uv@.*", "pytest@.*"}, []string{"uv"}},
 		{"python -X dev script", nil, nil, []string{"python@.*", "dev@.", "script@."}, nil},
 		{"npx -y pkg@1 && npm test", nil, nil, []string{"npx@.*", "pkg@.*", "npm@.*"}, []string{"npm"}},
+		// A fetched tool that is a runner keeps its manifest, and what follows it
+		// reads as after that command (task 2 review I1).
+		{"npx -y yarn install", nil, nil, []string{"npx@.*", "yarn@.*"}, []string{"yarn"}},
+		{"pnpm dlx yarn@1 install", nil, nil, []string{"pnpm@.*", "yarn@.*"}, []string{"yarn"}},
+		{"pipx run poetry install", nil, nil, []string{"pipx@.*", "poetry@.*"}, []string{"poetry"}},
+		{"uvx poetry run pytest", nil, nil, []string{"uvx@.*", "poetry@.*", "pytest@.*"}, []string{"poetry"}},
+		// An interpreter, fetcher or wrapper later in the command is a new
+		// command word, except among a script's own arguments (I2).
+		{"cross-env NODE_ENV=test node server", nil, nil, []string{"cross-env@.*", "node@.*", "server@."}, []string{"node"}},
+		{"timeout 60 node server", nil, nil, []string{"timeout@.*", "node@.*", "server@."}, []string{"node"}},
+		{"dotenv -- node server", nil, nil, []string{"dotenv@.*", "node@.*", "server@."}, []string{"node"}},
+		{"node server.js node x", []string{"server.js"}, nil, []string{"node@.*"}, []string{"node"}},
+		// A variable command word may be an interpreter: its next word is a script.
+		{"$PY srv", nil, nil, []string{"srv@."}, nil},
+		{"${NODE} srv2", nil, nil, []string{"srv2@."}, nil},
+		// An option with a value before a fetch subcommand.
+		{"pnpm --filter web exec tsc", nil, nil, []string{"pnpm@.*", "tsc@.*"}, []string{"pnpm"}},
 	}
 	for _, c := range cases {
 		ci := parseCommand(of, c.in)

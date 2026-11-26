@@ -164,9 +164,14 @@ func commandPaths(s string) (paths []string, runners []string) {
 //     or xargs, shell keywords, "uv run" / "bundle exec" and the like, and
 //     "bash -c"), the script argument of an interpreter (interpreterRE; after an
 //     option with no "=", the next two words), and the tool a fetcher runs
-//     (fetchers, fetchSubs; its "@version" cut). Subcommands, flag values and
-//     other arguments are not looked up. The command word and a fetcher's tool
-//     also get the tool-config prefix rule (plainWord.tool);
+//     (fetchers, fetchSubs; its "@version" cut). The fetched tool then reads as
+//     a command word (a runner keeps its manifest: "npx -y yarn install"). An
+//     interpreter, fetcher or wrapper later in the command starts a new command
+//     word ("cross-env X=1 node srv"), except among a script's own arguments;
+//     a variable command word ("$PY srv") makes the next word a script.
+//     Subcommands, flag values and other arguments are not looked up. The
+//     command word and a fetcher's tool also get the tool-config prefix rule
+//     (plainWord.tool);
 //   - runners: every word whose base is a commandRunner, except a fetcher whose
 //     spec is clearly remote (a version, a scope, or -y/--yes/-p/--package), and
 //     "pnpm dlx" / "yarn dlx", which add none.
@@ -213,9 +218,6 @@ func parseCommand(of, s string) cmdInfo {
 		}
 	}
 	plain := func(w string, tool bool) {
-		if !plainWordRE.MatchString(w) {
-			return
-		}
 		bases := append([]string{"."}, cwds...)
 		k := w + "\x00" + strings.Join(bases, "\x00")
 		if tool {
@@ -270,10 +272,13 @@ func parseCommand(of, s string) cmdInfo {
 			tries   int    // > 0: an option came first, so its value may come before the word
 			pending string // a fetcher runner waiting to see whether its spec is remote
 			remote  bool
+			// scriptDone: an interpreter's script was read; what follows is its
+			// own arguments, not a new command.
+			scriptDone bool
 		)
 		// classify sets the role of the word after the command word b.
 		classify := func(b string, maybeValue bool) {
-			cmd = b
+			cmd, scriptDone = b, false
 			switch {
 			case commandWrappers[b] || shellKeywords[b]:
 				role = roleCmd
@@ -297,6 +302,29 @@ func parseCommand(of, s string) cmdInfo {
 				return
 			}
 			role, tries = roleNone, 0
+		}
+		// cmdWord reads tok (base b) as a command word.
+		cmdWord := func(tok, b string, pathy bool) {
+			maybeValue := tries > 0
+			tries = 0
+			if !pathy && !shellKeywords[tok] && plainWordRE.MatchString(tok) {
+				plain(tok, true)
+			}
+			if (fetchers[b] || fetchSubs[b] != nil) && commandRunners[b] {
+				if pending != "" && !remote {
+					addRunner(pending)
+				}
+				pending, remote = b, false
+			} else if commandRunners[b] {
+				addRunner(b)
+			}
+			classify(b, maybeValue)
+		}
+		// restarts: a word that starts a new command wherever it stands
+		// ("cross-env X=1 node srv", "timeout 60 node srv"), unless it is an
+		// argument of an interpreter's script.
+		restarts := func(b string) bool {
+			return !scriptDone && (interpreterRE.MatchString(b) || fetchers[b] || commandWrappers[b])
 		}
 		toks := strings.FieldsFunc(seg, commandDelim)
 		for i := 0; i < len(toks); i++ {
@@ -327,11 +355,11 @@ func parseCommand(of, s string) cmdInfo {
 				case name == "-m" && pyish && !hasVal && i+1 < len(toks):
 					i++
 					emitModule(toks[i])
-					role, tries = roleNone, 0 // the module is the program
+					role, tries, scriptDone = roleNone, 0, true // the module is the program
 					continue
 				case pyish && !hasVal && len(name) > 2 && strings.HasPrefix(name, "-m"):
 					emitModule(name[2:]) // "-mmodule", no space
-					role, tries = roleNone, 0
+					role, tries, scriptDone = roleNone, 0, true
 					continue
 				case nodeModuleFlags[name] && nodeish:
 					if !hasVal && i+1 < len(toks) {
@@ -344,14 +372,14 @@ func parseCommand(of, s string) cmdInfo {
 						}
 					} else if val != "" {
 						emitModule(val)
-						plain(val, false)
+						plain(val, false) // as spelled: "a.b" may be an entry too
 					}
 					continue
 				}
 				if !hasVal {
 					// An option with no "=" may take the next word as its value:
 					// the word after it is tried too.
-					if role == roleScript || role == roleCmd || role == roleTool && (name == "-p" || name == "--package") {
+					if role == roleScript || role == roleCmd || role == roleSub || role == roleTool && (name == "-p" || name == "--package") {
 						tries = 2
 					}
 					continue
@@ -389,6 +417,9 @@ func parseCommand(of, s string) cmdInfo {
 					if direct && role == roleCmd && tok != "" && tok != ".." { // "$PY srv", ". ./env.sh"
 						classify(b, tries > 0)
 						tries = 0
+						if strings.HasPrefix(tok, "$") && !strings.Contains(tok, "/") {
+							role = roleScript // "$PY srv": the variable may name an interpreter
+						}
 					} else if direct && (role == roleScript || role == roleTool) {
 						next()
 					}
@@ -406,62 +437,75 @@ func parseCommand(of, s string) cmdInfo {
 				}
 				switch role {
 				case roleCmd:
-					maybeValue := tries > 0
-					tries = 0
-					if !pathy && !shellKeywords[tok] {
-						plain(tok, true)
-					}
-					if (fetchers[b] || fetchSubs[b] != nil) && commandRunners[b] {
-						if pending != "" && !remote {
-							addRunner(pending)
-						}
-						pending, remote = b, false
-					} else if commandRunners[b] {
-						addRunner(b)
-					}
-					classify(b, maybeValue)
+					cmdWord(tok, b, pathy)
 				case roleSub:
-					if commandRunners[b] {
-						addRunner(b)
-					}
 					switch {
 					case fetchSubs[cmd][tok]:
-						role = roleTool
+						role, tries = roleTool, 0
 						if noManifestSubs[cmd][tok] {
 							pending = ""
 						}
 					case restartSubs[cmd][tok]:
-						role = roleCmd
+						role, tries = roleCmd, 0
+					case tries > 0: // "pnpm --filter web exec": maybe the option's value
+						tries = 0
+						if interpreterRE.MatchString(cmd) && !pathy && plainWordRE.MatchString(tok) {
+							plain(tok, false) // or the script of "bun --hot server"
+						}
+					case restarts(b):
+						cmdWord(tok, b, pathy)
 					case interpreterRE.MatchString(cmd): // "bun server": the script
-						if !pathy {
+						if !pathy && plainWordRE.MatchString(tok) {
 							plain(tok, false)
 						}
-						role = roleNone
+						if commandRunners[b] {
+							addRunner(b)
+						}
+						role, scriptDone = roleNone, true
 					default:
+						if commandRunners[b] {
+							addRunner(b)
+						}
 						role = roleNone
 					}
 				case roleScript:
-					if !pathy {
+					if !pathy && plainWordRE.MatchString(tok) {
 						plain(tok, false)
 					}
 					if commandRunners[b] {
 						addRunner(b)
 					}
 					next()
+					if role == roleNone {
+						scriptDone = true
+					}
 				case roleTool:
 					if pending != "" && strings.Contains(tok, "@") { // a scope or a version: fetched
 						remote = true
 					}
-					if !pathy {
-						w := tok
-						if !strings.HasPrefix(w, "@") {
-							w, _, _ = strings.Cut(w, "@")
-						}
+					w := tok
+					if !strings.HasPrefix(w, "@") {
+						w, _, _ = strings.Cut(w, "@")
+					}
+					if !pathy && plainWordRE.MatchString(w) {
 						plain(w, true)
 					}
-					next()
+					// The fetched tool runs like a command word: a runner keeps its
+					// manifest ("npx -y yarn install", "uvx poetry run pytest").
+					tb := path.Base(w)
+					if commandRunners[tb] {
+						addRunner(tb)
+					}
+					if tries > 1 {
+						tries--
+					} else {
+						tries = 0
+						classify(tb, false)
+					}
 				default:
-					if commandRunners[b] {
+					if restarts(b) {
+						cmdWord(tok, b, pathy)
+					} else if commandRunners[b] {
 						addRunner(b)
 					}
 				}
