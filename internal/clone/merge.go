@@ -302,6 +302,17 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return p
 	}
 
+	// Flags found in this same range are not looked for again, and nothing else
+	// is either: they come from its blobs, which the range fixes, and a flagged
+	// range does not merge whatever the tree, the config or the guard now say, so
+	// every scan below would only repeat a refusal (the same reasoning as the
+	// retry window above). A scan that found no flag but could not finish (a
+	// deadline, a git failure) is not held: it runs again, in full.
+	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
+		strings.HasPrefix(p.Detail, mergeFlaggedDetail) {
+		return p
+	}
+
 	// 3. A clean tree (tracked files; git itself refuses to overwrite an untracked one).
 	if res := m.clean(); res != nil {
 		return res
@@ -397,13 +408,8 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 
 	// 4c. The handback inspection of the range; anything short of a clean,
-	// complete scan refuses. Flags found in this same range are not looked for
-	// again: they come from its blobs, which the range fixes. A scan that found
-	// none but could not finish (a deadline, a git failure) is run again.
-	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
-		strings.HasPrefix(p.Detail, mergeFlaggedDetail) {
-		return p
-	}
+	// complete scan refuses. A scan that found none but could not finish (a
+	// deadline, a git failure) is run again; flags found are held above.
 	rep := InspectBranch(m.ctx, m.g, m.of, m.from, m.to, r.Lim)
 	if len(rep.Flags) > 0 || rep.Truncated != "" || rep.Incomplete {
 		var fp []string

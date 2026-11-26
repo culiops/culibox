@@ -1,7 +1,10 @@
 package clone
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -213,7 +216,8 @@ func TestMergeHomeLinkTooManyHopsGuarded(t *testing.T) {
 	wantGuardedBy(t, x, "CLAUDE.md")
 }
 
-// One pass makes one extra git call, a pathspec-limited ls-files -s.
+// One pass makes one extra git call: one `ls-files -s -z` of the whole index,
+// streamed (no pathspec, which costs more than the index on a big repo).
 func TestMergeHomeLinkCheckOneLsFiles(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.commit("host", map[string]string{"docs/agent.md": "host\n"})
@@ -225,16 +229,117 @@ func TestMergeHomeLinkCheckOneLsFiles(t *testing.T) {
 	for _, c := range rec.calls {
 		if slices.Contains(c.args, "ls-files") && slices.Contains(c.args, "-s") {
 			n++
-			if !slices.Contains(c.args, "--") || c.args[len(c.args)-1] == "--" {
-				t.Fatalf("ls-files -s has no pathspec: %q", c.args)
+			if c.args[len(c.args)-1] != "-z" || slices.Contains(c.args, "--") {
+				t.Fatalf("ls-files is not the whole-index `-s -z` listing: %q", c.args)
 			}
-		}
-		if slices.Contains(c.args, "ls-files") && !slices.Contains(c.args, "--") {
-			t.Fatalf("a whole-repo ls-files: %q", c.args)
 		}
 	}
 	if n != 1 {
-		t.Fatalf("ls-files -s ran %d times, want 1", n)
+		t.Fatalf("ls-files ran %d times, want 1", n)
+	}
+}
+
+// A git that cannot stream falls back to the pathspec-limited listing, and the
+// answer is the same.
+func TestMergeHomeLinkCheckFallsBackToPathspecs(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.commit("host", map[string]string{"docs/agent.md": "host\n"})
+	x.link("CLAUDE.md", "docs/agent.md")
+	x.box("main", map[string]string{"docs/agent.md": "box\n"})
+	rec := newRec(t)
+	got := x.run(noStreamStdinGit{rec}, &auditRec{})
+	wantMergeReason(t, got, MergeGuarded)
+	if !slices.Contains(got.Paths, "docs/agent.md") {
+		t.Fatalf("Paths = %q", got.Paths)
+	}
+	n := 0
+	for _, c := range rec.calls {
+		if slices.Contains(c.args, "ls-files") && slices.Contains(c.args, "-s") {
+			n++
+			if !slices.Contains(c.args, "--") || c.args[len(c.args)-1] == "--" {
+				t.Fatalf("the fallback ls-files has no pathspec: %q", c.args)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ls-files ran %d times, want 1", n)
+	}
+}
+
+// fakeLsFiles answers the whole-index ls-files from a canned text, written in
+// chunks of the given size, and everything else from real git.
+type fakeLsFiles struct {
+	ExecGit
+	out   string
+	chunk int
+	fail  error
+}
+
+func (f fakeLsFiles) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	if !slices.Contains(args, "ls-files") {
+		return f.ExecGit.Stream(ctx, dir, env, stdin, stdout, args...)
+	}
+	b := []byte(f.out)
+	for len(b) > 0 {
+		k := min(f.chunk, len(b))
+		if _, err := stdout.Write(b[:k]); err != nil {
+			return err
+		}
+		b = b[k:]
+	}
+	return f.fail
+}
+
+// The streamed index is read as it comes, whatever the chunking: only symbolic
+// links at a protected name count, and a bad or cut-off list fails closed.
+func TestMergeHomeLinkCheckStreamedListing(t *testing.T) {
+	id := strings.Repeat("a", 40)
+	rec := func(mode, p string) string { return mode + " " + id + " 0\t" + p + "\x00" }
+	run := func(t *testing.T, g fakeLsFiles) (*mergeFx, *MergeResult) {
+		t.Helper()
+		eg, err := NewExecGit()
+		if err != nil {
+			t.Skip("no git on PATH")
+		}
+		g.ExecGit = eg
+		x := newMergeFx(t, "main")
+		x.commit("host", map[string]string{"docs/agent.md": "host\n"})
+		x.box("main", map[string]string{"docs/agent.md": "box\n"})
+		return x, x.run(g, &auditRec{})
+	}
+	good := rec("100644", "a.txt") + rec("120000", "pkg/other.link") + rec("100644", "x\ty") + rec("120000", "Pkg/Other.Link")
+	good += rec("120000", "sub/claude.md") // a protected name, spelled in another case
+	for _, chunk := range []int{1, 7, 4096} {
+		t.Run(fmt.Sprintf("chunk %d", chunk), func(t *testing.T) {
+			// No link here resolves to docs/agent.md: the merge goes through.
+			_, got := run(t, fakeLsFiles{out: good, chunk: chunk})
+			wantMerged(t, got)
+		})
+	}
+	t.Run("only links are kept", func(t *testing.T) {
+		// A regular file named CLAUDE.md is not a link: nothing to follow, and with
+		// the set cap at 2 (the fixed names alone are more) it must not be counted.
+		x := newMergeFx(t, "main")
+		x.commit("host", map[string]string{"docs/agent.md": "host\n", "x/CLAUDE.md": "plain\n"})
+		x.box("main", map[string]string{"docs/agent.md": "box\n"})
+		eg, _ := NewExecGit()
+		many := ""
+		for i := range 50 {
+			many += rec("100644", fmt.Sprintf("d%d/CLAUDE.md", i))
+		}
+		wantMerged(t, x.run(fakeLsFiles{ExecGit: eg, out: many, chunk: 100}, &auditRec{}))
+	})
+	for name, g := range map[string]fakeLsFiles{
+		"cut short":   {out: strings.TrimSuffix(rec("120000", "CLAUDE.md"), "\x00"), chunk: 9},
+		"bad record":  {out: "garbage\x00", chunk: 9},
+		"bad mode":    {out: "12x000 " + id + " 0\tCLAUDE.md\x00", chunk: 9},
+		"git failure": {out: rec("100644", "a"), chunk: 9, fail: errors.New("git ls-files: boom")},
+		"too long":    {out: "120000 " + id + " 0\t" + strings.Repeat("p", maxRawToken+1) + "\x00", chunk: 1 << 16},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, got := run(t, g)
+			wantMergeReason(t, got, MergeFailed)
+		})
 	}
 }
 

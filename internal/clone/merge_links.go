@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -249,9 +250,30 @@ func (d *linkDenies) denied(p string) bool {
 // lsFilesEntry is one line of `ls-files -s -z`.
 type lsFilesEntry struct{ mode, path string }
 
-// parseLsFilesStage reads `ls-files -s -z` output: "<mode> <id> <stage>\t<path>"
-// per NUL-terminated record. Anything else is an error, so a cut-off list never
-// reads as a shorter one.
+// parseLsFilesRecord reads one NUL-free record of `ls-files -s -z`:
+// "<mode> <id> <stage>\t<path>". Anything else is an error.
+func parseLsFilesRecord(rec []byte) (mode string, path []byte, err error) {
+	meta, p, ok := bytes.Cut(rec, []byte{'\t'})
+	if !ok || len(p) == 0 {
+		return "", nil, errBadLsFiles
+	}
+	// Exactly three single-space separated fields, as git prints them.
+	i := bytes.IndexByte(meta, ' ')
+	j := bytes.LastIndexByte(meta, ' ')
+	if i != 6 || j <= i+1 || j == len(meta)-1 || bytes.IndexByte(meta[i+1:j], ' ') >= 0 {
+		return "", nil, errBadLsFiles
+	}
+	mode = string(meta[:i])
+	if !octalMode(mode) {
+		return "", nil, errBadLsFiles
+	}
+	return mode, p, nil
+}
+
+var errBadLsFiles = errors.New("unexpected entry in the file list")
+
+// parseLsFilesStage reads `ls-files -s -z` output: one record per NUL-terminated
+// token. Anything else is an error, so a cut-off list never reads as a shorter one.
 func parseLsFilesStage(out []byte) ([]lsFilesEntry, error) {
 	if len(out) == 0 {
 		return nil, nil
@@ -260,13 +282,12 @@ func parseLsFilesStage(out []byte) ([]lsFilesEntry, error) {
 		return nil, errors.New("the file list is cut short")
 	}
 	var es []lsFilesEntry
-	for _, rec := range strings.Split(string(out[:len(out)-1]), "\x00") {
-		meta, p, ok := strings.Cut(rec, "\t")
-		f := strings.Fields(meta)
-		if !ok || p == "" || len(f) != 3 || !octalMode(f[0]) {
-			return nil, errors.New("unexpected entry in the file list")
+	for _, rec := range bytes.Split(out[:len(out)-1], []byte{0}) {
+		mode, p, err := parseLsFilesRecord(rec)
+		if err != nil {
+			return nil, err
 		}
-		es = append(es, lsFilesEntry{mode: f[0], path: p})
+		es = append(es, lsFilesEntry{mode: mode, path: string(p)})
 	}
 	return es, nil
 }
@@ -324,7 +345,7 @@ func (s *protectedSet) add(p string) bool {
 }
 
 // linkDenies builds S from the host's work tree and returns what its links
-// deny: one pathspec-limited `ls-files -s` call, one read of the repo top, and
+// deny: one streamed `ls-files -s` call, one read of the repo top, and
 // at most mergeLinkLstatMax Lstat calls. S holds the tracked symbolic links at
 // a protected name, the links at the top under a protected name, the fixed
 // config places and every path the earlier checks found (hooks dirs, git
@@ -339,19 +360,8 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDeni
 		return m.result(MergeFailed, "cannot check symbolic links: "+errLinkCap.Error(), nil)
 	}
 
-	args := append([]string{"ls-files", "-s", "-z", "--"}, protectedPathspecs()...)
-	out, err := m.run(m.env(), args...)
-	if err != nil {
-		return nil, m.failed("cannot list the protected files", err)
-	}
-	es, err := parseLsFilesStage(out)
-	if err != nil {
-		return nil, m.failed("cannot read the protected file list", err)
-	}
-	for _, e := range es {
-		if e.mode == "120000" && mergeDenied(e.path, hooks) && !set.add(e.path) {
-			return nil, full()
-		}
+	if res := m.trackedLinks(hooks, set); res != nil {
+		return nil, res
 	}
 
 	w, err := newLinkWalker(m.of)
@@ -409,6 +419,74 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDeni
 		d.add(l)
 	}
 	return d, nil
+}
+
+// trackedLinks adds to set every tracked symbolic link at a protected name. A
+// pathspec-limited `ls-files -s` costs more than the whole index on a big repo
+// (the icase glob pathspecs are matched per entry: measured 2.3 s against 0.42 s
+// on 300k entries), so with a streaming git the whole index is listed once and
+// read as it comes: only mode 120000 entries are kept for the name check, and
+// nothing holds the list. Without one the pathspec call runs, under Run's cap.
+// A non-nil result is the refusal (failed: a git or parse failure, or a cap).
+func (m *merger) trackedLinks(hooks []string, set *protectedSet) *MergeResult {
+	sg, ok := m.g.(StreamGit)
+	if !ok {
+		return m.trackedLinksByPathspec(hooks, set)
+	}
+	var bad error
+	full := false
+	split := &nulSplitter{max: maxRawToken, fn: func(tok []byte, over bool) error {
+		if over {
+			bad = errors.New("an entry of the file list is too long")
+			return bad
+		}
+		mode, p, err := parseLsFilesRecord(tok)
+		if err != nil {
+			bad = err
+			return err
+		}
+		if mode != "120000" {
+			return nil
+		}
+		if ps := string(p); mergeDenied(ps, hooks) && !set.add(ps) {
+			full = true
+			return errLinkCap
+		}
+		return nil
+	}}
+	err := sg.Stream(m.ctx, m.of, m.env(), nil, split, hardened("ls-files", "-s", "-z")...)
+	switch {
+	case full:
+		return m.result(MergeFailed, "cannot check symbolic links: "+errLinkCap.Error(), nil)
+	case bad != nil:
+		return m.failed("cannot read the file list", bad)
+	case err != nil:
+		return m.failed("cannot list the tracked files", err)
+	}
+	if err := split.close(); err != nil {
+		return m.failed("cannot read the file list", errors.New("the file list is cut short"))
+	}
+	return nil
+}
+
+// trackedLinksByPathspec is trackedLinks for a git that cannot stream: the
+// protected names as pathspecs, listed through Run.
+func (m *merger) trackedLinksByPathspec(hooks []string, set *protectedSet) *MergeResult {
+	args := append([]string{"ls-files", "-s", "-z", "--"}, protectedPathspecs()...)
+	out, err := m.run(m.env(), args...)
+	if err != nil {
+		return m.failed("cannot list the protected files", err)
+	}
+	es, err := parseLsFilesStage(out)
+	if err != nil {
+		return m.failed("cannot read the protected file list", err)
+	}
+	for _, e := range es {
+		if e.mode == "120000" && mergeDenied(e.path, hooks) && !set.add(e.path) {
+			return m.result(MergeFailed, "cannot check symbolic links: "+errLinkCap.Error(), nil)
+		}
+	}
+	return nil
 }
 
 func linkErrText(err error) string {

@@ -645,6 +645,15 @@ func TestMergeHomeFlaggedMemo(t *testing.T) {
 	if inspected(rec) || mergeCalled(rec) || x.tip() != before {
 		t.Fatal("the same flagged range was inspected again, or merged")
 	}
+	// Held right after the tips: no scan of the tree, the log, the config or the
+	// links runs for a result that cannot change.
+	for _, c := range rec.calls {
+		for _, sub := range []string{"status", "log", "diff-tree", "config", "ls-files", "check-attr", "cat-file"} {
+			if slices.Contains(c.args, sub) {
+				t.Fatalf("a held flagged result ran git %s: %q", sub, c.args)
+			}
+		}
+	}
 
 	// A refusal that found no flag (the scan could not finish: a deadline or a
 	// git failure may pass) is inspected again.
