@@ -231,6 +231,17 @@ func (s *refSink) command(c string) {
 // with no such entry names nothing. Past the look-up caps, or in a folder too
 // big to list, the word is denied as spelled and with each script extension:
 // more refusals, never fewer.
+// toolConfigSkip are words whose "<word>.*" / ".<word>*" entries are not a
+// config the tool runs from the repo: git's own trusted files are denied by
+// name already, and refusing .gitignore or .github/ for every hook that calls
+// git would block ordinary work. Shells and interpreters read their rc files
+// from the user's home, not the repo.
+var toolConfigSkip = map[string]bool{
+	"git": true, "sh": true, "bash": true, "zsh": true, "dash": true, "fish": true,
+	"env": true, "exec": true, "cd": true, "echo": true, "cat": true, "test": true, "true": true,
+	"node": true, "python": true, "python3": true, "ruby": true, "perl": true,
+}
+
 func (s *refSink) plainWord(pw plainWord) {
 	if s.root == nil {
 		return
@@ -260,10 +271,10 @@ func (s *refSink) plainWord(pw plainWord) {
 				s.addRaw(path.Join(base, name))
 			}
 		}
-		if len(pw.word) < 2 {
+		w := strings.ToLower(pw.word)
+		if len(w) < 2 || toolConfigSkip[w] {
 			continue
 		}
-		w := strings.ToLower(pw.word)
 		for _, prefix := range []string{w + ".", "." + w} {
 			for i := sort.SearchStrings(l.sorted, prefix); i < len(l.sorted) && strings.HasPrefix(l.sorted[i], prefix); i++ {
 				s.addRaw(path.Join(base, l.names[l.sorted[i]]))
