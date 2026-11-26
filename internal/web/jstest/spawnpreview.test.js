@@ -223,7 +223,7 @@ test("index.html: the desktop nodes exist and the scripts load in dependency ord
 
 test("base CSS hides the desktop-only nodes, so a phone never draws them", () => {
   const css = read("app.css");
-  assert.match(css, /#spawn-plist,\s*#spawn-reach,\s*#spawn-foot-hint,\s*\.spawn-lbl-model\s*\{\s*display:\s*none;\s*\}/);
+  assert.match(css, /#spawn-plist,\s*#spawn-reach,\s*#spawn-ownlogin,\s*#spawn-foot-hint,\s*\.spawn-lbl-model\s*\{\s*display:\s*none;\s*\}/);
 });
 
 test("Ctrl/Cmd+Enter is wired on the whole spawn form, not only the first message", () => {
@@ -922,7 +922,7 @@ test("desktop.css: the reach grid is 88px | 1fr (room for a 14px glyph and Domai
 });
 
 test("the reach box is painted on the desktop only (the phone hides it and never draws it)", () => {
-  assert.match(read("app.css"), /#spawn-plist,\s*#spawn-reach,\s*#spawn-foot-hint,\s*\.spawn-lbl-model\s*\{\s*display:\s*none;\s*\}/);
+  assert.match(read("app.css"), /#spawn-plist,\s*#spawn-reach,\s*#spawn-ownlogin,\s*#spawn-foot-hint,\s*\.spawn-lbl-model\s*\{\s*display:\s*none;\s*\}/);
   const sync = read("spawnpanel.js");
   const at = sync.indexOf("function syncSpawnPreview");
   const fn = sync.slice(at, sync.indexOf("\n}\n", at));
@@ -1347,4 +1347,37 @@ test("paintReachRows: a row's danger part is its own red span, also after a PROD
   assert.deepStrictEqual(vals[1].find("sr-prod").map((n) => n.textContent), ["PROD"]);
   assert.strictEqual(vals[1].textContent, "livePROD · " + AWS_FULL_ACCESS_TEXT);
   assert.deepStrictEqual(red(vals[2]), []);
+});
+
+// --- #375: a Host session on this machine's own login ---------------------------------------------------------------
+const { ownLoginChoices, OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, OWN_LOGIN_NO_PUSH, OWN_LOGIN_VALUE } = require("../static/spawnpreview.js");
+
+test("ownLoginChoices: GitHub then AWS, the read-only note, never tokens (#375)", () => {
+  assert.deepEqual(ownLoginChoices({ github_owners: ["acme"], aws_connections: ["a"], tokens: ["t"] }),
+    [{ kind: "github", label: "GitHub", note: "This binding cannot push (contents: read)" }, { kind: "aws", label: "AWS", note: "" }]);
+  assert.equal(ownLoginChoices({ github_owners: ["acme"], github_write: true })[0].note, "");
+  assert.deepEqual(ownLoginChoices({ aws_inline: { name: "x" } }).map((c) => c.kind), ["aws"]);
+  assert.deepEqual(ownLoginChoices({ tokens: ["t"] }), []);
+  assert.deepEqual(ownLoginChoices(null), []);
+  assert.equal(OWN_LOGIN_BINDING, "Use the binding");
+  assert.equal(OWN_LOGIN_MACHINE, "Use this machine's login");
+  assert.equal(OWN_LOGIN_NO_PUSH, "This binding cannot push (contents: read)");
+  assert.equal(OWN_LOGIN_VALUE, "this machine's login");
+});
+
+test("reachRows on Host: a kind on this machine's login is one row saying so, with no full-access part (#375)", () => {
+  const prof = { name: "p", runtime: "host", aws_connections: ["a", "b"], github_owners: ["acme"] };
+  const meta = { aws_connections: [{ name: "a", write_capable: false }, { name: "b", write_capable: true, full_access: true }] };
+  const rows = (extra) => reachRows(Object.assign({ profile: prof, tier: "host", meta }, extra));
+  const base = rows({});
+  assert.ok(base.filter((r) => r.id === "aws").length === 2);
+  const aws = rows({ ownLogin: ["aws"] });
+  const awsRows = aws.filter((r) => r.id === "aws");
+  assert.deepEqual(awsRows, [{ k: "AWS", id: "aws", v: "this machine's login" }]);
+  assert.deepEqual(aws.find((r) => r.id === "github"), base.find((r) => r.id === "github"));
+  const gh = rows({ ownLogin: ["github"] });
+  assert.equal(gh.find((r) => r.id === "github").v, "this machine's login");
+  assert.deepEqual(gh.filter((r) => r.id === "aws"), base.filter((r) => r.id === "aws"));
+  const boxBase = reachRows({ profile: prof, tier: "box", meta });
+  assert.deepEqual(reachRows({ profile: prof, tier: "box", meta, ownLogin: ["aws", "github"] }), boxBase);
 });

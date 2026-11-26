@@ -1468,7 +1468,7 @@
     /* Desktop-only parts of the New session dialog (desktop.css shows them above
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */
-    #spawn-plist, #spawn-reach, #spawn-foot-hint, .spawn-lbl-model { display: none; }
+    #spawn-plist, #spawn-reach, #spawn-ownlogin, #spawn-foot-hint, .spawn-lbl-model { display: none; }
     /* The tier cards, the account hint and the desktop label of the Where it runs row: desktop only, like the rule above (desktop.css shows them). */
     #tierpick, #spawn-acct-hint, #runtime-row .tp-lbl { display: none; }
     /* Desktop-only parts of the Settings page (desktop.css shows them on the

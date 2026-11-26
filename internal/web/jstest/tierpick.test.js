@@ -522,12 +522,12 @@ test("a profile change forgets the pick", () => {
     $: (id) => ({ style: {}, id }),
     currentProfile: () => ({}), spawnRuntimeDefault: () => "box", runtimeSegChoices: () => [],
     buildSeg: (el, ch, v, cb) => { order.push("buildSeg"); ctx.cb = cb; },
-    tierSegChanged: function tierSegChanged() {}, tierReset: () => order.push("tierReset"),
+    tierSegChanged: function tierSegChanged() {}, tierReset: () => order.push("tierReset"), spawnOwnLoginReset: () => order.push("spawnOwnLoginReset"),
     renderTierPick: () => order.push("renderTierPick"), updateRuntimeWarning: () => order.push("updateRuntimeWarning"),
   });
   vm.runInContext(appFnSrc("syncRuntimeField"), ctx);
   vm.runInContext("syncRuntimeField()", ctx);
-  assert.deepStrictEqual(order, ["buildSeg", "tierReset", "renderTierPick", "updateRuntimeWarning"]);
+  assert.deepStrictEqual(order, ["buildSeg", "tierReset", "spawnOwnLoginReset", "renderTierPick", "updateRuntimeWarning"]);
   assert.strictEqual(ctx.cb, ctx.tierSegChanged);
 });
 

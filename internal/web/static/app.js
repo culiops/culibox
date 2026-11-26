@@ -6442,6 +6442,7 @@ function syncRuntimeField() {
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
   buildSeg(seg, runtimeSegChoices(), value, tierSegChanged);
   tierReset(); // a profile change forgets the card the user picked
+  spawnOwnLoginReset(); // and which kinds were put on this machine's login (#375)
   renderTierPick();
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
@@ -7055,6 +7056,7 @@ $("spawn").addEventListener("submit", async (ev) => {
   // the yes. Before the busy state, so a No leaves the dialog as it was. Nothing is asked when there is neither (the profile is read
   // from the same card the request is built from).
   const w = spawnWhere();
+  const ownLogin = spawnOwnLoginPicked(); // #375: [] on the phone and on Box
   const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
   const hostGuardrail = w.runtime === "host" ? tierHostGuardrail(currentProfile()) : [];
   // The profile's AWS connections the server marks full_access (/api/meta), named in the confirm.
@@ -7079,11 +7081,15 @@ $("spawn").addEventListener("submit", async (ev) => {
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
     hostDropsBindings: hostDrops.length > 0 || hostGuardrail.length > 0,
+    hostOwnLogin: ownLogin,
   });
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
   // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).
   if (spawnAddsRoot()) req.add_root = true;
-  if (copied) Object.assign(req, { runtime: "box", clone: true, cwd: copied.dir });
+  if (copied) {
+    Object.assign(req, { runtime: "box", clone: true, cwd: copied.dir });
+    delete req.host_own_login; // a Box clone has no machine login to take
+  }
   const draft = $("spawn-prompt").value;
   // The dialog closes the moment the session exists, before the toast: a
   // fixed-position toast renders *beneath* a modal dialog's backdrop, so an Undo

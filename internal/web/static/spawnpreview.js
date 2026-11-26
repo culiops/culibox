@@ -407,6 +407,20 @@ function reachWorkHome(p, repo) {
 // is for PROD and write only (the PROD flag, full access), a host session is told
 // in words.
 // Reads, Imports and Domains come after Tokens; on host there are none of them.
+// #375: the per-kind choice on a Host session. A kind is offered when the profile binds it (tokens always go through the
+// binding, so they never are). GitHub carries a note when its binding cannot push.
+const OWN_LOGIN_BINDING = "Use the binding";
+const OWN_LOGIN_MACHINE = "Use this machine's login";
+const OWN_LOGIN_NO_PUSH = "This binding cannot push (contents: read)";
+const OWN_LOGIN_VALUE = "this machine's login";
+function ownLoginChoices(profile) {
+  const p = profile || {};
+  const out = [];
+  if (spawnNames(p.github_owners).length) out.push({ kind: "github", label: "GitHub", note: p.github_write === true ? "" : OWN_LOGIN_NO_PUSH });
+  if (spawnNames(p.aws_connections).length || p.aws_inline) out.push({ kind: "aws", label: "AWS", note: "" });
+  return out;
+}
+
 function reachRows(o) {
   let x = o || {};
   // clone: false is a session in the workspace itself (Box · in place): read the profile as if it had no copy, so there is
@@ -437,7 +451,15 @@ function reachRows(o) {
     if (x.clone === true) rows.push({ k: "Work home", id: "workhome", v: reachWorkHome(x.profile, shortOf(clone)) });
   }
 
+  // #375: on Host only, a kind on this machine's login is one row saying so (no connection, no full-access part).
+  const own = x.tier === "host" && Array.isArray(x.ownLogin) ? x.ownLogin : [];
+  let ownAws = false;
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
+    if (own.includes("aws")) {
+      if (!ownAws) rows.push({ k: "AWS", id: "aws", v: OWN_LOGIN_VALUE });
+      ownAws = true;
+      continue;
+    }
     const f = it.facts;
     let v = it.name + " · read";
     if (f.fullAccess) v = it.name + " · " + spawnFullText();
@@ -451,7 +473,7 @@ function reachRows(o) {
   }
 
   const gh = m.cloud.filter((i) => i.kind === "GitHub");
-  if (gh.length) rows.push({ k: "GitHub", id: "github", v: ghReachValue(gh.map((i) => i.name), gh[0].facts.write, gh[0].facts.pat) });
+  if (gh.length) rows.push({ k: "GitHub", id: "github", v: own.includes("github") ? OWN_LOGIN_VALUE : ghReachValue(gh.map((i) => i.name), gh[0].facts.write, gh[0].facts.pat) });
 
   const tokens = m.cloud.filter((i) => i.kind === "Token");
   if (tokens.length) rows.push({ k: "Tokens", id: "tokens", v: tokens.map((i) => i.name).join(", ") });
@@ -640,5 +662,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { OWN_LOGIN_BINDING, OWN_LOGIN_MACHINE, OWN_LOGIN_NO_PUSH, OWN_LOGIN_VALUE, ownLoginChoices, spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

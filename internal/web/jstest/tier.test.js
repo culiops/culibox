@@ -245,3 +245,13 @@ test("tierJoinWords joins like config.JoinKinds", () => {
   assert.equal(tierJoinWords(["a", "b"]), "a and b");
   assert.equal(tierJoinWords(["a", "b", "c"]), "a, b and c");
 });
+
+test("ownLoginText names the kinds in order, GitHub, AWS (#375)", () => {
+  const { ownLoginText, OWN_LOGIN_ROW } = require("../static/tier.js");
+  assert.equal(OWN_LOGIN_ROW, "Uses this machine's login");
+  assert.equal(ownLoginText(["github", "aws"]), "GitHub, AWS");
+  assert.equal(ownLoginText(["aws"]), "AWS");
+  assert.equal(ownLoginText(["x"]), "");
+  assert.equal(ownLoginText(["x", "github"]), "GitHub");
+  assert.equal(ownLoginText(undefined), "");
+});
