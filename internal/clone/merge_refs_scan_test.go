@@ -250,6 +250,7 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 // scanRefs runs every scanner over the given files of a fresh repo dir.
 func scanRefs(t *testing.T, files map[string]string) *refSink {
 	t.Helper()
+	noManagedSettings(t)
 	of := t.TempDir()
 	for rel, c := range files {
 		p := filepath.Join(of, filepath.FromSlash(rel))
@@ -260,7 +261,11 @@ func scanRefs(t *testing.T, files map[string]string) *refSink {
 			t.Fatal(err)
 		}
 	}
-	return scanConfigRefs(of, nil)
+	s, err := scanConfigRefs(of, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // Whatever a file holds, reading it never panics and a file that makes no
@@ -385,7 +390,7 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Skip("no mkfifo")
 		}
 		done := make(chan *refSink)
-		go func() { done <- scanConfigRefs(of, nil) }()
+		go func() { s, _ := scanConfigRefs(of, nil, ""); done <- s }()
 		select {
 		case s := <-done:
 			if len(s.paths()) != 0 {
@@ -404,7 +409,7 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err := os.Symlink(out, filepath.Join(of, ".mcp.json")); err != nil {
 			t.Fatal(err)
 		}
-		if s := scanConfigRefs(of, nil); len(s.paths()) != 0 {
+		if s, _ := scanConfigRefs(of, nil, ""); len(s.paths()) != 0 {
 			t.Fatalf("paths = %q through a link out of the repo", s.paths())
 		}
 	})
@@ -419,8 +424,8 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err := os.Symlink("config/mcp.json", filepath.Join(of, ".mcp.json")); err != nil {
 			t.Fatal(err)
 		}
-		if got := scanConfigRefs(of, nil).paths(); !slices.Contains(got, "tools/mcp/server.js") {
-			t.Fatalf("paths = %q, want the server script through an inside link", got)
+		if s, _ := scanConfigRefs(of, nil, ""); !slices.Contains(s.paths(), "tools/mcp/server.js") {
+			t.Fatalf("paths = %q, want the server script through an inside link", s.paths())
 		}
 	})
 }
@@ -431,7 +436,10 @@ func TestConfigRefDeniesList(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.commit("host", map[string]string{".mcp.json": mcpNode})
 	m := &merger{of: x.of}
-	deny, refs := m.configRefDenies(nil)
+	deny, refs, err := m.configRefDenies("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"tools/mcp/server.js", "tools/mcp", "package.json"} {
 		if !slices.Contains(refs, want) {
 			t.Errorf("refs = %q, missing %q", refs, want)
@@ -452,7 +460,10 @@ func TestConfigRefDeniesList(t *testing.T) {
 
 // An empty or unreadable repo scans without a word.
 func TestConfigRefsNoRepo(t *testing.T) {
-	deny, refs := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies(nil)
+	deny, refs, err := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(refs) != 0 || deny("a") {
 		t.Fatalf("refs = %q", refs)
 	}

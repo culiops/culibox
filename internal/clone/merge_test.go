@@ -25,6 +25,7 @@ func newMergeFx(t *testing.T, br string) *mergeFx {
 	if err := os.MkdirAll(of, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	noManagedSettings(t) // the host's own managed Claude Code settings never join a test
 	x := &mergeFx{t: t, of: of, br: br}
 	fixtureGit(t, of, "init", "-q")
 	fixtureGit(t, of, "symbolic-ref", "HEAD", "refs/heads/"+br)

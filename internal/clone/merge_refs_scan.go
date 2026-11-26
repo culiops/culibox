@@ -97,16 +97,22 @@ type dirListing struct {
 
 // scanConfigRefs reads the protected configs at the top of the host work tree
 // of, and the files in its hook folders (hooks: the repo-relative core.hooksPath
-// folders, besides .husky), and returns what they name.
-func scanConfigRefs(of string, hooks []string) *refSink {
+// folders, besides .husky), and then the user's own Claude Code config
+// (scanUser: home, and the managed settings), and returns what they name. The
+// error is a user file the scan could not read.
+func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
 		listings: map[string]*dirListing{}, plainSeen: map[string]bool{}}
-	root, err := os.OpenRoot(s.of)
-	if err != nil {
-		return s
+	if root, err := os.OpenRoot(s.of); err == nil {
+		defer root.Close()
+		s.root = root
+		s.scanRepo(hooks)
 	}
-	defer root.Close()
-	s.root = root
+	return s, s.scanUser(home)
+}
+
+// scanRepo reads the host work tree's own configs.
+func (s *refSink) scanRepo(hooks []string) {
 	s.file(".mcp.json", scanMCPFile)
 	s.file(".claude/settings.json", scanClaudeSettings)
 	s.file(".claude/settings.local.json", scanClaudeSettings)
@@ -131,7 +137,6 @@ func scanConfigRefs(of string, hooks []string) *refSink {
 			s.file(f, scanMise)
 		}
 	}
-	return s
 }
 
 // file reads rel (a regular file, through the root, so no link out of the
@@ -322,13 +327,19 @@ func cleanRaw(tok string) string {
 	return tok
 }
 
-// configRefDenies reads the host's agent, direnv and mise configs for the
-// repo paths they name (scanConfigRefs) and returns whether a repo-relative
-// path from the range is at, under or a parent of one of them (importDenied's
-// rule, case-folded), with the concrete list for the symlink check. It makes no
-// git call and cannot fail.
-func (m *merger) configRefDenies(hooks []string) (func(p string) bool, []string) {
-	refs := scanConfigRefs(m.of, hooks).paths()
+// configRefDenies reads the host's agent, direnv, mise, hook manager and editor
+// configs, and the user's Claude Code config (home), for the repo paths they
+// name (scanConfigRefs) and returns whether a repo-relative path from the range
+// is at, under or a parent of one of them (importDenied's rule, case-folded),
+// with the concrete list for the symlink check. It makes no git call. The error
+// is a user file that is there and cannot be read or parsed: the merge then does
+// not happen.
+func (m *merger) configRefDenies(home string, hooks []string) (func(p string) bool, []string, error) {
+	sink, err := scanConfigRefs(m.of, hooks, home)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs := sink.paths()
 	split := make([][]string, len(refs))
 	for i, r := range refs {
 		split[i] = strings.Split(r, "/")
@@ -341,7 +352,7 @@ func (m *merger) configRefDenies(hooks []string) (func(p string) bool, []string)
 			}
 		}
 		return false
-	}, refs
+	}, refs, nil
 }
 
 // ---- JSON: .mcp.json and .claude/settings*.json
@@ -397,10 +408,13 @@ func (s *refSink) mcpServers(v any) {
 // scanClaudeSettings reads the commands Claude Code runs from a project
 // settings file and the local directories it loads.
 func scanClaudeSettings(s *refSink, data []byte) {
-	m := jsonDoc(data)
-	if m == nil {
-		return
+	if m := jsonDoc(data); m != nil {
+		scanClaudeSettingsDoc(s, m)
 	}
+}
+
+// scanClaudeSettingsDoc is scanClaudeSettings on a parsed settings object.
+func scanClaudeSettingsDoc(s *refSink, m map[string]any) {
 	commandsIn(m["hooks"], 0, s.command)
 	switch v := m["statusLine"].(type) {
 	case string:
