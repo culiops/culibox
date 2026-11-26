@@ -102,27 +102,29 @@ func TestParseCommand(t *testing.T) {
 		// Plain words are looked up only as the command, an interpreter's script
 		// or a fetcher's tool (#370 B-M1).
 		{"node server", nil, nil, []string{"node@.*", "server@."}, []string{"node"}},
-		{"npx -y @playwright/mcp@latest --headless --browser chrome", []string{"@playwright/mcp@latest"}, nil, []string{"npx@.*"}, nil},
-		{"uvx awslabs.x@latest", nil, nil, []string{"uvx@.*"}, nil},
+		{"npx -y @playwright/mcp@latest --headless --browser chrome", []string{"@playwright/mcp@latest"}, nil, []string{"npx@.*"}, []string{"npx"}},
+		{"uvx awslabs.x@latest", nil, nil, []string{"uvx@.*"}, []string{"uvx"}},
 		{"npx eslint --fix", nil, nil, []string{"npx@.*", "eslint@.*"}, []string{"npx"}},
-		{"npx eslint@9 --fix", nil, nil, []string{"npx@.*", "eslint@.*"}, nil},
+		{"npx eslint@9 --fix", nil, nil, []string{"npx@.*", "eslint@.*"}, []string{"npx"}},
 		{"npx --yes some-server", nil, nil, []string{"npx@.*", "some-server@.*"}, []string{"npx"}},
-		// Only a version or tag on the fetched spec makes it remote (#370 R1b):
-		// -y, --yes, -p, --package and a bare scope still run a local bin.
+		// A fetcher always keeps its manifest, whatever the spec (#370 R1c): a
+		// fetched tool still reads its config from the project.
 		{"npx -y prettier --write .", nil, nil, []string{"npx@.*", "prettier@.*"}, []string{"npx"}},
 		{"npx @biomejs/biome check .", []string{"@biomejs/biome"}, nil, []string{"npx@.*"}, []string{"npx"}},
 		{"npx -y @scope/pkg@", []string{"@scope/pkg@"}, nil, []string{"npx@.*"}, []string{"npx"}},
 		{"npx -p cowsay cowsay", nil, nil, []string{"npx@.*", "cowsay@.*"}, []string{"npx"}},
-		{"npx -p cowsay@1 cowsay", nil, nil, []string{"npx@.*", "cowsay@.*"}, nil},
-		{"npx --package=cowsay@1 cowsay", nil, nil, []string{"npx@.*", "cowsay@.*"}, nil},
+		{"npx -p cowsay@1 cowsay", nil, nil, []string{"npx@.*", "cowsay@.*"}, []string{"npx"}},
+		{"npx --package=cowsay@1 cowsay", nil, nil, []string{"npx@.*", "cowsay@.*"}, []string{"npx"}},
+		{"npx file:../tool", []string{"file:../tool"}, nil, []string{"npx@.*"}, []string{"npx"}},
+		{"npx npm:prettier@3 --write .", nil, nil, []string{"npx@.*"}, []string{"npx"}},
 		{"uvx mypy .", nil, nil, []string{"uvx@.*", "mypy@.*"}, []string{"uvx"}},
 		{"pipx run mypy", nil, nil, []string{"pipx@.*", "mypy@.*"}, []string{"pipx"}},
 		{"pipx install black", nil, nil, []string{"pipx@.*"}, nil},
-		{"pnpm dlx create-x@1", nil, nil, []string{"pnpm@.*", "create-x@.*"}, nil},
+		{"pnpm dlx create-x@1", nil, nil, []string{"pnpm@.*", "create-x@.*"}, []string{"pnpm"}},
 		{"yarn dlx @scope/x", []string{"@scope/x"}, nil, []string{"yarn@.*"}, []string{"yarn"}},
 		{"pnpm dlx create-x", nil, nil, []string{"pnpm@.*", "create-x@.*"}, []string{"pnpm"}},
 		{"pnpm exec tsc", nil, nil, []string{"pnpm@.*", "tsc@.*"}, []string{"pnpm"}},
-		{"npm exec -y cowsay@1", nil, nil, []string{"npm@.*", "cowsay@.*"}, nil},
+		{"npm exec -y cowsay@1", nil, nil, []string{"npm@.*", "cowsay@.*"}, []string{"npm"}},
 		{"docker run -i --rm img", nil, nil, []string{"docker@.*"}, nil},
 		{"!/usr/bin/gh auth git-credential", []string{"/usr/bin/gh"}, nil, nil, nil},
 		{"npm test", nil, nil, []string{"npm@.*"}, []string{"npm"}},
@@ -131,13 +133,13 @@ func TestParseCommand(t *testing.T) {
 		{"env FOO=1 node srvw", nil, nil, []string{"env@.*", "node@.*", "srvw@."}, []string{"node"}},
 		{"uv run pytest -q", nil, nil, []string{"uv@.*", "pytest@.*"}, []string{"uv"}},
 		{"python -X dev script", nil, nil, []string{"python@.*", "dev@.", "script@."}, nil},
-		{"npx -y pkg@1 && npm test", nil, nil, []string{"npx@.*", "pkg@.*", "npm@.*"}, []string{"npm"}},
+		{"npx -y pkg@1 && npm test", nil, nil, []string{"npx@.*", "pkg@.*", "npm@.*"}, []string{"npx", "npm"}},
 		// A fetched tool that is a runner keeps its manifest, and what follows it
 		// reads as after that command (task 2 review I1).
-		{"npx -y yarn install", nil, nil, []string{"npx@.*", "yarn@.*"}, []string{"yarn", "npx"}},
-		{"pnpm dlx yarn@1 install", nil, nil, []string{"pnpm@.*", "yarn@.*"}, []string{"yarn"}},
-		{"pipx run poetry install", nil, nil, []string{"pipx@.*", "poetry@.*"}, []string{"poetry", "pipx"}},
-		{"uvx poetry run pytest", nil, nil, []string{"uvx@.*", "poetry@.*", "pytest@.*"}, []string{"poetry", "uvx"}},
+		{"npx -y yarn install", nil, nil, []string{"npx@.*", "yarn@.*"}, []string{"npx", "yarn"}},
+		{"pnpm dlx yarn@1 install", nil, nil, []string{"pnpm@.*", "yarn@.*"}, []string{"pnpm", "yarn"}},
+		{"pipx run poetry install", nil, nil, []string{"pipx@.*", "poetry@.*"}, []string{"pipx", "poetry"}},
+		{"uvx poetry run pytest", nil, nil, []string{"uvx@.*", "poetry@.*", "pytest@.*"}, []string{"uvx", "poetry"}},
 		// An interpreter, fetcher or wrapper later in the command is a new
 		// command word, except among a script's own arguments (I2).
 		{"cross-env NODE_ENV=test node server", nil, nil, []string{"cross-env@.*", "node@.*", "server@."}, []string{"node"}},

@@ -48,8 +48,8 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"mcp unrelated source", map[string]string{".mcp.json": mcpNode}, nil, "src/app.js", false},
 		{"mcp uv script", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"uv","args":["run","tools/mcp.py"]}}}`}, nil, "tools/helper.py", true},
 		{"mcp uv runs pyproject", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"uv","args":["run","tools/mcp.py"]}}}`}, nil, "pyproject.toml", true},
-		{"mcp npx -y unversioned runs the local bin: package.json", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"]}}}`}, nil, "package.json", true},
-		{"mcp npx fetches a versioned spec, package.json merges", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server@1"]}}}`}, nil, "package.json", false},
+		{"mcp npx -y: package.json", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"]}}}`}, nil, "package.json", true},
+		{"mcp npx versioned spec: package.json still refused (#370 R1c)", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server@1"]}}}`}, nil, "package.json", true},
 		{"mcp local npx runs package.json", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["some-server"]}}}`}, nil, "package.json", true},
 		{"mcp flag value", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","args":["--config=./conf/s.json"]}}}`}, nil, "conf/s.json", true},
 		{"mcp env value", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","env":{"NODE_OPTIONS":"--require ./hooks/r.js"}}}}`}, nil, "hooks/r.js", true},
@@ -704,8 +704,8 @@ func TestMergeHomeConfigRefCapFailsClosed(t *testing.T) {
 
 // Plain words are looked up only where a tool runs them as files: the command
 // word, an interpreter's script and a fetcher's tool. Subcommands, flag values
-// and other arguments name nothing, and a fetched remote package adds no
-// manifest (#370 B-M1). The shapes are the ones real configs use.
+// and other arguments name nothing (#370 B-M1); a fetcher always refuses its
+// manifest (#370 R1c). The shapes are the ones real configs use.
 func TestMergeHomePlainWordShapes(t *testing.T) {
 	const pw = `{"mcpServers":{"pw":{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--browser","chrome"]}}}`
 	cases := []struct {
@@ -716,9 +716,9 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 		change    string
 		guarded   bool
 	}{
-		{"user npx playwright: package.json merges", nil, map[string]string{".claude.json": pw}, "", "package.json", false},
+		{"user npx playwright@latest: package.json refused (#370 R1c)", nil, map[string]string{".claude.json": pw}, "", "package.json", true},
 		{"user npx playwright: a flag value merges", nil, map[string]string{".claude.json": pw}, "", "chrome.cfg", false},
-		{"mcp uvx: pyproject.toml merges", map[string]string{".mcp.json": mcpCmd("uvx", "awslabs.x@latest")}, nil, "", "pyproject.toml", false},
+		{"mcp uvx @latest: pyproject.toml refused (#370 R1c)", map[string]string{".mcp.json": mcpCmd("uvx", "awslabs.x@latest")}, nil, "", "pyproject.toml", true},
 		{"mcp docker run: .dockerignore merges", map[string]string{".mcp.json": mcpCmd("docker", "run", "-i", "--rm", "img")}, nil, "", ".dockerignore", false},
 		{"mcp docker run: run.sh merges", map[string]string{".mcp.json": mcpCmd("docker", "run", "-i", "--rm", "img")}, nil, "", "run.sh", false},
 		{"git credential helper gh: auth/ merges", nil, nil, "[credential]\n\thelper = !/usr/bin/gh auth git-credential\n", "auth/x", false},
@@ -733,7 +733,7 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 		{"hook uv run pytest: pytest.ini", map[string]string{".claude/settings.json": hookSettings("uv run pytest -q"), "pytest.ini": "h\n"}, nil, "", "pytest.ini", true},
 		{"hook npx -y yarn: package.json", map[string]string{".claude/settings.json": hookSettings("npx -y yarn install")}, nil, "", "package.json", true},
 		{"mcp uvx poetry: pyproject.toml", map[string]string{".mcp.json": mcpCmd("uvx", "poetry", "run", "pytest")}, nil, "", "pyproject.toml", true},
-		// A fetcher runs a local bin unless the spec has a version or tag (#370 R1b).
+		// A fetcher always refuses its manifest, whatever the spec (#370 R1c).
 		{"hook npx -y prettier: package.json", map[string]string{".claude/settings.json": hookSettings("npx -y prettier --write .")}, nil, "", "package.json", true},
 		{"husky npx --yes lint-staged: package.json", map[string]string{".husky/pre-commit": "npx --yes lint-staged\n"}, nil, "", "package.json", true},
 		{"hook npx @biomejs/biome: package.json", map[string]string{".claude/settings.json": hookSettings("npx @biomejs/biome check .")}, nil, "", "package.json", true},
@@ -741,8 +741,9 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 		{"hook uvx mypy: pyproject.toml", map[string]string{".claude/settings.json": hookSettings("uvx mypy .")}, nil, "", "pyproject.toml", true},
 		{"hook pipx run mypy: pyproject.toml", map[string]string{".claude/settings.json": hookSettings("pipx run mypy .")}, nil, "", "pyproject.toml", true},
 		{"hook pnpm dlx tool: package.json", map[string]string{".claude/settings.json": hookSettings("pnpm dlx some-tool")}, nil, "", "package.json", true},
-		{"hook npx -p versioned: package.json merges", map[string]string{".claude/settings.json": hookSettings("npx -p cowsay@1 cowsay hi")}, nil, "", "package.json", false},
-		{"hook pnpm dlx versioned: package.json merges", map[string]string{".claude/settings.json": hookSettings("pnpm dlx create-x@1")}, nil, "", "package.json", false},
+		{"hook npx -p versioned: package.json", map[string]string{".claude/settings.json": hookSettings("npx -p cowsay@1 cowsay hi")}, nil, "", "package.json", true},
+		{"hook npx prettier@3: package.json", map[string]string{".claude/settings.json": hookSettings("npx -y prettier@3 --write .")}, nil, "", "package.json", true},
+		{"hook pnpm dlx versioned: package.json", map[string]string{".claude/settings.json": hookSettings("pnpm dlx create-x@1")}, nil, "", "package.json", true},
 		{"hook cross-env node server: server.js", map[string]string{".claude/settings.json": hookSettings("cross-env NODE_ENV=test node server"), "server.js": "h\n"}, nil, "", "server.js", true},
 		{"hook timeout node server: server.js", map[string]string{".claude/settings.json": hookSettings("timeout 60 node server"), "server.js": "h\n"}, nil, "", "server.js", true},
 		{"hook $PY script: srvp.py", map[string]string{".claude/settings.json": hookSettings("$PY srvp"), "srvp.py": "h\n"}, nil, "", "srvp.py", true},

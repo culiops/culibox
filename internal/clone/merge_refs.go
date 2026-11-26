@@ -32,9 +32,10 @@ var projectDirSpellings = []string{
 
 // commandRunners are programs that read a manifest at the repo top (a script
 // table, a build file, a lock-in config) and run what it says. A fetcher (npx,
-// pnpx, bunx, uvx and the fetch subcommands) runs a local bin or a tool that
-// reads its config from the project manifest (package.json, pyproject.toml)
-// unless the fetched spec carries a version or tag (versionedSpec, #370 R1b).
+// pnpx, bunx, uvx and the fetch subcommands) always counts, whatever its spec:
+// a fetched tool, versioned or not, reads its config from the project manifest
+// (prettier@3 reads package.json "prettier"), and the spec forms (file:, npm:,
+// git, -p) are not parsed (#370 R1c).
 var commandRunners = map[string]bool{
 	"npm": true, "npx": true, "pnpm": true, "pnpx": true, "yarn": true, "bun": true, "bunx": true, "uvx": true,
 	"node": true, "deno": true, "make": true, "just": true, "task": true, "uv": true,
@@ -72,24 +73,6 @@ var commandWrappers = map[string]bool{"env": true, "exec": true, "command": true
 // word, and the keyword itself names nothing.
 var shellKeywords = map[string]bool{"if": true, "then": true, "else": true, "elif": true, "do": true,
 	"while": true, "until": true}
-
-// versionedSpec reports whether a fetched package spec carries a version or
-// tag ("pkg@1", "@scope/pkg@latest"): only then does a fetcher run the fetched
-// package and not a local bin or a tool reading the project manifest (#370
-// R1b). "-y", "--yes", "-p" and a bare "@scope/pkg" say nothing about that: a
-// hook has no TTY, so npx assumes --yes anyway, and a spec with no version
-// matches the local install.
-func versionedSpec(spec string) bool {
-	if rest, ok := strings.CutPrefix(spec, "@"); ok {
-		_, after, ok := strings.Cut(rest, "/")
-		if !ok {
-			return false
-		}
-		spec = after
-	}
-	_, v, ok := strings.Cut(spec, "@")
-	return ok && v != ""
-}
 
 // wordRole is what the next plain word of a simple command is.
 type wordRole int
@@ -766,9 +749,8 @@ func nodeRunName(args []string) (name string, ok bool) {
 //     Subcommands, flag values and other arguments are not looked up. The
 //     command word and a fetcher's tool also get the tool-config prefix rule
 //     (plainWord.tool);
-//   - runners: every word whose base is a commandRunner, and "pipx run", except
-//     a fetcher whose spec (the tool, or the value of -p/--package) carries a
-//     version or tag (versionedSpec): -y, --yes and a bare scope do not count.
+//   - runners: every word whose base is a commandRunner (fetchers included,
+//     whatever their spec), and "pipx run".
 //
 // Skipped: other options (the value of --flag=value is read), URLs, "~" and
 // "$VAR" spellings, ".", "..". It over-approximates on purpose: a wrong path only
@@ -864,11 +846,9 @@ func parseCommand(of, s string) cmdInfo {
 	var lex *cmdLex                           // s split once by shellWords, when a recipe runner is seen
 	for si, seg := range strings.FieldsFunc(s, segmentDelim) {
 		var (
-			role    = roleCmd
-			cmd     string // the base of the last command word
-			tries   int    // > 0: an option came first, so its value may come before the word
-			pending string // a fetcher runner waiting to see whether its spec is remote
-			remote  bool
+			role  = roleCmd
+			cmd   string // the base of the last command word
+			tries int    // > 0: an option came first, so its value may come before the word
 			// scriptDone: an interpreter's script was read; what follows is its
 			// own arguments, not a new command.
 			scriptDone bool
@@ -908,12 +888,7 @@ func parseCommand(of, s string) cmdInfo {
 			if !pathy && !shellKeywords[tok] && plainWordRE.MatchString(tok) {
 				plain(tok, true)
 			}
-			if (fetchers[b] || fetchSubs[b] != nil) && commandRunners[b] {
-				if pending != "" && !remote {
-					addRunner(pending)
-				}
-				pending, remote = b, false
-			} else if commandRunners[b] {
+			if commandRunners[b] {
 				addRunner(b)
 			}
 			classify(b, maybeValue)
@@ -953,9 +928,6 @@ func parseCommand(of, s string) cmdInfo {
 			switch {
 			case strings.HasPrefix(tok, "-"):
 				name, val, hasVal := strings.Cut(tok, "=")
-				if role == roleTool && pending != "" && hasVal && (name == "-p" || name == "--package") && versionedSpec(val) {
-					remote = true // "--package=pkg@1"; the spaced form is read as the tool word below
-				}
 				if role == roleScript && shellRE.MatchString(cmd) && shellRunsArg(name) {
 					role, tries = roleCmd, 0 // bash -c "node x": node is a command word
 					continue
@@ -1061,11 +1033,8 @@ func parseCommand(of, s string) cmdInfo {
 					switch {
 					case fetchSubs[cmd][tok]:
 						role, tries = roleTool, 0
-						if !commandRunners[cmd] { // "pipx run": the tool reads pyproject.toml unless fetched
-							if pending != "" && !remote {
-								addRunner(pending)
-							}
-							pending, remote = cmd, false
+						if !commandRunners[cmd] { // "pipx run": the tool reads pyproject.toml
+							addRunner(cmd)
 						}
 					case restartSubs[cmd][tok]:
 						role, tries = roleCmd, 0
@@ -1102,9 +1071,6 @@ func parseCommand(of, s string) cmdInfo {
 						scriptDone = true
 					}
 				case roleTool:
-					if pending != "" && versionedSpec(tok) { // a version or tag: fetched
-						remote = true
-					}
 					w := tok
 					if !strings.HasPrefix(w, "@") {
 						w, _, _ = strings.Cut(w, "@")
@@ -1132,9 +1098,6 @@ func parseCommand(of, s string) cmdInfo {
 					}
 				}
 			}
-		}
-		if pending != "" && !remote {
-			addRunner(pending)
 		}
 		// The folders the segment moved to (cd, -C, --prefix) apply to its runners.
 		for _, k := range segRefs {
