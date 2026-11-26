@@ -152,6 +152,28 @@ type scriptRef struct {
 	names  []string // package scripts the call runs, with their pre and post scripts
 	all    bool     // the name is not known: every script (a recipe runner: the whole file)
 	dirs   []string
+	files  []string // recipe files the call names ("make -f x.mk", "just --justfile x", "task -t x")
+}
+
+// recipeFileFlags are the options that name the recipe file of a runner.
+var recipeFileFlags = map[string][]string{"make": {"-f", "--file", "--makefile"}, "just": {"-f", "--justfile"}, "task": {"-t", "--taskfile"}}
+
+// recipeFilesIn returns the values of the runner's file options in args.
+func recipeFilesIn(runner string, args []string) []string {
+	var out []string
+	for i, a := range args {
+		name, val, hasVal := strings.Cut(a, "=")
+		if !slices.Contains(recipeFileFlags[runner], name) {
+			continue
+		}
+		if !hasVal && i+1 < len(args) {
+			val = args[i+1]
+		}
+		if val != "" {
+			out = append(out, val)
+		}
+	}
+	return out
 }
 
 // nodeScriptRunners read package.json scripts; recipeRunners read a recipe file.
@@ -399,6 +421,9 @@ func parseCommand(of, s string) cmdInfo {
 			if rb := path.Base(tok); (nodeScriptRunners[rb] || recipeRunners[rb]) && !strings.HasPrefix(tok, "-") &&
 				!strings.HasPrefix(tok, "$") && !envAssignRE.MatchString(tok) {
 				ref := scriptRef{runner: rb, all: recipeRunners[rb]}
+				if recipeRunners[rb] {
+					ref.files = recipeFilesIn(rb, toks[i+1:])
+				}
 				if nodeScriptRunners[rb] {
 					ref.names, ref.all = scriptNames(rb, toks[i+1:])
 				}

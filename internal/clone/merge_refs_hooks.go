@@ -110,6 +110,9 @@ func (s *refSink) hookDir(rel string) {
 func scanShell(s *refSink, data []byte) {
 	for i, line := range strings.Split(string(data), "\n") {
 		if i >= mergeRefLines {
+			if moreLines(strings.Split(string(data), "\n"), i) {
+				s.fail(errScanCap)
+			}
 			return
 		}
 		if t := strings.TrimSpace(line); t != "" && t[0] != '#' {
@@ -292,21 +295,92 @@ func stripJSONC(b []byte) []byte {
 var (
 	recipeKeyRE     = regexp.MustCompile(`^[A-Za-z0-9_./-]+:(?:\s+|$)`)
 	recipeIncludeRE = regexp.MustCompile(`^(include|-include|sinclude|import|mod)\s+(.*)$`)
+	taskIncludeRE   = regexp.MustCompile(`^\s*(?:-\s+)?taskfile:\s*(\S.*)$`)
+	taskEntryRE     = regexp.MustCompile(`^\s+[A-Za-z0-9_.-]+:\s+(\S.*)$`)
 )
 
-// scanRecipes reads a make, just or task recipe file line by line (no parser):
-// every line that is not empty or a comment is a command, after the recipe
-// prefixes (@ - +), a "- " list marker and a leading "key:" are stripped, so the
-// lines of a Makefile, a justfile and the cmds of a Taskfile all read as
-// commands. The files make includes and just imports or mods are paths too.
-func scanRecipes(s *refSink, data []byte) {
-	for i, line := range strings.Split(string(data), "\n") {
+// moreLines reports whether lines (from index i) hold a line that is not empty
+// or a comment: a cap that stops before one of those must fail.
+func moreLines(lines []string, i int) bool {
+	for ; i < len(lines); i++ {
+		if t := strings.TrimSpace(lines[i]); t != "" && t[0] != '#' {
+			return true
+		}
+	}
+	return false
+}
+
+// scanRecipes reads a make, just or task recipe file at the repo top.
+func scanRecipes(s *refSink, data []byte) { s.scanRecipesIn(data, ".") }
+
+// readRecipe reads the recipe file rel (repo-relative) once, whatever named it.
+func (s *refSink) readRecipe(rel string) {
+	rel = path.Clean(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+		return
+	}
+	k := path.Dir(rel) + "\x00" + path.Base(rel)
+	if s.recipeSeen[k] {
+		return
+	}
+	s.recipeSeen[k] = true
+	dir := path.Dir(rel)
+	s.file(rel, func(s *refSink, data []byte) { s.scanRecipesIn(data, dir) })
+}
+
+// recipeInclude reads the file a recipe file (in dir) includes, imports or
+// names: relative to dir, then to the repo top. Only literal names are read.
+func (s *refSink) recipeInclude(dir string, cands []string) {
+	for _, c := range cands {
+		if c = cleanRaw(c); c == "" || strings.ContainsAny(c, "$*(") {
+			continue
+		}
+		s.readRecipe(path.Join(dir, c))
+		if dir != "." {
+			s.readRecipe(c)
+		}
+	}
+}
+
+// scanRecipesIn reads a make, just or task recipe file (in repo folder dir)
+// line by line (no parser): every line that is not empty or a comment is a
+// command, after the recipe prefixes (@ - +), a "- " list marker and a leading
+// "key:" are stripped, so the lines of a Makefile, a justfile and the cmds of a
+// Taskfile all read as commands. The files make includes, just imports or mods
+// and a Taskfile's includes name are paths and are read too (recipeInclude). A
+// file with more than mergeRefLines lines fails the scan.
+func (s *refSink) scanRecipesIn(data []byte, dir string) {
+	lines := strings.Split(string(data), "\n")
+	includesIndent := -1 // indent of a Taskfile "includes:" key, -1 outside it
+	for i, line := range lines {
 		if i >= mergeRefLines {
+			if moreLines(lines, i) {
+				s.fail(errScanCap)
+			}
 			return
 		}
 		t := strings.TrimSpace(line)
 		if t == "" || t[0] == '#' {
 			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if includesIndent >= 0 && indent <= includesIndent {
+			includesIndent = -1
+		}
+		if t == "includes:" {
+			includesIndent = indent
+			continue
+		}
+		if m := taskIncludeRE.FindStringSubmatch(line); m != nil {
+			v := strings.TrimSpace(m[1])
+			s.pathArg(v)
+			s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
+		} else if includesIndent >= 0 {
+			if m := taskEntryRE.FindStringSubmatch(line); m != nil {
+				v := strings.TrimSpace(m[1])
+				s.pathArg(v)
+				s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
+			}
 		}
 		for n := 0; n < 8; n++ { // a few prefixes: "- @cmd", "- key: cmd"
 			switch {
@@ -327,8 +401,16 @@ func scanRecipes(s *refSink, data []byte) {
 		if m := recipeIncludeRE.FindStringSubmatch(t); m != nil {
 			for _, a := range strings.Fields(m[2]) {
 				s.pathArg(a)
+				if m[1] == "mod" {
+					s.recipeInclude(dir, []string{a + ".just", a + "/mod.just", a + "/justfile", a})
+				} else {
+					s.recipeInclude(dir, []string{a})
+				}
 			}
 		}
 		s.command(t)
+		if dir != "." { // an included file's recipes may run in its folder
+			s.command("cd " + dir + " && " + t)
+		}
 	}
 }

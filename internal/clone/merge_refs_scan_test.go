@@ -439,6 +439,18 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
+	t.Run("recipe line count", func(t *testing.T) {
+		files := map[string]string{".envrc": "make\n", "Makefile": strings.Repeat("x:\n", mergeRefLines) + "\t./late/b.sh\n"}
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
+	t.Run("hook script line count", func(t *testing.T) {
+		files := map[string]string{".husky/pre-commit": strings.Repeat("true\n", mergeRefLines) + "./late/b.sh\n"}
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
 	t.Run("too many cd folders fails closed", func(t *testing.T) {
 		if _, err := scanRefsErr(t, map[string]string{".envrc": strings.Repeat("cd a && ", 20) + "./x\n"}); !errors.Is(err, errScanCap) {
 			t.Fatalf("err = %v, want errScanCap", err)
@@ -727,6 +739,17 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"just recipe", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "fmt:\n  ./j/fmt.sh\n"}, "j/fmt.sh", true},
 		{"task cmds", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./t/x.sh\n"}, "t/x.sh", true},
 		{"Taskfile.dist.yml", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.dist.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./t/x.sh\n"}, "t/x.sh", true},
+		{"make include is read", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include mk/rules.mk\n", "mk/rules.mk": "fmt:\n\t./inc1/x.sh\n"}, "inc1/x.sh", true},
+		{"make -f names a file", map[string]string{".claude/settings.json": hookSettings("make -f other.mk fmt"), "other.mk": "fmt:\n\t./inc2/x.sh\n"}, "inc2/x.sh", true},
+		{"make -f file itself is guarded", map[string]string{".claude/settings.json": hookSettings("make -f other.mk fmt"), "other.mk": "fmt:\n"}, "other.mk", true},
+		{"just import is read", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "import 'j/more.just'\n", "j/more.just": "fmt:\n  ./inc3/x.sh\n"}, "inc3/x.sh", true},
+		{"just mod is read", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod sub\n", "sub.just": "fmt:\n  ./inc4/x.sh\n"}, "inc4/x.sh", true},
+		{"just --justfile", map[string]string{".claude/settings.json": hookSettings("just --justfile ops.just fmt"), "ops.just": "fmt:\n  ./inc5/x.sh\n"}, "inc5/x.sh", true},
+		{"task -t", map[string]string{".claude/settings.json": hookSettings("task -t ops.yml lint"), "ops.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./inc6/x.sh\n"}, "inc6/x.sh", true},
+		{"taskfile includes, short form", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\nincludes:\n  sub: ./sub/Taskfile.yml\n", "sub/Taskfile.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./inc7/x.sh\n"}, "inc7/x.sh", true},
+		{"taskfile includes, taskfile key and a folder", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\nincludes:\n  sub:\n    taskfile: ./sub\n    dir: ./sub\n", "sub/Taskfile.yml": "tasks:\n  lint:\n    cmds:\n      - ./inc8/x.sh\n"}, "inc8/x.sh", true},
+		{"include loop ends", map[string]string{".claude/settings.json": hookSettings("make a"), "Makefile": "include b.mk\n", "b.mk": "include Makefile\n./inc9/x.sh\n"}, "inc9/x.sh", true},
+		{"an include nobody reaches merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "include mk/rules.mk\n", "mk/rules.mk": "fmt:\n\t./inc10/x.sh\n"}, "inc10/x.sh", false},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {

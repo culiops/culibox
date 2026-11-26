@@ -304,12 +304,11 @@ func (s *refSink) runScripts(r scriptRef) {
 				if !ok {
 					continue
 				}
-				k := dir + "\x00" + name
-				if s.recipeSeen[k] {
-					continue
-				}
-				s.recipeSeen[k] = true
-				s.file(path.Join(dir, name), scanRecipes)
+				s.readRecipe(path.Join(dir, name))
+			}
+			for _, f := range r.files { // "make -f other.mk"
+				s.pathArg(f)
+				s.recipeInclude(dir, []string{f})
 			}
 			continue
 		}
