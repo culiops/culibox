@@ -8,7 +8,6 @@ import (
 	"log"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -71,7 +70,7 @@ type MergeRequest struct {
 // basename at any depth, that a box's commits must not touch for the merge to
 // happen: files host tools (an agent, direnv, mise, git) load and act on by
 // themselves. Entries may be added, never dropped.
-var MergeDenyNames = append(slices.Clone(box.InPlaceGuardFiles),
+var MergeDenyNames = append(box.InPlaceGuardFiles(),
 	".envrc", ".gitattributes", ".gitmodules", "mise.toml", ".mise.toml",
 	"mise.local.toml", ".mise.local.toml",
 	".pre-commit-config.yaml", ".pre-commit-hooks.yaml", ".overcommit.yml",
