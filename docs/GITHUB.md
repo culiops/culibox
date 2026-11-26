@@ -65,7 +65,7 @@ An owner bound with a personal access token shows `permissions: the token's own 
 
 ### Push from Host
 
-A binding made with `contents: read` cannot push. On Host, pick "Use this machine's login" for GitHub in New session: the session then uses your own git credential helpers, `gh` login and SSH keys, and CuliBox sets and strips nothing for GitHub. The choice is per spawn and is never stored in the profile. When a Host session pushes through a read-only binding, the git helper prints this once per session on stderr:
+A binding made with `contents: read` cannot push. On Host, pick "Use this machine's login" for GitHub in New session: the session then uses your own git credential helpers, `gh` login and SSH keys, and CuliBox sets and strips nothing for GitHub. The choice is per spawn and is never stored in the profile. The first time a Host session fetches a GitHub credential from a binding that cannot push (any git network command: fetch, clone or push), the git helper prints this once per session on stderr:
 
 ```text
 agentbox: the GitHub binding can read but not push (contents: read); to push from Host, start a session with "Use this machine's login" for GitHub.
