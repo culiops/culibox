@@ -75,6 +75,22 @@ function tierHostGuardrail(profile) {
 // keeps the user's own access to the machine. The card row and the confirm say it the same way.
 const TP_GUARD_TAIL = "The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.";
 
+// #375: the kinds a Host session takes from this machine's own login are not on the binding, so the guardrail sentence and the
+// confirm stop naming them. tier.js owns the label and the kinds' text (a browser global; require in node).
+function tierOwnDep(name) {
+  if (name === "text") return typeof ownLoginText === "function" ? ownLoginText : require("./tier.js").ownLoginText;
+  return typeof OWN_LOGIN_ROW === "string" ? OWN_LOGIN_ROW : require("./tier.js").OWN_LOGIN_ROW;
+}
+
+// tierOwnLoginGuard: the guardrail without the "GitHub binding" / "AWS binding" of the kinds on this machine's login.
+function tierOwnLoginGuard(guard, ownLogin) {
+  const own = Array.isArray(ownLogin) ? ownLogin : [];
+  const gone = [];
+  if (own.includes("github")) gone.push("GitHub binding");
+  if (own.includes("aws")) gone.push("AWS binding");
+  return (Array.isArray(guard) ? guard : []).filter((g) => !gone.includes(g));
+}
+
 // tierGuardrailParts: the sentence about the bindings as {subject, rest}, so the card can bold the subject. One binding reads
 // "the GitHub binding is the default credential"; several "AWS, GitHub and token bindings are the default credentials".
 function tierGuardrailParts(guardrail) {
@@ -193,14 +209,17 @@ function tierModel(o) {
       { k: "Rest of machine", v: [{ b: "your whole account:" }, { t: " every file, key and network this machine has." }] },
     ],
   };
-  const guard = tierHostGuardrail(p);
+  const allGuard = tierHostGuardrail(p);
+  const guard = tierOwnLoginGuard(allGuard, o.ownLogin);
   if (guard.length) {
     const g = tierGuardrailParts(guard);
     rows.host.push({ k: "On Host", v: [{ b: g.subject }, { t: g.rest }] });
   }
+  const ownText = Array.isArray(o.ownLogin) ? tierOwnDep("text")(o.ownLogin) : "";
+  if (ownText) rows.host.push({ k: tierOwnDep("row"), v: [{ b: ownText }] });
   const drops = tierHostDrops(p);
   if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoin(drops) + "." }] });
-  if (guard.length || drops.length) {
+  if (allGuard.length || drops.length) {
     const keeps = tierHostKeeps(p);
     if (keeps.length) rows.host.push({ k: "Still on Host", v: [{ b: tierJoin(keeps) + "." }] });
   }
@@ -305,6 +324,7 @@ function renderTierPick() {
   const m = tierModel({
     profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", picked: tierPicked,
     cloneUnavailable, vmStopped: tierVmStopped, short: shortPath, git: drawerDesktop() ? tierGitNow() : null,
+    ownLogin: spawnOwnLoginPicked(), // #375: the kinds on this machine's login (only ever non-empty on the desktop Host card)
   });
   el.replaceChildren(...m.cards.map(tierCard));
   el.dataset.value = m.pick;
@@ -377,9 +397,17 @@ function tierLeaveCloneDir(p) {
   return true;
 }
 
+// tierShownRuntime: the runtime of the card on screen ("" before the first draw), the "before" of a runtime change.
+function tierShownRuntime() {
+  const el = $("tierpick");
+  return el && el.dataset.value ? tierWhere(el.dataset.value).runtime : "";
+}
+
 // tierPick: a click on a card. Box · in place on a clone profile whose workspace is the clone dir moves the workspace to the repo
 // the clone was made from (that is what "in place" edits), in the field and in the request.
 function tierPick(key) {
+  // #375: the kinds put on this machine's login belong to one stay on Host: a runtime change forgets them.
+  if (tierWhere(key).runtime !== tierShownRuntime()) spawnOwnLoginReset();
   tierPicked = key;
   const convert = key === "clone" && tierConvert({
     profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", git: drawerDesktop() ? tierGitNow() : null, pick: key,
@@ -397,6 +425,7 @@ function tierPick(key) {
 
 // tierSegChanged: the phone's seg changed. Host is host; Box keeps a clone card.
 function tierSegChanged(v) {
+  if (v !== tierShownRuntime()) spawnOwnLoginReset(); // #375, as tierPick
   // Box keeps a clone card: the one picked, or the one the cards show (a tap on the seg's selected Box fires this too).
   const el = $("tierpick");
   const shown = tierPicked === "clone" || (el && el.dataset.value === "clone");
@@ -442,10 +471,14 @@ function tierHostFullAccess(profile, entries) {
 // settings Host drops (drops). Resolves true only on "Start on Host"; Cancel has the focus. The drops are text nodes in a list,
 // never markup. The sentence about the bindings is a note in the body (the footer hint is hidden when too wide).
 // keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a note names them.
-async function hostDropsConfirm(profileName, drops, keeps, guardrail, fullAccess) {
-  const guard = Array.isArray(guardrail) ? guardrail : [];
+// ownLogin (#375): the kinds the form puts on this machine's login; the bindings of those kinds are not named as the default,
+// and a note says which kinds use the machine's login. fullAccess arrives already filtered by the submit (none for AWS on it).
+async function hostDropsConfirm(profileName, drops, keeps, guardrail, fullAccess, ownLogin) {
+  const guard = tierOwnLoginGuard(Array.isArray(guardrail) ? guardrail : [], ownLogin);
   const dropped = Array.isArray(drops) ? drops : [];
   const notes = guard.length ? [[tierGuardrailLine(guard)]] : [];
+  const ownText = Array.isArray(ownLogin) ? tierOwnDep("text")(ownLogin) : "";
+  if (ownText) notes.push([tierOwnDep("row") + ": " + ownText + "."]);
   if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
   // fullAccess: the names of the profile's AWS connections the server marks full_access: each is named with the label, in the
   // danger tone the Credentials card and the Access tab use.
@@ -473,6 +506,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, TP_NO_CARD, tierConvert, tierGitRepo, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess,
+    tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess, tierOwnLoginGuard,
   };
 }

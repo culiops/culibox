@@ -1145,3 +1145,11 @@ test("the tier glyphs are ICON_LOCKED's, so a tier looks the same on the sidebar
   assert.match(read("app.js"), /ICON_LOCKED\["tier-" \+ name\]/);
   assert.ok(read("deskshell.js").includes("ICON_LOCKED") && !/SVG_|TP_ICONS/.test(read("deskshell.js")), "deskshell.js names ICON_LOCKED, not the retired lists");
 });
+
+test("deskContainmentChip's title names the kinds on this machine's login; unchanged without (#375)", () => {
+  const plain = d.deskContainmentChip(idle, "runc");
+  const own = d.deskContainmentChip({ ...idle, host_own_login: ["github"] }, "runc");
+  assert.equal(own.title, plain.title + " Uses this machine's login: GitHub.");
+  assert.equal(own.text, plain.text);
+  assert.equal(d.deskContainmentChip({ ...working, host_own_login: ["github"] }, "runc").title, d.deskContainmentChip(working, "runc").title, "a boxed session never says it");
+});

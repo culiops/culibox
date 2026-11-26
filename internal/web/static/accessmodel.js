@@ -269,6 +269,7 @@ function accessModel(o) {
   const locked = accDep("lockedRow", "./steerrail.js")(s);
   const policy = accDep("policyRow", "./steerrail.js")(s);
   const hostDropped = accDep("hostDroppedRow", "./steerrail.js")(s);
+  const hostOwnLogin = accDep("hostOwnLoginRow", "./steerrail.js")(s);
   const cloneParts = accDep("cloneParts", "./steerrail.js");
   const cp = s.clone ? cloneParts(s.clone, s.agent) : { warn: [], info: [] };
   const containment = {
@@ -284,6 +285,7 @@ function accessModel(o) {
     clone: s.clone_of || s.clone ? { of: s.clone_of || "", warn: cp.warn, info: cp.info } : null,
     dropped: drops || null,
     hostDropped: hostDropped || null,
+    hostOwnLogin: hostOwnLogin || null,
     locked: locked || null,
     policy: policy || null,
   };

@@ -4,7 +4,7 @@ const { ICON_SRC } = require("./iconpage.js");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess,
+  tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess, tierOwnLoginGuard,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -308,6 +308,8 @@ function tpPage(over) {
     paintSpawnAcctHint: () => calls.push(["paintSpawnAcctHint"]),
     // app.js's critical-rm row (#342): counted apart from `calls`, whose order the tests below pin.
     critSyncs: 0, syncCritRmRow: () => { box.critSyncs++; },
+    // spawnpanel.js's per-kind "this machine's login" pick (#375): none unless a test gives some.
+    spawnOwnLoginPicked: () => [], spawnOwnLoginReset: () => {},
   };
   Object.assign(box, over || {});
   const ctx = vm.createContext(box);
@@ -1215,4 +1217,74 @@ test("tierHostFullAccess picks only the profile's connections the server marks f
   assert.deepStrictEqual(tierHostFullAccess({ name: "p" }, entries), [], "no aws_connections");
   assert.deepStrictEqual(tierHostFullAccess(null, entries), []);
   assert.deepStrictEqual(tierHostFullAccess({ aws_connections: ["a"] }, undefined), []);
+});
+
+// --- Host on this machine's own login (#375) -------------------------------------------------------------------------------------
+
+test("tierOwnLoginGuard drops the kinds on this machine's login (#375)", () => {
+  assert.deepStrictEqual(tierOwnLoginGuard(["AWS binding", "GitHub binding", "token binding"], ["github"]), ["AWS binding", "token binding"]);
+  assert.deepStrictEqual(tierOwnLoginGuard(["AWS binding"], []), ["AWS binding"]);
+  assert.deepStrictEqual(tierOwnLoginGuard(["AWS binding"], undefined), ["AWS binding"]);
+});
+
+test("the Host card says 'Uses this machine's login: GitHub' and no longer lists GitHub under On Host (#375)", () => {
+  const host = (own, p) => tierModel({ profile: p || guarded, cwd: "/home/u/w", home, short, picked: "host", ownLogin: own }).cards.find((c) => c.key === "host");
+  const h = host(["github"]);
+  assert.deepStrictEqual(rowOf(h, "Uses this machine's login").v, [{ b: "GitHub" }]);
+  assert.match(flat(rowOf(h, "On Host")), /^the AWS binding is the default credential/);
+  assert.ok(!/GitHub/.test(flat(rowOf(h, "On Host"))));
+  const all = host(["github", "aws"]);
+  assert.strictEqual(rowOf(all, "On Host"), undefined, "every bound kind on this machine's login: no On Host row");
+  assert.deepStrictEqual(rowOf(all, "Uses this machine's login").v, [{ b: "GitHub, AWS" }]);
+  assert.deepStrictEqual(host(undefined).rows, host([]).rows);
+  assert.strictEqual(rowOf(host(undefined), "Uses this machine's login"), undefined);
+  assert.ok(rowOf(host(undefined), "On Host"), "no choice: today's rows");
+});
+
+test("hostDropsConfirm restates the choice and names only the bindings still in use (#375)", async () => {
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; }, AWS_FULL_ACCESS_TEXT: "full access" });
+  const threeGuard = '["AWS binding", "GitHub binding", "token binding"]';
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ' + threeGuard + ', [], ["github", "aws"])', pg.ctx);
+  const notes = JSON.parse(JSON.stringify(asked[0].notes));
+  assert.deepStrictEqual(notes[1], ["Uses this machine's login: GitHub, AWS."]);
+  assert.match(notes[0][0], /^On Host: the token binding is the default credential/);
+  assert.ok(!/GitHub|AWS/.test(notes[0][0]));
+  // the full-access names arrive already filtered by the submit: they are named as given
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ' + threeGuard + ', ["prod-admin"], ["github"])', pg.ctx);
+  assert.ok(JSON.stringify(asked[1].notes).includes("prod-admin"));
+  // no choice: exactly the five-argument call (the phone's)
+  for (const tail of [", []", ", undefined", ""]) {
+    await vm.runInContext('hostDropsConfirm("infra", [], [], ' + threeGuard + ', ["prod-admin"]' + tail + ')', pg.ctx);
+  }
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ' + threeGuard + ', ["prod-admin"])', pg.ctx);
+  const five = JSON.stringify(asked.pop());
+  for (const o of asked.slice(2)) assert.strictEqual(JSON.stringify(o), five);
+});
+
+test("the submit passes ownLogin to the confirm and clears hostFull for AWS on this machine's login (#375)", () => {
+  const app = readStatic("app.js");
+  const at = app.indexOf("const ownLogin = spawnOwnLoginPicked();");
+  assert.ok(at > 0);
+  const tail = app.slice(at);
+  assert.match(tail, /const hostFull = [^\n]*!ownLogin\.includes\("aws"\)[^\n]*: \[\];/);
+  assert.match(tail, /hostDropsConfirm\([\s\S]*?hostFull, ownLogin\)\)/);
+  assert.match(tail, /hostDropsBindings: hostDrops\.length > 0 \|\| hostGuardrail\.length > 0/);
+});
+
+test("a runtime change forgets the kinds put on this machine's login, Host -> Box -> Host too (#375)", () => {
+  let resets = 0;
+  const pg = tpPage({ profile: plain, spawnOwnLoginReset: () => { resets++; } });
+  pg.run('tierPick("host")'); // seg was box
+  assert.strictEqual(resets, 1);
+  pg.run('tierPick("host")'); // Host to Host
+  assert.strictEqual(resets, 1);
+  pg.run('tierPick("box")');
+  assert.strictEqual(resets, 2);
+  pg.run('tierSegChanged("host")');
+  assert.strictEqual(resets, 3);
+  pg.run('tierSegChanged("host")');
+  assert.strictEqual(resets, 3);
+  pg.run('tierSegChanged("box")');
+  assert.strictEqual(resets, 4);
 });

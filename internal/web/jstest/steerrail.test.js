@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, hostOwnLoginRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
 // steerrail.js is a browser script: withCommas is usage.js's global there.
 globalThis.withCommas = require("../static/usage.js").withCommas;
 // The real tierBadge, not a hand-written stand-in: the point of the change these
@@ -529,4 +529,12 @@ test("lockedRow: null without locked files; otherwise one wrapping row naming th
   assert.strictEqual(row.wrap, true);
   assert.strictEqual(row.v, "Locked on your Mac while this session runs: .mcp.json, CLAUDE.md " +
     "(macOS cannot otherwise stop the box changing them through another letter case)");
+});
+
+test("hostOwnLoginRow: host only, the kinds as text (#375)", () => {
+  assert.deepEqual(hostOwnLoginRow({ runtime: "host", host_own_login: ["github"] }), { k: "Uses this machine's login", v: "GitHub" });
+  assert.deepEqual(hostOwnLoginRow({ runtime: "host", host_own_login: ["aws", "github"] }).v, "GitHub, AWS");
+  assert.equal(hostOwnLoginRow({ runtime: "box", host_own_login: ["github"] }), null);
+  assert.equal(hostOwnLoginRow({ runtime: "host" }), null);
+  assert.equal(hostOwnLoginRow(null), null);
 });
