@@ -87,6 +87,7 @@ type cmdInfo struct {
 	dirs    []string    // repo-relative folders named by a flag or cd: denied as themselves
 	runners []string    // commandRunners the command calls
 	plain   []plainWord // words that name an entry only if one exists
+	over    bool        // a cap stopped the parse: mergeRefPaths or maxCommandCwds
 }
 
 // commandPaths is parseCommand's paths and runners, for callers with no work
@@ -124,6 +125,7 @@ func parseCommand(of, s string) cmdInfo {
 	)
 	emit = func(p string) {
 		if len(ci.paths) >= mergeRefPaths { // the sink keeps no more than that anyway
+			ci.over = true
 			return
 		}
 		ci.paths = append(ci.paths, p)
@@ -150,7 +152,11 @@ func parseCommand(of, s string) cmdInfo {
 	}
 	plain := func(w string) {
 		bases := append([]string{"."}, cwds...)
-		if k := w + "\x00" + strings.Join(bases, "\x00"); !plainSeen[k] && len(ci.plain) < mergeRefPaths {
+		if k := w + "\x00" + strings.Join(bases, "\x00"); !plainSeen[k] {
+			if len(ci.plain) >= mergeRefPaths {
+				ci.over = true
+				return
+			}
 			plainSeen[k] = true
 			ci.plain = append(ci.plain, plainWord{word: w, bases: bases})
 		}
@@ -172,10 +178,15 @@ func parseCommand(of, s string) cmdInfo {
 			news = append(news, path.Join(e, rel))
 		}
 		for _, n := range news {
-			if len(cwds) < maxCommandCwds && !slices.Contains(cwds, n) {
-				cwds = append(cwds, n)
-				ci.dirs = append(ci.dirs, n)
+			if slices.Contains(cwds, n) {
+				continue
 			}
+			if len(cwds) >= maxCommandCwds {
+				ci.over = true
+				continue
+			}
+			cwds = append(cwds, n)
+			ci.dirs = append(ci.dirs, n)
 		}
 	}
 	for _, seg := range strings.FieldsFunc(s, segmentDelim) {

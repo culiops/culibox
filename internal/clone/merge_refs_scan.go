@@ -2,6 +2,10 @@ package clone
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,9 +20,11 @@ import (
 // the repo they run or load (an MCP server script, a hook, a sourced env file).
 // A box commit that changes such a file or its folder is as trusted as a change
 // to the config, so the merge refuses it (#370). The scan reads the host's work
-// tree only (the side the box has not written), never fails the merge, and only
-// adds refusals: a file it cannot read or parse is skipped, and a spelling it
-// over-reads only costs a refusal.
+// tree only (the side the box has not written) and only adds refusals: a file
+// it cannot parse is skipped, and a spelling it over-reads only costs a refusal.
+// A cap (too many paths, files, folders or look-ups) or a folder that cannot be
+// listed ends the merge failed (errScanCap, a wrapped read error): a scan that
+// stopped early must never read as a shorter list of paths.
 //
 // What it does not see: code a named script imports from elsewhere in the repo
 // (the script's own folder is refused, other folders are not), configs below
@@ -33,6 +39,10 @@ const (
 	mergeRefDepth     = 24  // JSON nesting followed
 	mergeRefListings  = 64  // folders read for plain words
 )
+
+// errScanCap is a scan that hit one of its caps: it saw fewer paths than the
+// configs name, so the merge must not go on.
+var errScanCap = errors.New("too many paths to check")
 
 // mergeRefPlain is the number of plain word look-ups made per check (a var so a
 // test can lower it).
@@ -88,22 +98,28 @@ type refSink struct {
 
 	listings  map[string]*dirListing // folders read for plain words, by repo-relative path
 	plainSeen map[string]bool        // plain word look-ups made, "base\x00word"
+	err       error                  // the first cap or listing error
+}
+
+// fail keeps the first error only.
+func (s *refSink) fail(err error) {
+	if s.err == nil {
+		s.err = err
+	}
 }
 
 // dirListing is the names in one folder: lower-cased name -> name as spelled.
-// truncated is set when the folder holds more than mergeRefDirScan entries or
-// cannot be read as a folder of the repo.
 type dirListing struct {
-	names     map[string]string
-	sorted    []string // the keys of names, sorted, for prefix look-ups
-	truncated bool
+	names  map[string]string
+	sorted []string // the keys of names, sorted, for prefix look-ups
 }
 
 // scanConfigRefs reads the protected configs at the top of the host work tree
 // of, and the files in its hook folders (hooks: the repo-relative core.hooksPath
 // folders, besides .husky), and then the user's own Claude Code config
 // (scanUser: home, and the managed settings), and returns what they name. The
-// error is a user file the scan could not read.
+// error is a user file the scan could not read, errScanCap, or a folder it could
+// not list.
 func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
 		listings: map[string]*dirListing{}, plainSeen: map[string]bool{}}
@@ -112,7 +128,10 @@ func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 		s.root = root
 		s.scanRepo(hooks)
 	}
-	return s, s.scanUser(home)
+	if err := s.scanUser(home); err != nil {
+		return s, err
+	}
+	return s, s.err
 }
 
 // scanRepo reads the host work tree's own configs.
@@ -145,9 +164,13 @@ func (s *refSink) scanRepo(hooks []string) {
 
 // file reads rel (a regular file, through the root, so no link out of the
 // repo is followed) and hands what it holds to scan. A file that is absent,
-// not regular or unreadable is skipped.
+// not regular or unreadable is skipped. Past mergeRefFiles files the scan fails.
 func (s *refSink) file(rel string, scan func(*refSink, []byte)) {
-	if s.root == nil || s.reads >= mergeRefFiles {
+	if s.root == nil {
+		return
+	}
+	if s.reads >= mergeRefFiles {
+		s.fail(errScanCap)
 		return
 	}
 	f, err := s.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
@@ -164,10 +187,19 @@ func (s *refSink) file(rel string, scan func(*refSink, []byte)) {
 func (s *refSink) topMiseFiles() []string {
 	d, err := s.root.Open(".")
 	if err != nil {
+		s.fail(fmt.Errorf("cannot list the repository top: %w", err))
 		return nil
 	}
-	ents, _ := d.ReadDir(mergeRefDirScan)
+	ents, err := d.ReadDir(mergeRefDirScan + 1)
 	d.Close()
+	if len(ents) > mergeRefDirScan {
+		s.fail(errScanCap)
+		return nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.fail(fmt.Errorf("cannot list the repository top: %w", err))
+		return nil
+	}
 	var out []string
 	for _, e := range ents {
 		n := strings.ToLower(e.Name())
@@ -184,11 +216,16 @@ func (s *refSink) topMiseFiles() []string {
 
 func (s *refSink) full() bool { return len(s.raws)+len(s.exact) >= mergeRefPaths }
 
-// addRaw keeps a path spelling to deny with its folder.
+// addRaw keeps a path spelling to deny with its folder; a full list fails the scan.
 func (s *refSink) addRaw(p string) {
-	if p != "" && !s.full() && !slices.Contains(s.raws, p) {
-		s.raws = append(s.raws, p)
+	if p == "" || slices.Contains(s.raws, p) {
+		return
 	}
+	if s.full() {
+		s.fail(errScanCap)
+		return
+	}
+	s.raws = append(s.raws, p)
 }
 
 // pathArg keeps a token the config names as a path whatever it looks like
@@ -197,9 +234,15 @@ func (s *refSink) pathArg(tok string) { s.addRaw(cleanRaw(tok)) }
 
 // dir keeps a directory the config names: the directory itself, not its folder.
 func (s *refSink) dir(tok string) {
-	if t := cleanRaw(tok); t != "" && !s.full() && !slices.Contains(s.exact, t) {
-		s.exact = append(s.exact, t)
+	t := cleanRaw(tok)
+	if t == "" || slices.Contains(s.exact, t) {
+		return
 	}
+	if s.full() {
+		s.fail(errScanCap)
+		return
+	}
+	s.exact = append(s.exact, t)
 }
 
 // command reads a command line for the paths it names and the runners it calls.
@@ -208,6 +251,9 @@ func (s *refSink) command(c string) {
 		return
 	}
 	ci := parseCommand(s.of, c)
+	if ci.over {
+		s.fail(errScanCap)
+	}
 	for _, p := range ci.paths {
 		s.addRaw(p)
 	}
@@ -229,8 +275,7 @@ func (s *refSink) command(c string) {
 // "<word>.*" or ".<word>*" ("eslint" reads eslint.config.js and .eslintrc.cjs,
 // "prettier" reads .prettierrc.js; not for a word of one character). A word
 // with no such entry names nothing. Past the look-up caps, or in a folder too
-// big to list, the word is denied as spelled and with each script extension:
-// more refusals, never fewer.
+// big to list, the scan fails (errScanCap): never fewer refusals.
 // toolConfigSkip are words whose "<word>.*" / ".<word>*" entries are not a
 // config the tool runs from the repo: git's own trusted files are denied by
 // name already, and refusing .gitignore or .github/ for every hook that calls
@@ -246,26 +291,17 @@ func (s *refSink) plainWord(pw plainWord) {
 	if s.root == nil {
 		return
 	}
-	spelled := func(base string) {
-		for _, cand := range append([]string{""}, scriptExts...) {
-			s.addRaw(path.Join(base, pw.word+cand))
-		}
-	}
 	for _, base := range pw.bases {
 		key := base + "\x00" + pw.word
 		if s.plainSeen[key] {
 			continue
 		}
 		if len(s.plainSeen) >= mergeRefPlain {
-			spelled(base)
-			continue
+			s.fail(errScanCap)
+			return
 		}
 		s.plainSeen[key] = true
 		l := s.listing(base)
-		if l.truncated {
-			spelled(base)
-			continue
-		}
 		for _, cand := range append([]string{""}, scriptExts...) {
 			if name, ok := l.names[strings.ToLower(pw.word+cand)]; ok {
 				s.addRaw(path.Join(base, name))
@@ -284,25 +320,34 @@ func (s *refSink) plainWord(pw plainWord) {
 }
 
 // listing reads the folder base (repo-relative, "." for the top) through the
-// root, once.
+// root, once. A folder that is not there (or not a folder) has no entries; a
+// cap or any other error fails the scan and the listing is empty.
 func (s *refSink) listing(base string) *dirListing {
 	if l, ok := s.listings[base]; ok {
 		return l
 	}
-	if len(s.listings) >= mergeRefListings {
-		return &dirListing{truncated: true} // not kept: the cap bounds the memory too
-	}
 	l := &dirListing{names: map[string]string{}}
+	if len(s.listings) >= mergeRefListings {
+		s.fail(errScanCap)
+		return l // not kept: the cap bounds the memory too
+	}
 	s.listings[base] = l
 	// O_DIRECTORY: a FIFO or a file at the name is not opened.
 	d, err := s.root.OpenFile(filepath.FromSlash(base), os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 	if err != nil {
-		return l // nothing there (or not a folder of the repo): no entries
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			s.fail(fmt.Errorf("cannot list %s: %w", base, err))
+		}
+		return l
 	}
 	defer d.Close()
-	ents, _ := d.ReadDir(mergeRefDirScan + 1)
+	ents, err := d.ReadDir(mergeRefDirScan + 1)
 	if len(ents) > mergeRefDirScan {
-		l.truncated = true
+		s.fail(errScanCap)
+		return l
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.fail(fmt.Errorf("cannot list %s: %w", base, err))
 		return l
 	}
 	for _, e := range ents {

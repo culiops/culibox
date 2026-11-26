@@ -183,6 +183,15 @@ func (m *merger) failed(what string, err error) *MergeResult {
 	return m.result(MergeFailed, what+": "+err.Error(), nil)
 }
 
+// scanFailed maps an error of a config scan: a cap is a refusal with a fixed
+// reason, any other error is what failed.
+func (m *merger) scanFailed(what string, err error) *MergeResult {
+	if errors.Is(err, errScanCap) {
+		return m.result(MergeFailed, "cannot check what host tools run: "+errScanCap.Error(), nil)
+	}
+	return m.failed(what, err)
+}
+
 // headBranch returns X when HEAD is a branch ("" when detached).
 func (m *merger) headBranch() (string, error) {
 	out, err := m.run(m.env(), "symbolic-ref", "-q", "HEAD")
@@ -388,7 +397,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	m.files = len(paths)
 	gc, err := m.gitConfig(r.Home)
 	if err != nil {
-		return m.failed("cannot read git config", err)
+		return m.scanFailed("cannot read git config", err)
 	}
 	agentDenied, importPaths, err := m.agentImportDenies(r.Home)
 	if err != nil {
@@ -396,7 +405,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 	refDenied, refPaths, err := m.configRefDenies(r.Home, gc.hooks)
 	if err != nil {
-		return m.failed("cannot read the Claude Code config", err)
+		return m.scanFailed("cannot read the Claude Code config", err)
 	}
 	var denied []string
 	dseen := map[string]bool{}

@@ -2,6 +2,10 @@ package clone
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -57,17 +61,29 @@ func hookScanDirs(hooks []string) []string {
 }
 
 // dirFiles lists the files directly in the repo-relative folder rel (not its
-// folders), by name, at most limit of them.
+// folders), by name. More than limit files, or a folder that cannot be listed,
+// fails the scan.
 func (s *refSink) dirFiles(rel string, limit int) []string {
 	if s.root == nil {
 		return nil
 	}
 	d, err := s.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			s.fail(fmt.Errorf("cannot list %s: %w", rel, err))
+		}
 		return nil
 	}
 	defer d.Close()
-	ents, _ := d.ReadDir(mergeRefDirScan)
+	ents, err := d.ReadDir(mergeRefDirScan + 1)
+	if len(ents) > mergeRefDirScan {
+		s.fail(errScanCap)
+		return nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.fail(fmt.Errorf("cannot list %s: %w", rel, err))
+		return nil
+	}
 	var names []string
 	for _, e := range ents {
 		if !e.IsDir() && e.Name() != "_" {
@@ -76,7 +92,8 @@ func (s *refSink) dirFiles(rel string, limit int) []string {
 	}
 	sort.Strings(names)
 	if len(names) > limit {
-		names = names[:limit]
+		s.fail(errScanCap)
+		return nil
 	}
 	return names
 }

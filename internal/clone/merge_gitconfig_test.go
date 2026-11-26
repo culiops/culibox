@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -387,5 +388,34 @@ func TestMergeHomeGitConfigCallCount(t *testing.T) {
 	wantMerged(t, MergeHome(context.Background(), rec, MergeRequest{Of: y.of, Home: home, Audit: (&auditRec{}).fn, CloneTips: y.tips()}))
 	if n := count(rec); n != 3 {
 		t.Errorf("repo, ~/.gitconfig and system: %d config calls, want 3", n)
+	}
+}
+
+// A git config with more programs than the scan keeps ends the merge failed.
+func TestMergeHomeGitConfigProgramCapFailsClosed(t *testing.T) {
+	noSystemConfig(t)
+	noManagedSettings(t)
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"b.txt": "b"})
+	var b strings.Builder
+	b.WriteString("[alias]\n")
+	for i := 0; i < 2*mergeRefPaths; i++ {
+		b.WriteString("\ta" + strconv.Itoa(i) + " = !./d" + strconv.Itoa(i) + "/x.sh\n")
+	}
+	f, err := os.OpenFile(filepath.Join(x.of, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(b.String())
+	f.Close()
+	a := &auditRec{}
+	got := x.run(newRec(t), a)
+	wantMergeReason(t, got, MergeFailed)
+	if !strings.Contains(got.Detail, "too many paths to check") {
+		t.Fatalf("Detail = %q", got.Detail)
+	}
+	if len(a.calls) != 0 || x.tip() != before {
+		t.Fatalf("audited or merged: %q", a.calls)
 	}
 }

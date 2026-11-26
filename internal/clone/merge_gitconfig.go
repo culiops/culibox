@@ -106,7 +106,10 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 		return nil, err
 	}
 	es = slices.DeleteFunc(es, func(e configEntry) bool { return e.scope == "command" })
-	hookVals = sc.scan(m.of, home, es, hookVals)
+	hookVals, err = sc.scan(m.of, home, es, hookVals)
+	if err != nil {
+		return nil, fmt.Errorf("repository config: %w", err)
+	}
 
 	var files []string
 	env := m.env()
@@ -132,7 +135,10 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
-		hookVals = sc.scan(m.of, home, es, hookVals)
+		hookVals, err = sc.scan(m.of, home, es, hookVals)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f, err)
+		}
 	}
 	for _, v := range hookVals {
 		if d := hooksDirOf(m.of, home, v); d != "" && !slices.Contains(sc.hooks, d) {
@@ -149,8 +155,9 @@ func withHome(env []string, home string) []string {
 }
 
 // scan adds what the entries deny to sc.denied and returns hookVals with every
-// core.hooksPath value among them.
-func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []string) []string {
+// core.hooksPath value among them. The error is errScanCap or a folder the
+// look-ups could not list.
+func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []string) ([]string, error) {
 	// The program values are read as command lines, with the same look-up of
 	// plain words in the repo top as the agent configs get ("node conv" runs
 	// conv.js). The manifests of a runner they call are not added.
@@ -200,7 +207,7 @@ func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []stri
 	for _, rel := range cmds.paths() {
 		deny(rel)
 	}
-	return hookVals
+	return hookVals, cmds.err
 }
 
 // isIncludeKey reports whether key (as git prints it) is include.path or

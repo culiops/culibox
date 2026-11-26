@@ -2,9 +2,11 @@ package clone
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -265,6 +267,16 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 // scanRefs runs every scanner over the given files of a fresh repo dir.
 func scanRefs(t *testing.T, files map[string]string) *refSink {
 	t.Helper()
+	s, err := scanRefsErr(t, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// scanRefsErr is scanRefs that hands back the scan's error.
+func scanRefsErr(t *testing.T, files map[string]string) (*refSink, error) {
+	t.Helper()
 	noManagedSettings(t)
 	of := t.TempDir()
 	for rel, c := range files {
@@ -276,11 +288,7 @@ func scanRefs(t *testing.T, files map[string]string) *refSink {
 			t.Fatal(err)
 		}
 	}
-	s, err := scanConfigRefs(of, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return scanConfigRefs(of, nil, "")
 }
 
 // Whatever a file holds, reading it never panics and a file that makes no
@@ -318,7 +326,10 @@ func TestConfigRefsMalformedInputs(t *testing.T) {
 						t.Errorf("input %d (%q) in %s panicked: %v", i, in, f, p)
 					}
 				}()
-				s := scanRefs(t, map[string]string{f: in})
+				s, err := scanRefsErr(t, map[string]string{f: in})
+				if err != nil && !errors.Is(err, errScanCap) {
+					t.Errorf("input %d (%q) in %s: unexpected error %v", i, in, f, err)
+				}
 				for _, r := range s.paths() {
 					if r == "" || r == "." || strings.HasPrefix(r, "../") || strings.HasPrefix(r, "/") {
 						t.Errorf("input %d (%q) in %s produced the path %q", i, in, f, r)
@@ -345,9 +356,8 @@ func TestConfigRefsBounded(t *testing.T) {
 		for i := 0; i < 200; i++ {
 			files["mise."+strings.Repeat("a", 1+i%7)+string(rune('a'+i%26))+string(rune('a'+i/26))+".toml"] = "[hooks]\nenter = \"./h/x.sh\"\n"
 		}
-		s := scanRefs(t, files)
-		if s.reads > mergeRefFiles {
-			t.Fatalf("reads = %d, want at most %d", s.reads, mergeRefFiles)
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
 	t.Run("hook folder file count", func(t *testing.T) {
@@ -355,9 +365,8 @@ func TestConfigRefsBounded(t *testing.T) {
 		for i := 0; i < 3*mergeRefDirFiles; i++ {
 			files[".husky/h"+strings.Repeat("a", i%9)+string(rune('a'+i%26))+string(rune('a'+i/26))] = "./h/x.sh\n"
 		}
-		s := scanRefs(t, files)
-		if s.reads > mergeRefDirFiles {
-			t.Fatalf("reads = %d, want at most %d from one hook folder", s.reads, mergeRefDirFiles)
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
 	t.Run("hook script size", func(t *testing.T) {
@@ -373,40 +382,60 @@ func TestConfigRefsBounded(t *testing.T) {
 		for i := 0; i < 3*mergeRefListings; i++ {
 			b.WriteString("cd d" + strings.Repeat("x", i%7) + string(rune('a'+i%26)) + string(rune('a'+i/26)) + " && word\n")
 		}
-		s := scanRefs(t, map[string]string{".envrc": b.String()})
-		if len(s.listings) > mergeRefListings {
-			t.Fatalf("listings = %d, want at most %d", len(s.listings), mergeRefListings)
+		if _, err := scanRefsErr(t, map[string]string{".envrc": b.String()}); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
-		s.paths() // does not blow up past the cap
 	})
-	t.Run("a folder past the listing limit denies the word as spelled", func(t *testing.T) {
-		files := map[string]string{".envrc": "tool zzword\n"}
+	t.Run("a folder past the listing limit fails closed", func(t *testing.T) {
+		files := map[string]string{".envrc": "node zzword\n"}
 		for i := 0; i < mergeRefDirScan+10; i++ {
 			files["f"+strings.Repeat("0", 5)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))] = ""
 		}
-		got := scanRefs(t, files).paths()
-		if !slices.Contains(got, "zzword") {
-			t.Fatalf("paths = %q, want the word as spelled", got)
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
-	t.Run("past the look-up cap the word is denied with each script extension", func(t *testing.T) {
+	t.Run("past the look-up cap fails closed", func(t *testing.T) {
 		old := mergeRefPlain
 		mergeRefPlain = 1
 		t.Cleanup(func() { mergeRefPlain = old })
-		got := scanRefs(t, map[string]string{".envrc": "tool zzfirst zzsecond\n"}).paths()
-		for _, want := range []string{"zzsecond", "zzsecond.js", "zzsecond.py", "zzsecond.sh", "zzsecond.toml"} {
-			if !slices.Contains(got, want) {
-				t.Errorf("paths = %q, missing %q", got, want)
-			}
+		if _, err := scanRefsErr(t, map[string]string{".envrc": "node zzfirst\nnode zzsecond\n"}); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
-	t.Run("a folder past the listing limit denies the word with each script extension", func(t *testing.T) {
-		files := map[string]string{".envrc": "tool zzword\n"}
+	t.Run("too many cd folders fails closed", func(t *testing.T) {
+		if _, err := scanRefsErr(t, map[string]string{".envrc": strings.Repeat("cd a && ", 20) + "./x\n"}); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
+	t.Run("an unreadable cd folder fails closed", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads any folder")
+		}
+		noManagedSettings(t)
+		of := t.TempDir()
+		if err := os.WriteFile(filepath.Join(of, ".envrc"), []byte("cd locked && node w\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(of, "locked"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(of, "locked"), 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(of, "locked"), 0o755) })
+		_, err := scanConfigRefs(of, nil, "")
+		if err == nil || errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want a read error", err)
+		}
+	})
+	t.Run("a top-level mise listing past the cap fails closed", func(t *testing.T) {
+		files := map[string]string{}
 		for i := 0; i < mergeRefDirScan+10; i++ {
 			files["f"+strings.Repeat("0", 5)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))] = ""
 		}
-		if got := scanRefs(t, files).paths(); !slices.Contains(got, "zzword.js") {
-			t.Fatalf("paths = %q, want zzword.js", got)
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
 	t.Run("path count", func(t *testing.T) {
@@ -414,9 +443,8 @@ func TestConfigRefsBounded(t *testing.T) {
 		for i := 0; i < 3*mergeRefPaths; i++ {
 			b.WriteString("source_env d" + strings.Repeat("x", i%5) + string(rune('a'+i%26)) + "/f" + strings.Repeat("y", i/26) + "\n")
 		}
-		s := scanRefs(t, map[string]string{".envrc": b.String()})
-		if n := len(s.paths()); n > 2*mergeRefPaths {
-			t.Fatalf("paths = %d, want at most %d", n, 2*mergeRefPaths)
+		if _, err := scanRefsErr(t, map[string]string{".envrc": b.String()}); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
 	t.Run("fifo", func(t *testing.T) {
@@ -501,5 +529,28 @@ func TestConfigRefsNoRepo(t *testing.T) {
 	}
 	if len(refs) != 0 || deny("a") {
 		t.Fatalf("refs = %q", refs)
+	}
+}
+
+// A scan that hits a cap ends the merge failed, not a merge that saw fewer paths.
+func TestMergeHomeConfigRefCapFailsClosed(t *testing.T) {
+	noManagedSettings(t)
+	noSystemConfig(t)
+	x := newMergeFx(t, "main")
+	var b strings.Builder
+	for i := 0; i < 3*mergeRefPaths; i++ {
+		b.WriteString("source_env d" + strconv.Itoa(i) + "/f\n")
+	}
+	x.commit("host", map[string]string{".envrc": b.String()})
+	before := x.tip()
+	x.box("main", map[string]string{"README.md": "box\n"})
+	a := &auditRec{}
+	got := x.run(newRec(t), a)
+	wantMergeReason(t, got, MergeFailed)
+	if !strings.Contains(got.Detail, "too many paths to check") {
+		t.Fatalf("Detail = %q", got.Detail)
+	}
+	if len(a.calls) != 0 || x.tip() != before {
+		t.Fatalf("audited or merged: %q", a.calls)
 	}
 }

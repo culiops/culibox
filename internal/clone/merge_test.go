@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1215,5 +1216,21 @@ func TestParseDiffTree(t *testing.T) {
 		if _, err := parseDiffTree([]byte(bad)); err == nil {
 			t.Errorf("%s: no error", name)
 		}
+	}
+}
+
+// A repo top with more entries than the link check lists ends the merge failed.
+func TestMergeHomeHugeTopFailsClosed(t *testing.T) {
+	noSystemConfig(t)
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"b.txt": "b"})
+	for i := 0; i < mergeLinkTop+10; i++ {
+		x.write(fmt.Sprintf("u%05d", i), "")
+	}
+	a := &auditRec{}
+	wantMergeReason(t, x.run(newRec(t), a), MergeFailed)
+	if x.tip() != before || len(a.calls) != 0 {
+		t.Fatal("merged or audited")
 	}
 }
