@@ -389,3 +389,107 @@ func TestParseLsFilesStage(t *testing.T) {
 		}
 	}
 }
+
+// The files the hook managers and editor tasks read are followed through links
+// like the other config files: a link there leads the read, and the host's tool,
+// to another file.
+func TestMergeHomeLinkedHookManagerConfigsDenied(t *testing.T) {
+	t.Run("pre-commit config linked, tracked", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"config/pc.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: ls1/x.sh\n"})
+		x.link(".pre-commit-config.yaml", "config/pc.yaml")
+		x.box("main", map[string]string{"ls1/other.sh": "box\n"})
+		wantGuardedBy(t, x, "ls1/other.sh")
+	})
+	t.Run("pre-commit config linked, the target", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"config/pc.yaml": "repos: []\n"})
+		x.link(".pre-commit-config.yaml", "config/pc.yaml")
+		x.box("main", map[string]string{"config/pc.yaml": "box\n"})
+		wantGuardedBy(t, x, "config/pc.yaml")
+	})
+	t.Run("vscode tasks linked, untracked", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"cfg/tasks.json": `{"tasks":[{"command":"./ls2/t.sh"}]}`})
+		x.linkUntracked(".vscode/tasks.json", "../cfg/tasks.json")
+		x.box("main", map[string]string{"cfg/tasks.json": "{}\n"})
+		wantGuardedBy(t, x, "cfg/tasks.json")
+	})
+	t.Run("vscode tasks linked, what they name", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"cfg/tasks.json": `{"tasks":[{"command":"./ls3/t.sh"}]}`})
+		x.linkUntracked(".vscode/tasks.json", "../cfg/tasks.json")
+		x.box("main", map[string]string{"ls3/other.sh": "box\n"})
+		wantGuardedBy(t, x, "ls3/other.sh")
+	})
+	t.Run("lefthook linked, untracked", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"cfg/lh.yml": "pre-commit:\n  commands:\n    l:\n      run: ./ls4/l.sh\n"})
+		x.linkUntracked("lefthook-local.yml", "cfg/lh.yml")
+		x.box("main", map[string]string{"cfg/lh.yml": "box\n"})
+		wantGuardedBy(t, x, "cfg/lh.yml")
+	})
+	t.Run("overcommit linked, untracked", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"cfg/oc.yml": "x: 1\n"})
+		x.linkUntracked(".overcommit.yml", "cfg/oc.yml")
+		x.box("main", map[string]string{"cfg/oc.yml": "box\n"})
+		wantGuardedBy(t, x, "cfg/oc.yml")
+	})
+}
+
+// A hook script that is itself a link to a script elsewhere in the repo.
+func TestMergeHomeLinkedHuskyScriptTargetDenied(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.commit("target", map[string]string{"impl/pc.sh": "bash ls5/run.sh\n"})
+	x.link(".husky/pre-commit", "../impl/pc.sh")
+	x.box("main", map[string]string{"impl/pc.sh": "box\n"})
+	wantGuardedBy(t, x, "impl/pc.sh")
+}
+
+// The script a config names is a link to another file: that file and its
+// folder are refused, the folder because the script loads its neighbours.
+func TestMergeHomeConfigRefLinkTargetFolderDenied(t *testing.T) {
+	t.Run("the real file's folder", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{".mcp.json": mcpNode, "impl/server.js": "h\n", "impl/lib.js": "h\n"})
+		x.link("tools/mcp/server.js", "../../impl/server.js")
+		x.box("main", map[string]string{"impl/lib.js": "box\n"})
+		wantGuardedBy(t, x, "impl/lib.js")
+	})
+	t.Run("an unrelated folder stays free", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{".mcp.json": mcpNode, "impl/server.js": "h\n"})
+		x.link("tools/mcp/server.js", "../../impl/server.js")
+		x.box("main", map[string]string{"other/lib.js": "box\n"})
+		wantMerged(t, x.run(newRec(t), &auditRec{}))
+	})
+	t.Run("a link to a file at the top denies no folder", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{".mcp.json": mcpNode, "real.js": "h\n"})
+		x.link("tools/mcp/server.js", "../../real.js")
+		x.box("main", map[string]string{"README.md": "box\n"})
+		wantMerged(t, x.run(newRec(t), &auditRec{}))
+	})
+	t.Run("a link that is not a config ref has no folder deny", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		x.commit("target", map[string]string{"docs/agent.md": "h\n", "docs/other.md": "h\n"})
+		x.link("CLAUDE.md", "docs/agent.md")
+		x.box("main", map[string]string{"docs/other.md": "box\n"})
+		wantMerged(t, x.run(newRec(t), &auditRec{}))
+	})
+}
+
+// A hooks folder that core.hooksPath names: the scripts in it are read.
+func TestMergeHomeHooksPathScriptsRead(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.commit("hooks", map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\n# bash cm/commented.sh\nbash tools/lib/pc.sh\n"})
+	fixtureGit(t, x.of, "config", "core.hooksPath", "tools/hooks")
+	x.box("main", map[string]string{"tools/lib/pc.sh": "box\n", "cm/commented.sh": "box\n"})
+	wantGuardedBy(t, x, "tools/lib/pc.sh")
+	y := newMergeFx(t, "main")
+	y.commit("hooks", map[string]string{"tools/hooks/pre-commit": "#!/bin/sh\n# bash cm/commented.sh\nbash tools/lib/pc.sh\n"})
+	fixtureGit(t, y.of, "config", "core.hooksPath", "tools/hooks")
+	y.box("main", map[string]string{"cm/commented.sh": "box\n"})
+	wantMerged(t, y.run(newRec(t), &auditRec{}))
+}

@@ -25,12 +25,14 @@ import (
 // the repo top (a nested .mcp.json), .env contents, CI definitions.
 
 const (
-	mergeRefFiles     = 64   // config files read per check
+	mergeRefFiles     = 128  // config files read per check
 	mergeRefPaths     = 2048 // path spellings kept per check
 	mergeRefDirScan   = 4096 // entries read of the repo top, for mise.*.toml
 	mergeRefLines     = 20000
-	mergeRefStmtLines = 200 // lines one TOML statement may span
-	mergeRefDepth     = 24  // JSON nesting followed
+	mergeRefStmtLines = 200  // lines one TOML statement may span
+	mergeRefDepth     = 24   // JSON nesting followed
+	mergeRefListings  = 64   // folders read for plain words
+	mergeRefPlain     = 8192 // plain word look-ups
 )
 
 // runnerManifests are the files a task runner reads at the repo top and runs
@@ -69,7 +71,8 @@ var (
 // refConfigFiles are the files scanConfigRefs reads, besides the mise ones
 // (miseNames and the top mise.<env>.toml files). The symlink check follows
 // each one: a link there leads the read to another file.
-var refConfigFiles = []string{".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".envrc", ".envrc.local"}
+var refConfigFiles = append([]string{".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".envrc", ".envrc.local",
+	".pre-commit-config.yaml", ".overcommit.yml", ".vscode/tasks.json"}, lefthookNames()...)
 
 // refSink collects what the scanners find, as path spellings.
 type refSink struct {
@@ -79,12 +82,25 @@ type refSink struct {
 	raws    []string // spellings denied with their folder
 	exact   []string // spellings denied as themselves (a directory)
 	runners map[string]bool
+
+	listings  map[string]*dirListing // folders read for plain words, by repo-relative path
+	plainSeen map[string]bool        // plain word look-ups made, "base\x00word"
+}
+
+// dirListing is the names in one folder: lower-cased name -> name as spelled.
+// truncated is set when the folder holds more than mergeRefDirScan entries or
+// cannot be read as a folder of the repo.
+type dirListing struct {
+	names     map[string]string
+	truncated bool
 }
 
 // scanConfigRefs reads the protected configs at the top of the host work tree
-// of and returns what they name.
-func scanConfigRefs(of string) *refSink {
-	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{}}
+// of, and the files in its hook folders (hooks: the repo-relative core.hooksPath
+// folders, besides .husky), and returns what they name.
+func scanConfigRefs(of string, hooks []string) *refSink {
+	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
+		listings: map[string]*dirListing{}, plainSeen: map[string]bool{}}
 	root, err := os.OpenRoot(s.of)
 	if err != nil {
 		return s
@@ -96,6 +112,15 @@ func scanConfigRefs(of string) *refSink {
 	s.file(".claude/settings.local.json", scanClaudeSettings)
 	s.file(".envrc", scanEnvrc)
 	s.file(".envrc.local", scanEnvrc)
+	for _, d := range hookScanDirs(hooks) {
+		s.hookDir(d)
+	}
+	s.file(".pre-commit-config.yaml", yamlCommands("entry"))
+	for _, n := range lefthookNames() {
+		s.file(n, yamlCommands("run"))
+	}
+	s.file(".overcommit.yml", yamlCommands("command"))
+	s.file(".vscode/tasks.json", scanVSCodeTasks)
 	miseSeen := map[string]bool{}
 	for _, f := range miseNames {
 		miseSeen[strings.ToLower(f)] = true
@@ -173,13 +198,92 @@ func (s *refSink) command(c string) {
 	if c == "" {
 		return
 	}
-	paths, runners := commandPaths(c)
-	for _, p := range paths {
+	ci := parseCommand(s.of, c)
+	for _, p := range ci.paths {
 		s.addRaw(p)
 	}
-	for _, r := range runners {
+	for _, d := range ci.dirs {
+		s.dir(d)
+	}
+	for _, r := range ci.runners {
 		s.runners[r] = true
 	}
+	for _, pw := range ci.plain {
+		s.plainWord(pw)
+	}
+}
+
+// plainWord denies the entries a plain word of a command names: an entry of
+// that name in the repo top or in a folder the command moved to (a script, a
+// program's folder), and the same with a script extension ("node server" runs
+// server.js or server/index.js). A word with no such entry names nothing. Past
+// the look-up caps, or in a folder too big to list, the word is denied as
+// spelled: more refusals, never fewer.
+func (s *refSink) plainWord(pw plainWord) {
+	if s.root == nil {
+		return
+	}
+	for _, base := range pw.bases {
+		key := base + "\x00" + pw.word
+		if s.plainSeen[key] {
+			continue
+		}
+		if len(s.plainSeen) >= mergeRefPlain {
+			s.addRaw(path.Join(base, pw.word))
+			continue
+		}
+		s.plainSeen[key] = true
+		l := s.listing(base)
+		if l.truncated {
+			s.addRaw(path.Join(base, pw.word))
+			continue
+		}
+		for _, cand := range append([]string{""}, scriptExts...) {
+			if name, ok := l.names[strings.ToLower(pw.word+cand)]; ok {
+				s.addRaw(path.Join(base, name))
+			}
+		}
+	}
+}
+
+// listing reads the folder base (repo-relative, "." for the top) through the
+// root, once.
+func (s *refSink) listing(base string) *dirListing {
+	if l, ok := s.listings[base]; ok {
+		return l
+	}
+	if len(s.listings) >= mergeRefListings {
+		return &dirListing{truncated: true} // not kept: the cap bounds the memory too
+	}
+	l := &dirListing{names: map[string]string{}}
+	s.listings[base] = l
+	// O_DIRECTORY: a FIFO or a file at the name is not opened.
+	d, err := s.root.OpenFile(filepath.FromSlash(base), os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return l // nothing there (or not a folder of the repo): no entries
+	}
+	defer d.Close()
+	ents, _ := d.ReadDir(mergeRefDirScan + 1)
+	if len(ents) > mergeRefDirScan {
+		l.truncated = true
+		return l
+	}
+	for _, e := range ents {
+		k := strings.ToLower(e.Name())
+		if _, ok := l.names[k]; !ok {
+			l.names[k] = e.Name()
+		}
+	}
+	return l
+}
+
+// envValue reads an environment value as a command line; NODE_OPTIONS holds
+// node's own options.
+func (s *refSink) envValue(key, v string) {
+	if strings.EqualFold(key, "NODE_OPTIONS") {
+		v = "node " + v
+	}
+	s.command(v)
 }
 
 // paths returns the repo-relative, slash-separated paths to refuse: each
@@ -223,8 +327,8 @@ func cleanRaw(tok string) string {
 // path from the range is at, under or a parent of one of them (importDenied's
 // rule, case-folded), with the concrete list for the symlink check. It makes no
 // git call and cannot fail.
-func (m *merger) configRefDenies() (func(p string) bool, []string) {
-	refs := scanConfigRefs(m.of).paths()
+func (m *merger) configRefDenies(hooks []string) (func(p string) bool, []string) {
+	refs := scanConfigRefs(m.of, hooks).paths()
 	split := make([][]string, len(refs))
 	for i, r := range refs {
 		split[i] = strings.Split(r, "/")
@@ -274,14 +378,17 @@ func (s *refSink) mcpServers(v any) {
 	servers, _ := v.(map[string]any)
 	for _, name := range sortedKeys(servers) {
 		srv, _ := servers[name].(map[string]any)
-		s.command(str(srv["command"]))
+		// The command and its arguments are one command line: "-m" and its
+		// module, or "--directory" and its folder, are separate arguments.
+		line := []string{str(srv["command"])}
 		args, _ := srv["args"].([]any)
 		for _, a := range args {
-			s.command(str(a))
+			line = append(line, str(a))
 		}
+		s.command(strings.Join(line, " "))
 		env, _ := srv["env"].(map[string]any)
 		for _, k := range sortedKeys(env) {
-			s.command(str(env[k]))
+			s.envValue(k, str(env[k]))
 		}
 		s.dir(str(srv["cwd"]))
 	}
@@ -306,7 +413,7 @@ func scanClaudeSettings(s *refSink, data []byte) {
 	}
 	env, _ := m["env"].(map[string]any)
 	for _, k := range sortedKeys(env) {
-		s.command(str(env[k])) // BASH_ENV and the like name a file the shell sources
+		s.envValue(k, str(env[k])) // BASH_ENV and the like name a file the shell sources
 	}
 	s.mcpServers(m["mcpServers"])
 	mk, _ := m["extraKnownMarketplaces"].(map[string]any)

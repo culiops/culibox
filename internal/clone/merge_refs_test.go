@@ -2,6 +2,7 @@ package clone
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,44 @@ func TestRepoDenyPaths(t *testing.T) {
 	want := []string{"scripts/clean.sh", "scripts", "top.js", "a/b/c.sh", "a/b", "abs/x.sh", "abs", "tools"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("repoDenyPaths = %q, want %q", got, want)
+	}
+}
+
+func TestParseCommand(t *testing.T) {
+	of := t.TempDir()
+	cases := []struct {
+		in    string
+		paths []string
+		dirs  []string
+		plain []string // "word@base,base"
+	}{
+		{"python -m a.b.c", []string{"a", "a.py"}, nil, []string{"python@."}},
+		{"python3 -m pkg", []string{"pkg", "pkg.py"}, nil, []string{"python3@."}},
+		{"uv run -m svc.app", []string{"svc", "svc.py"}, nil, []string{"uv@.", "run@."}},
+		{"git commit -m msg", nil, nil, []string{"git@.", "commit@.", "msg@."}},
+		{"node --import reg app.js", []string{"reg", "reg.js", "reg.mjs", "reg.cjs", "reg.ts", "reg.mts", "app.js"}, nil, []string{"node@.", "reg@."}},
+		{"node -r ./pre/x.js", []string{"./pre/x.js"}, nil, []string{"node@."}},
+		{"uv run --directory mcp srv", []string{}, []string{"mcp"}, []string{"uv@.", "run@.", "srv@.,mcp"}},
+		{"srv --cwd=w1 ./run", []string{"./run", "w1/run"}, []string{"w1"}, []string{"srv@."}},
+		{"cd tools && ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil},
+		{"cd a && cd b && x.sh", []string{"x.sh", "a/x.sh", "b/x.sh", "a/b/x.sh"}, []string{"a", "b", "a/b"}, nil},
+		{"cd -P tools; ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil},
+		{"cd .. && ./run", []string{"./run"}, nil, nil},
+		{"cd . && ./run", []string{"./run"}, nil, nil},
+		{"cd $HOME && ./run", []string{"./run"}, nil, nil},
+		{"make -C sub all", nil, []string{"sub"}, []string{"make@.", "all@.,sub"}},
+		{"echo a.b FOO=bar -x", nil, nil, []string{"echo@."}},
+	}
+	for _, c := range cases {
+		ci := parseCommand(of, c.in)
+		var plain []string
+		for _, p := range ci.plain {
+			plain = append(plain, p.word+"@"+strings.Join(p.bases, ","))
+		}
+		if !slices.Equal(ci.paths, c.paths) && !(len(ci.paths) == 0 && len(c.paths) == 0) ||
+			!slices.Equal(ci.dirs, c.dirs) && !(len(ci.dirs) == 0 && len(c.dirs) == 0) ||
+			!slices.Equal(plain, c.plain) && !(len(plain) == 0 && len(c.plain) == 0) {
+			t.Errorf("parseCommand(%q) = paths %q dirs %q plain %q; want %q %q %q", c.in, ci.paths, ci.dirs, plain, c.paths, c.dirs, c.plain)
+		}
 	}
 }

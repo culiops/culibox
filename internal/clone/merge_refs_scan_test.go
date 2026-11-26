@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,15 @@ import (
 	"testing"
 	"time"
 )
+
+// mcpCmd is an .mcp.json whose one server runs command with args.
+func mcpCmd(command string, args ...string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(map[string]any{"mcpServers": map[string]any{"s": map[string]any{"command": command, "args": args}}})
+	return b.String()
+}
 
 const mcpNode = `{"mcpServers":{"s":{"command":"node","args":["./tools/mcp/server.js"]}}}`
 
@@ -111,6 +121,86 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"mise.dev.toml is read", nil, map[string]string{"mise.dev.toml": "[env]\n_.source = \"./m3/e.sh\"\n"}, "m3/e.sh", true},
 		{".config/mise/config.toml is read", map[string]string{".config/mise/config.toml": "[env]\n_.source = \"./m4/e.sh\"\n"}, nil, "m4/e.sh", true},
 		{"mise/config.toml is read", map[string]string{"mise/config.toml": "[env]\n_.source = \"./m5/e.sh\"\n"}, nil, "m5/e.sh", true},
+		// Command forms: plain words, modules, folders (I1).
+		{"python -m module", map[string]string{".mcp.json": mcpCmd("python", "-m", "my_server")}, nil, "my_server/__main__.py", true},
+		{"python -m module, README still merges", map[string]string{".mcp.json": mcpCmd("python", "-m", "my_server")}, nil, "README.md", false},
+		{"python3 -m dotted module", map[string]string{".mcp.json": mcpCmd("python3", "-m", "pkg.sub.main")}, nil, "pkg/helper.py", true},
+		{"python -m module file", map[string]string{".mcp.json": mcpCmd("python", "-m", "mod1")}, nil, "mod1.py", true},
+		{"uv run -m", map[string]string{".mcp.json": mcpCmd("uv", "run", "-m", "svc.app")}, nil, "svc/x.py", true},
+		{"node --import bare module", map[string]string{".mcp.json": mcpCmd("node", "--import", "register", "app.js")}, nil, "register.js", true},
+		{"node -r bare module", map[string]string{".mcp.json": mcpCmd("node", "-r", "preload", "app.js")}, nil, "preload/index.js", true},
+		{"node --require bare module", map[string]string{".mcp.json": mcpCmd("node", "--require", "boot", "app.js")}, nil, "boot.cjs", true},
+		{"node --require=module", map[string]string{".mcp.json": mcpCmd("node", "--require=boot2", "app.js")}, nil, "boot2.js", true},
+		{"NODE_OPTIONS require module", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","env":{"NODE_OPTIONS":"--require boot3"}}}}`}, nil, "boot3.js", true},
+		{"-m outside python is a message", map[string]string{".claude/settings.json": hookSettings("git commit -m notamodule")}, nil, "notamodule/x.py", false},
+		{"plain word, folder", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "server/index.js", true},
+		{"plain word, folder neighbour", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "server/lib/x.js", true},
+		{"plain word, file with extension", map[string]string{".mcp.json": mcpCmd("node", "srv2"), "srv2.js": "h\n"}, nil, "srv2.js", true},
+		{"plain word, python file", map[string]string{".mcp.json": mcpCmd("python", "srv3"), "srv3.py": "h\n"}, nil, "srv3.py", true},
+		{"plain word, file without extension", map[string]string{".mcp.json": mcpCmd("bash", "runner"), "runner": "h\n"}, nil, "runner", true},
+		{"plain word, nothing there", map[string]string{".mcp.json": mcpCmd("node", "nothere")}, nil, "nothere/x.js", false},
+		{"plain word, other entries stay free", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "README.md", false},
+		{"plain word in a hook", map[string]string{".claude/settings.json": hookSettings("node hookdir"), "hookdir/main.js": "h\n"}, nil, "hookdir/main.js", true},
+		{"plain word in an envrc", map[string]string{".envrc": "tool envdir\n", "envdir/x.sh": "h\n"}, nil, "envdir/x.sh", true},
+		{"--directory folder", map[string]string{".mcp.json": mcpCmd("uv", "run", "--directory", "mcp", "srv")}, nil, "mcp/x.py", true},
+		{"--directory=folder", map[string]string{".mcp.json": mcpCmd("uv", "run", "--directory=mcp2", "srv")}, nil, "mcp2/x.py", true},
+		{"--cwd folder", map[string]string{".mcp.json": mcpCmd("srv", "--cwd", "w1")}, nil, "w1/a.js", true},
+		{"--prefix folder", map[string]string{".mcp.json": mcpCmd("npm", "--prefix", "w2", "start")}, nil, "w2/a.js", true},
+		{"--dir folder", map[string]string{".mcp.json": mcpCmd("srv", "--dir", "w3")}, nil, "w3/a.js", true},
+		{"--project folder", map[string]string{".mcp.json": mcpCmd("uv", "run", "--project", "w4", "srv")}, nil, "w4/a.py", true},
+		{"-C folder", map[string]string{".mcp.json": mcpCmd("make", "-C", "w5", "serve")}, nil, "w5/a.mk", true},
+		{"folder flag, a sibling is free", map[string]string{".mcp.json": mcpCmd("make", "-C", "w5", "serve")}, nil, "w6/a.mk", false},
+		{"folder flag, the folder's relative script", map[string]string{".mcp.json": mcpCmd("srv", "--cwd", "w7", "./run")}, nil, "w7/run", true},
+		{"the repo top as a folder denies nothing", map[string]string{".mcp.json": mcpCmd("srv", "--directory", ".")}, nil, "README.md", false},
+		{"cd then script", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd tools && ./run")}, nil, "tools/run", true},
+		{"cd then script, the folder", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd tools && ./run")}, nil, "tools/other.sh", true},
+		{"cd then script, at the repo top too", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd tools && ./run")}, nil, "run", true},
+		{"cd then script, README still merges", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd tools && ./run")}, nil, "README.md", false},
+		{"cd twice", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd a1 && cd b1 && ./run")}, nil, "a1/b1/run", true},
+		{"cd in a hook", map[string]string{".claude/settings.json": hookSettings("cd tools2 && ./fmt")}, nil, "tools2/fmt", true},
+		{"cd to the top", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd . && ./run")}, nil, "README.md", false},
+		{"cd out of the repo", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd ../x && ./run")}, nil, "x/other", false},
+		{"cd to an absolute folder inside", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd <OF>/abs1 && ./run")}, nil, "abs1/run", true},
+		{"cd then a plain word under the folder", map[string]string{".mcp.json": mcpCmd("bash", "-c", "cd tools3 && node srv"), "tools3/srv/index.js": "h\n"}, nil, "tools3/srv/lib.js", true},
+		// Hook managers and editor tasks (I3).
+		{"husky hook script", map[string]string{".husky/pre-commit": "#!/usr/bin/env sh\nbash hk1/lint.sh\n"}, nil, "hk1/lint.sh", true},
+		{"husky hook script folder", map[string]string{".husky/pre-commit": "bash hk1/lint.sh\n"}, nil, "hk1/other.sh", true},
+		{"husky hook runs package.json", map[string]string{".husky/pre-commit": "npx lint-staged\n"}, nil, "package.json", true},
+		{"husky comment is not read", map[string]string{".husky/pre-commit": "# bash hk2/commented.sh\n"}, nil, "hk2/commented.sh", false},
+		{"husky helper dir is skipped", map[string]string{".husky/_/husky.sh": "bash hk3/helper.sh\n"}, nil, "hk3/helper.sh", false},
+		{"husky untracked hook", nil, map[string]string{".husky/commit-msg": "./hk4/msg.sh \"$1\"\n"}, "hk4/msg.sh", true},
+		{"husky second file", map[string]string{".husky/pre-commit": "true\n", ".husky/pre-push": "bash hk5/push.sh\n"}, nil, "hk5/push.sh", true},
+		{"pre-commit entry", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    name: x\n    entry: pc1/check.sh --fix\n    language: script\n"}, nil, "pc1/check.sh", true},
+		{"pre-commit entry folder", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: pc1/check.sh\n"}, nil, "pc1/other.py", true},
+		{"pre-commit entry quoted", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: \"./pc2/x.sh --fix\"\n"}, nil, "pc2/x.sh", true},
+		{"pre-commit entry with a dash", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - entry: pc3/y.sh\n    id: y\n"}, nil, "pc3/y.sh", true},
+		{"pre-commit entry folded block", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: >\n      bash\n      pc4/z.sh\n    language: system\n"}, nil, "pc4/z.sh", true},
+		{"pre-commit entry literal block", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: |\n      set -e\n      ./pc5/a.sh\n      ./pc5b/b.sh\n    language: system\n"}, nil, "pc5b/b.sh", true},
+		{"pre-commit block ends at the next key", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: |\n      true\n    files: pc6/other.py\n"}, nil, "pc6/other.py", false},
+		{"pre-commit python -m", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    entry: python -m pc7chk\n"}, nil, "pc7chk/__main__.py", true},
+		{"pre-commit other keys are not commands", map[string]string{".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: x\n    name: pc8/name.sh\n    entry: true\n"}, nil, "pc8/name.sh", false},
+		{"pre-commit comment is not read", map[string]string{".pre-commit-config.yaml": "# entry: pc9/c.sh\nrepos: []\n"}, nil, "pc9/c.sh", false},
+		{"lefthook run", map[string]string{"lefthook.yml": "pre-commit:\n  commands:\n    lint:\n      run: lh1/lint.sh {staged_files}\n"}, nil, "lh1/lint.sh", true},
+		{"lefthook run, dot yaml", map[string]string{".lefthook.yaml": "pre-push:\n  commands:\n    t:\n      run: ./lh2/t.sh\n"}, nil, "lh2/t.sh", true},
+		{"lefthook-local run", nil, map[string]string{"lefthook-local.yml": "pre-commit:\n  commands:\n    l:\n      run: ./lh3/l.sh\n"}, "lh3/l.sh", true},
+		{"lefthook run block", map[string]string{"lefthook.yml": "pre-commit:\n  commands:\n    l:\n      run: |\n        echo hi\n        ./lh4/l.sh\n      tags: x\n"}, nil, "lh4/l.sh", true},
+		{"lefthook run list item", map[string]string{"lefthook.yml": "pre-commit:\n  jobs:\n    - run: ./lh5/job.sh\n"}, nil, "lh5/job.sh", true},
+		{"lefthook runs yarn", map[string]string{"lefthook.yml": "pre-commit:\n  commands:\n    l:\n      run: yarn lint\n"}, nil, "package.json", true},
+		{"lefthook other keys", map[string]string{"lefthook.yml": "pre-commit:\n  commands:\n    l:\n      glob: lh6/*.sh\n      run: true\n"}, nil, "lh6/a.sh", false},
+		{"overcommit scalar command", map[string]string{".overcommit.yml": "PreCommit:\n  Custom:\n    enabled: true\n    command: ./oc1/check.sh\n"}, nil, "oc1/check.sh", true},
+		{"overcommit list command", map[string]string{".overcommit.yml": "PreCommit:\n  Custom:\n    command: ['bundle', 'exec', 'oc2/rubo.sh']\n"}, nil, "oc2/rubo.sh", true},
+		{"overcommit list command over lines", map[string]string{".overcommit.yml": "PreCommit:\n  Custom:\n    command:\n      - bundle\n      - ./oc3/rubo.sh\n    flags: x\n"}, nil, "oc3/rubo.sh", true},
+		{"overcommit runs bundle", map[string]string{".overcommit.yml": "PreCommit:\n  Custom:\n    command: ['bundle', 'exec', 'rubocop']\n"}, nil, "Gemfile", true},
+		{"vscode task command", map[string]string{".vscode/tasks.json": `{"version":"2.0.0","tasks":[{"label":"b","type":"shell","command":"./vs1/build.sh"}]}`}, nil, "vs1/build.sh", true},
+		{"vscode task args", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"python","args":["${workspaceFolder}/vs2/gen.py","--x"]}]}`}, nil, "vs2/gen.py", true},
+		{"vscode task args objects", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"bash","args":[{"value":"vs3/a b.sh","quoting":"strong"}]}]}`}, nil, "vs3/a", true},
+		{"vscode task os sub-objects", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","linux":{"command":"./vs4/l.sh"},"osx":{"command":"vs5/m.sh"},"windows":{"command":"vs6/w.bat","args":["vs7/x.bat"]}}]}`}, nil, "vs7/x.bat", true},
+		{"vscode task os sub-object osx", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","osx":{"command":"vs5/m.sh"}}]}`}, nil, "vs5/m.sh", true},
+		{"vscode jsonc comments and trailing commas", map[string]string{".vscode/tasks.json": "{\n // build\n \"version\": \"2.0.0\", /* x */\n \"tasks\": [\n  {\"label\": \"http://x//y\", \"command\": \"./vs8/b.sh\",},\n ],\n}\n"}, nil, "vs8/b.sh", true},
+		{"vscode top-level command", map[string]string{".vscode/tasks.json": `{"version":"0.1.0","command":"./vs9/t.sh","tasks":[]}`}, nil, "vs9/t.sh", true},
+		{"vscode malformed", map[string]string{".vscode/tasks.json": `{"tasks":[{"command":"./vs10/t.sh"`}, nil, "vs10/t.sh", false},
+		{"vscode wrong shapes", map[string]string{".vscode/tasks.json": `{"tasks":[1,null,{"command":5,"args":"x","linux":3},[]]}`}, nil, "vs11/t.sh", false},
+		{"vscode untracked", nil, map[string]string{".vscode/tasks.json": `{"tasks":[{"command":"./vs12/t.sh"}]}`}, "vs12/t.sh", true},
 		// Hostile or broken files decide nothing.
 		{"malformed .mcp.json", map[string]string{".mcp.json": "{not json"}, nil, "tools/x.js", false},
 		{"malformed .mcp.json, the rest still counts", map[string]string{".mcp.json": "{not json", ".claude/settings.json": hookSettings("bash scripts/format.sh")}, nil, "scripts/format.sh", true},
@@ -170,7 +260,7 @@ func scanRefs(t *testing.T, files map[string]string) *refSink {
 			t.Fatal(err)
 		}
 	}
-	return scanConfigRefs(of)
+	return scanConfigRefs(of, nil)
 }
 
 // Whatever a file holds, reading it never panics and a file that makes no
@@ -191,8 +281,15 @@ func TestConfigRefsMalformedInputs(t *testing.T) {
 		"[env]\n_.source = \"\"\"\n./a.sh\n", "[env]\n= \"x\"\n", "[env]\n_.path = [[[[[[\n", "[[env]]\n[[hooks]]\n",
 		"[hooks]\n\x00\x01\x02\n", "[env]\n_.source = \"../../../outside.sh\"\n", "[env]\n_.source = \"/etc/passwd\"\n",
 		strings.Repeat("\xff\xfe", 100),
+		"entry:", "entry: >", "entry: |\n", "- entry:\n  - \n  -", "run:\n\n\n", "command: [", "command: ['a',", "entry: \x00", "run: " + strings.Repeat("a ", 10000),
+		"entry: |\n" + strings.Repeat("  x\n", 1000), "command:\n" + strings.Repeat("- ./a.sh\n", 1000),
+		"cd", "cd ..", "cd -", "python -m", "python -m ..", "node --require", "uv run --directory", "-C", "--cwd=", "--directory ../../x",
+		"cd /abs/outside && ./x", "cd " + strings.Repeat("d/", 500) + " && ./x", strings.Repeat("cd a && ", 100) + "./x",
+		"/* unterminated", "// only a comment", `{"tasks":[{"command":"a",}],}`, "{\"a\":\"/*\"}", "\"unterminated",
+		`{"tasks":[{"command":{"value":5},"args":[{"value":{}},[],null]}]}`,
 	}
-	files := []string{".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".envrc", ".envrc.local", "mise.toml", ".mise.toml", "mise.local.toml", "mise.dev.toml"}
+	files := []string{".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".envrc", ".envrc.local", "mise.toml", ".mise.toml", "mise.local.toml", "mise.dev.toml",
+		".husky/pre-commit", ".githooks/pre-commit", ".pre-commit-config.yaml", "lefthook.yml", ".lefthook-local.yaml", ".overcommit.yml", ".vscode/tasks.json"}
 	for i, in := range inputs {
 		for _, f := range files {
 			func() {
@@ -233,6 +330,45 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Fatalf("reads = %d, want at most %d", s.reads, mergeRefFiles)
 		}
 	})
+	t.Run("hook folder file count", func(t *testing.T) {
+		files := map[string]string{}
+		for i := 0; i < 3*mergeRefDirFiles; i++ {
+			files[".husky/h"+strings.Repeat("a", i%9)+string(rune('a'+i%26))+string(rune('a'+i/26))] = "./h/x.sh\n"
+		}
+		s := scanRefs(t, files)
+		if s.reads > mergeRefDirFiles {
+			t.Fatalf("reads = %d, want at most %d from one hook folder", s.reads, mergeRefDirFiles)
+		}
+	})
+	t.Run("hook script size", func(t *testing.T) {
+		pad := strings.Repeat("# padding\n", (mergeImportBytes/10)+10)
+		s := scanRefs(t, map[string]string{".husky/pre-commit": "./early/a.sh\n" + pad + "./late/b.sh\n"})
+		got := s.paths()
+		if !slices.Contains(got, "early/a.sh") || slices.Contains(got, "late/b.sh") {
+			t.Fatalf("paths = %q, want the early one only", got)
+		}
+	})
+	t.Run("folder listings", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 3*mergeRefListings; i++ {
+			b.WriteString("cd d" + strings.Repeat("x", i%7) + string(rune('a'+i%26)) + string(rune('a'+i/26)) + " && word\n")
+		}
+		s := scanRefs(t, map[string]string{".envrc": b.String()})
+		if len(s.listings) > mergeRefListings {
+			t.Fatalf("listings = %d, want at most %d", len(s.listings), mergeRefListings)
+		}
+		s.paths() // does not blow up past the cap
+	})
+	t.Run("a folder past the listing limit denies the word as spelled", func(t *testing.T) {
+		files := map[string]string{".envrc": "tool zzword\n"}
+		for i := 0; i < mergeRefDirScan+10; i++ {
+			files["f"+strings.Repeat("0", 5)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))] = ""
+		}
+		got := scanRefs(t, files).paths()
+		if !slices.Contains(got, "zzword") {
+			t.Fatalf("paths = %q, want the word as spelled", got)
+		}
+	})
 	t.Run("path count", func(t *testing.T) {
 		var b strings.Builder
 		for i := 0; i < 3*mergeRefPaths; i++ {
@@ -249,7 +385,7 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Skip("no mkfifo")
 		}
 		done := make(chan *refSink)
-		go func() { done <- scanConfigRefs(of) }()
+		go func() { done <- scanConfigRefs(of, nil) }()
 		select {
 		case s := <-done:
 			if len(s.paths()) != 0 {
@@ -268,7 +404,7 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err := os.Symlink(out, filepath.Join(of, ".mcp.json")); err != nil {
 			t.Fatal(err)
 		}
-		if s := scanConfigRefs(of); len(s.paths()) != 0 {
+		if s := scanConfigRefs(of, nil); len(s.paths()) != 0 {
 			t.Fatalf("paths = %q through a link out of the repo", s.paths())
 		}
 	})
@@ -283,7 +419,7 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err := os.Symlink("config/mcp.json", filepath.Join(of, ".mcp.json")); err != nil {
 			t.Fatal(err)
 		}
-		if got := scanConfigRefs(of).paths(); !slices.Contains(got, "tools/mcp/server.js") {
+		if got := scanConfigRefs(of, nil).paths(); !slices.Contains(got, "tools/mcp/server.js") {
 			t.Fatalf("paths = %q, want the server script through an inside link", got)
 		}
 	})
@@ -295,7 +431,7 @@ func TestConfigRefDeniesList(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.commit("host", map[string]string{".mcp.json": mcpNode})
 	m := &merger{of: x.of}
-	deny, refs := m.configRefDenies()
+	deny, refs := m.configRefDenies(nil)
 	for _, want := range []string{"tools/mcp/server.js", "tools/mcp", "package.json"} {
 		if !slices.Contains(refs, want) {
 			t.Errorf("refs = %q, missing %q", refs, want)
@@ -316,7 +452,7 @@ func TestConfigRefDeniesList(t *testing.T) {
 
 // An empty or unreadable repo scans without a word.
 func TestConfigRefsNoRepo(t *testing.T) {
-	deny, refs := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies()
+	deny, refs := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies(nil)
 	if len(refs) != 0 || deny("a") {
 		t.Fatalf("refs = %q", refs)
 	}

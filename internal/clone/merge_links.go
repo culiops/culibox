@@ -378,6 +378,14 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDeni
 		}
 	}
 
+	// A path a config names that leads through a link to another real file: that
+	// file's folder is refused too, as the folder of a named script is (the
+	// script loads its neighbours). Not for other protected names, and never the
+	// repo top.
+	isRef := map[string]bool{}
+	for _, r := range refs {
+		isRef[foldKey(path.Clean(r))] = true
+	}
 	d := newLinkDenies()
 	for _, s := range set.items {
 		real, outside, err := w.resolve(s)
@@ -390,6 +398,9 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDeni
 		}
 		if !outside && !sameComps(real, strings.Split(s, "/")) {
 			d.add(strings.Join(real, "/"))
+			if isRef[foldKey(s)] && len(real) > 1 {
+				d.add(strings.Join(real[:len(real)-1], "/"))
+			}
 		}
 	}
 	// Each link met is protected too: replacing one with a file changes what

@@ -351,7 +351,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
 	}
-	refDenied, refPaths := m.configRefDenies()
+	refDenied, refPaths := m.configRefDenies(gc.hooks)
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
