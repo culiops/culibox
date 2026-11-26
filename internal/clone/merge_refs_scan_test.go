@@ -1155,6 +1155,12 @@ func TestConfigRefsEnvKeys(t *testing.T) {
 		{"PERL5OPT", `{"PERL5OPT":"-Mfoo ./pl/x.pl"}`, nil, "pl/x.pl", ""},
 		{"RUBYOPT", `{"RUBYOPT":"-r ./rb/x.rb"}`, nil, "rb/x.rb", ""},
 		{"BASH_ENV a bare name", `{"BASH_ENV":"envfile"}`, nil, "envfile", ""},
+		{"NODE_PATH", `{"NODE_PATH":"./np/lib"}`, nil, "np/lib", ""},
+		{"GEM_HOME", `{"GEM_HOME":"./gems"}`, nil, "gems", ""},
+		{"LD_LIBRARY_PATH", `{"LD_LIBRARY_PATH":"./ll:/usr/lib"}`, nil, "ll", ""},
+		{"EDITOR is a command", `{"EDITOR":"npm run ed"}`, map[string]string{"package.json": `{"scripts":{"ed":"node tools/e.js"}}`}, "tools/e.js", ""},
+		{"PAGER is a command", `{"PAGER":"./bin/pg --x"}`, nil, "bin/pg", ""},
+		{"an unknown key stays path-shaped", `{"MY_KEY":"npm run ed"}`, map[string]string{"package.json": `{"scripts":{"ed":"node tools/e.js"}}`}, "", "tools/e.js"},
 		{"GIT_SSH_COMMAND", `{"GIT_SSH_COMMAND":"ssh -F cfg/ssh"}`, nil, "cfg/ssh", ""},
 		{"GIT_EDITOR runs a runner", `{"GIT_EDITOR":"npm run edit"}`, map[string]string{"package.json": `{"scripts":{"edit":"node tools/ed.js"}}`}, "tools/ed.js", ""},
 	}

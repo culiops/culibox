@@ -95,7 +95,7 @@ var MergeDenyPatterns = []string{".env.*", ".envrc*", "mise.*.toml", ".mise.*.to
 // MergeDenyDirs are directory names, matched case-insensitively against every
 // path component, under which a box's commits block the merge: an agent's
 // project settings and hooks live there.
-var MergeDenyDirs = []string{".claude"}
+var MergeDenyDirs = []string{".claude", ".cargo"} // cargo reads .cargo/config.toml from the cwd upward
 
 // MergeDenyTop are top-level directories (case-insensitive) under which a box's
 // commits block the merge: git hook managers, editor tasks, dev containers and
@@ -103,7 +103,7 @@ var MergeDenyDirs = []string{".claude"}
 // host opens or commits in the repo. clone_of's own core.hooksPath is added at
 // run time when it is inside the repo.
 var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config",
-	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue", ".cargo"}
+	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue"}
 
 // MergeDenyTopPaths are repo-relative paths (a file or a folder, matched by
 // whole components, case-insensitive) a box's commits must not touch: other
@@ -610,15 +610,15 @@ func denyFirst(entries []mergeEntry, max int, deny func(mergeEntry) bool) []stri
 	var out []string
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if seen[e.path] {
+		// Every entry is asked: a path can appear twice in a range (a file, then a
+		// gitlink) and only one of its entries may be refused. Only hits dedup.
+		if seen[e.path] || !deny(e) {
 			continue
 		}
 		seen[e.path] = true
-		if deny(e) {
-			out = append(out, e.path)
-			if len(out) >= max {
-				break
-			}
+		out = append(out, e.path)
+		if len(out) >= max {
+			break
 		}
 	}
 	return out

@@ -295,7 +295,10 @@ func parseLsFilesStage(out []byte) ([]lsFilesEntry, error) {
 // protectedPathspecs are the pathspecs that list the tracked files the guard
 // protects by name, so the listing never walks the whole repo.
 func protectedPathspecs() []string {
-	ps := []string{":(icase,glob)**/.claude", ":(icase,glob)**/.claude/**"}
+	var ps []string
+	for _, d := range MergeDenyDirs {
+		ps = append(ps, ":(icase,glob)**/"+d, ":(icase,glob)**/"+d+"/**")
+	}
 	for _, n := range MergeDenyNames {
 		ps = append(ps, ":(icase,glob)**/"+n)
 	}

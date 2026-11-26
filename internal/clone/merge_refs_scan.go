@@ -486,8 +486,8 @@ func npmrcSetsWorkspace(data []byte) bool {
 
 // toolConfigSkip are words whose "<word>.*" / ".<word>*" entries are not a
 // config the tool runs from the repo: git's own trusted files are denied by
-// name already, and refusing .gitignore or .github/ for every hook that calls
-// git would block ordinary work. Shells and interpreters read their rc files
+// name already (.gitignore is one), and refusing .github/ for every hook that
+// calls git would block ordinary work. Shells and interpreters read their rc files
 // from the user's home, not the repo. Docker and Podman read .dockerignore only
 // for a build context, never for "docker run".
 var toolConfigSkip = map[string]bool{
@@ -705,6 +705,7 @@ func (s *refSink) listing(base string) *dirListing {
 // tool runs: the prefix is the program whose own options the value holds.
 var envCommandKeys = map[string]string{
 	"NODE_OPTIONS": "node ", "PERL5OPT": "perl ", "RUBYOPT": "ruby ",
+	"EDITOR": "", "VISUAL": "", "PAGER": "", "SHELL": "", "PROMPT_COMMAND": "", "LESSOPEN": "", "LESSCLOSE": "", "MANPAGER": "",
 	"GIT_SSH": "", "GIT_SSH_COMMAND": "", "GIT_ASKPASS": "", "GIT_EDITOR": "", "GIT_SEQUENCE_EDITOR": "",
 	"GIT_PAGER": "", "GIT_EXTERNAL_DIFF": "", "GIT_PROXY_COMMAND": "",
 }
@@ -727,7 +728,9 @@ func (s *refSink) envValue(key, v string) {
 	switch k {
 	case "BASH_ENV", "ENV", "PYTHONSTARTUP":
 		s.pathArg(v)
-	case "PATH", "PYTHONPATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES":
+	case "PATH", "PYTHONPATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "NODE_PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH",
+		"DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "PERL5LIB", "PERLLIB", "RUBYLIB", "GEM_PATH", "GEM_HOME",
+		"CLASSPATH", "PYTHONHOME":
 		for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
 			s.pathArg(part)
 		}

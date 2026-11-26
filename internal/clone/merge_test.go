@@ -668,8 +668,9 @@ func TestMergeHomeDenyVariants(t *testing.T) {
 		{"sub/bunfig.toml", true},
 		{".cargo/config.toml", true},
 		{".Cargo/config.toml", true},
-		{"src/.cargo/x", false}, // top only
-		{".gitignore", true},    // R7: a dropped rule would decide what a later merge may add
+		{"src/.cargo/x", true}, // cargo reads it from the cwd upward (R16b)
+		{"sub/.cargo/config.toml", true},
+		{".gitignore", true}, // R7: a dropped rule would decide what a later merge may add
 		{"sub/.gitignore", true},
 		{"docs/gitignore.md", false},
 	}
@@ -1510,5 +1511,32 @@ func TestMergeHomeIgnoreCheckOutputNotTrusted(t *testing.T) {
 				t.Fatalf("result = %+v, audit %q", got, a.calls)
 			}
 		})
+	}
+}
+
+// A path that is a regular file in one commit and a gitlink in a later one is
+// still refused as the gitlink (R16a).
+func TestMergeHomeGitlinkAfterFileDenied(t *testing.T) {
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"sub/x": "file\n"})
+	fixtureGit(x.t, x.of, "checkout", "-q", "-b", "side2", "refs/heads/box/main")
+	fixtureGit(x.t, x.of, "rm", "-q", "--", "sub/x")
+	fixtureGit(x.t, x.of, "update-index", "--add", "--cacheinfo", "160000,"+x.out("rev-parse", "HEAD")+",sub/x")
+	fixtureGit(x.t, x.of, "commit", "-q", "-m", "gitlink")
+	fixtureGit(x.t, x.of, "update-ref", "refs/heads/box/main", x.out("rev-parse", "HEAD"))
+	fixtureGit(x.t, x.of, "checkout", "-q", "main")
+	got := x.run(newRec(t), &auditRec{})
+	wantMergeReason(t, got, MergeGuarded)
+	if !slices.Contains(got.Paths, "sub/x") || x.tip() != before {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
+func TestDenyFirstAsksEveryEntryOfARepeatedPath(t *testing.T) {
+	entries := []mergeEntry{{path: "a"}, {path: "a", gitlink: true}}
+	got := denyFirst(entries, 3, func(e mergeEntry) bool { return e.gitlink })
+	if !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("got %q", got)
 	}
 }
