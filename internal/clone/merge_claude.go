@@ -90,13 +90,20 @@ func (m *merger) importTargets(home string) ([]string, error) {
 // .claude/rules, which Claude Code loads as memory files like a CLAUDE.md
 // (git lists the tracked ones). Real directories only, a few levels deep. A
 // folder that is not there is nothing; one with more than mergeRulesEntries
-// entries, or that cannot be listed, fails the walk.
+// entries, or that cannot be listed, fails the walk. A .claude or .claude/rules
+// that is a link out of the repo is the host's own (a shared rules folder): it
+// is listed at its target, and its files are walked by their repo spelling, so
+// their imports resolve from there as Claude Code resolves them and read follows
+// the link (#370 N1).
 func (w *importGuard) walkRules(dir string, depth int) {
 	if w.root == nil || depth > mergeRulesDepth || w.err != nil {
 		return
 	}
 	rel := relInside(w.of, dir)
 	d, err := w.root.Open(filepath.FromSlash(rel))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+		d, err = w.openDirOut(dir, rel, err)
+	}
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			w.err = fmt.Errorf("cannot list %s: %w", rel, err)
@@ -123,6 +130,28 @@ func (w *importGuard) walkRules(dir string, depth int) {
 			w.walk(filepath.Join(dir, e.Name()), 0)
 		}
 	}
+}
+
+// openDirOut opens the folder dir (repo spelling rel) that the root refused
+// (rootErr) at its real path: through the root when that is inside the repo,
+// by path when it is outside (a link the host made). A link that cannot be
+// resolved is the error; a missing target is fs.ErrNotExist.
+func (w *importGuard) openDirOut(dir, rel string, rootErr error) (*os.File, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err
+	}
+	realOf, err := filepath.EvalSymlinks(w.of)
+	if err != nil {
+		return nil, rootErr
+	}
+	if in := absInside(realOf, real); in != "" {
+		if in == "." {
+			return nil, rootErr
+		}
+		return w.root.Open(filepath.FromSlash(in))
+	}
+	return os.OpenFile(real, os.O_RDONLY|syscall.O_NONBLOCK, 0) // never blocks on a FIFO; ReadDir then fails ENOTDIR
 }
 
 type importGuard struct {

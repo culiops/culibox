@@ -226,3 +226,65 @@ func TestMergeHomeClaudeImportReadFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// A .claude or .claude/rules folder that is a link out of the repo is the
+// host's own: it is listed at its target and its rule files are read (#370 N1).
+func TestMergeHomeClaudeRulesLinkedOut(t *testing.T) {
+	cases := []struct {
+		name   string
+		link   string            // repo path linked to the outside folder
+		out    map[string]string // files in the outside folder
+		cap    int               // mergeRulesEntries, 0 to keep it
+		change string
+		want   string // "" merged
+	}{
+		{"rules linked out: a rule's import is guarded", ".claude/rules", map[string]string{"r.md": "@../../tools/x.md\n"}, 0, "tools/x.md", MergeGuarded},
+		{"rules linked out: a nested rule's import is guarded", ".claude/rules", map[string]string{"sub/r.md": "@../../../tools/y.md\n"}, 0, "tools/y.md", MergeGuarded},
+		{"rules linked out: an unrelated change merges", ".claude/rules", map[string]string{"r.md": "@../../tools/x.md\n"}, 0, "other.txt", ""},
+		{".claude linked out: a rule's import is guarded", ".claude", map[string]string{"rules/r.md": "@../../tools/z.md\n"}, 0, "tools/z.md", MergeGuarded},
+		{".claude linked out with no rules: merges", ".claude", map[string]string{"notes.txt": "x\n"}, 0, "other.txt", ""},
+		{"rules linked out past the entry cap fails", ".claude/rules", map[string]string{"a.md": "a\n", "b.md": "b\n", "c.md": "c\n"}, 2, "other.txt", MergeFailed},
+		{"rules linked out to nothing merges", ".claude/rules", nil, 0, "other.txt", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.cap > 0 {
+				old := mergeRulesEntries
+				mergeRulesEntries = c.cap
+				t.Cleanup(func() { mergeRulesEntries = old })
+			}
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			out := filepath.Join(t.TempDir(), "shared")
+			if c.out != nil {
+				for rel, content := range c.out {
+					p := filepath.Join(out, filepath.FromSlash(rel))
+					if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			x := newMergeFx(t, "main")
+			x.commit("host", map[string]string{"tools/keep": "h\n"})
+			before := x.tip()
+			x.box("main", map[string]string{c.change: "box\n"})
+			x.linkUntracked(c.link, out)
+			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: t.TempDir(), Audit: (&auditRec{}).fn, CloneTips: x.tips()})
+			if c.want == "" {
+				wantMerged(t, got)
+				return
+			}
+			wantMergeReason(t, got, c.want)
+			if c.want == MergeGuarded && !slices.Contains(got.Paths, c.change) {
+				t.Fatalf("Paths = %q, want %q", got.Paths, c.change)
+			}
+			if x.tip() != before {
+				t.Fatal("main moved")
+			}
+		})
+	}
+}
