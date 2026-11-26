@@ -410,7 +410,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 	agentDenied, importPaths, err := m.agentImportDenies(r.Home)
 	if err != nil {
-		return m.failed("cannot list the CLAUDE.md files", err)
+		return m.scanFailed("cannot list the CLAUDE.md files", err)
 	}
 	rd, err := m.configRefDenies(r.Home, gc.hooks)
 	if err != nil {

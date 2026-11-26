@@ -2,7 +2,9 @@ package clone
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +22,15 @@ import (
 // has not written.
 
 const (
-	mergeImportHops   = 5       // Claude Code's import depth
-	mergeImportFiles  = 200     // files read per check
-	mergeImportBytes  = 1 << 20 // read per file; an import past it is not seen
-	mergeRulesDepth   = 4       // folders below .claude/rules that are walked
-	mergeRulesEntries = 500     // entries read per rules folder
+	mergeImportHops  = 5       // Claude Code's import depth
+	mergeImportBytes = 1 << 20 // read per file; an import past it is not seen
+	mergeRulesDepth  = 4       // folders below .claude/rules that are walked
+)
+
+// Vars so a test can lower them; past either the merge fails (errScanCap).
+var (
+	mergeImportFiles  = 200 // files read per check
+	mergeRulesEntries = 500 // entries per rules folder
 )
 
 // agentImportDenies returns whether a repo-relative path from the range is at,
@@ -46,8 +52,11 @@ func (m *merger) agentImportDenies(home string) (func(p string) bool, []string, 
 // CLAUDE.local.md at the top, and <home>/.claude/CLAUDE.md when home is set. A
 // spelling "~/X" is X under home, an absolute one is itself, any other is
 // relative to the importing file's directory. A target counts whether or not it
-// exists. A file that cannot be read is skipped, and parsing never fails: only
-// the ls-files call can.
+// exists. A file that cannot be read is skipped and parsing never fails, but a
+// walk past mergeImportFiles files, a rules folder past mergeRulesEntries
+// entries or one that cannot be listed is errScanCap or the listing error: the
+// merge then fails instead of seeing fewer imports (#370 I-2). The ls-files call
+// can fail too.
 func (m *merger) importTargets(home string) ([]string, error) {
 	out, err := m.run(m.env(), "ls-files", "-z", "--", ":(icase,glob)**/CLAUDE.md", ":(icase,glob)**/CLAUDE.local.md",
 		":(icase,glob).claude/rules/**/*.md")
@@ -70,23 +79,41 @@ func (m *merger) importTargets(home string) ([]string, error) {
 	if home != "" {
 		w.walk(filepath.Join(home, ".claude", "CLAUDE.md"), 0)
 	}
+	if w.err != nil {
+		return nil, w.err
+	}
 	return w.targets, nil
 }
 
 // walkRules walks the untracked markdown files under the top-level
 // .claude/rules, which Claude Code loads as memory files like a CLAUDE.md
-// (git lists the tracked ones). Real directories only, a few levels deep.
+// (git lists the tracked ones). Real directories only, a few levels deep. A
+// folder that is not there is nothing; one with more than mergeRulesEntries
+// entries, or that cannot be listed, fails the walk.
 func (w *importGuard) walkRules(dir string, depth int) {
-	if w.root == nil || depth > mergeRulesDepth || w.reads >= mergeImportFiles {
+	if w.root == nil || depth > mergeRulesDepth || w.err != nil {
 		return
 	}
 	rel := relInside(w.of, dir)
 	d, err := w.root.Open(filepath.FromSlash(rel))
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			w.err = fmt.Errorf("cannot list %s: %w", rel, err)
+		}
 		return
 	}
-	ents, _ := d.ReadDir(mergeRulesEntries)
+	ents, err := d.ReadDir(mergeRulesEntries + 1)
 	d.Close()
+	switch {
+	case errors.Is(err, syscall.ENOTDIR):
+		return // a file, not a folder: nothing to walk
+	case err != nil && !errors.Is(err, io.EOF):
+		w.err = fmt.Errorf("cannot list %s: %w", rel, err)
+		return
+	case len(ents) > mergeRulesEntries:
+		w.err = errScanCap
+		return
+	}
 	for _, e := range ents {
 		switch {
 		case e.IsDir():
@@ -104,11 +131,16 @@ type importGuard struct {
 	reads    int
 	found    map[string]bool
 	targets  []string
+	err      error // errScanCap or a listing error: the walk saw less than Claude Code reads
 }
 
 // walk reads file, at hop hops from a start file, and records its imports.
 func (w *importGuard) walk(file string, hop int) {
-	if h, ok := w.seen[file]; (ok && h <= hop) || w.reads >= mergeImportFiles {
+	if h, ok := w.seen[file]; (ok && h <= hop) || w.err != nil {
+		return
+	}
+	if w.reads >= mergeImportFiles {
+		w.err = errScanCap
 		return
 	}
 	w.seen[file] = hop

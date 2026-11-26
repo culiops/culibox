@@ -103,3 +103,55 @@ func TestMergeHomeClaudeImportParentSymlinkDenied(t *testing.T) {
 		t.Fatalf("Paths = %q, want docs", got.Paths)
 	}
 }
+
+// The import walk fails the merge at its caps instead of stopping quietly
+// (#370 I-2): past mergeImportFiles files, a .claude/rules folder with more
+// than mergeRulesEntries entries, or one that cannot be listed.
+func TestMergeHomeClaudeImportCapsFail(t *testing.T) {
+	run := func(t *testing.T, host, untrack map[string]string) *MergeResult {
+		t.Helper()
+		old := mergeSystemGitConfig
+		mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+		t.Cleanup(func() { mergeSystemGitConfig = old })
+		x := newMergeFx(t, "main")
+		if host != nil {
+			x.commit("host", host)
+		}
+		x.box("main", map[string]string{"unrelated.txt": "box\n"})
+		for rel, content := range untrack {
+			x.write(rel, content)
+		}
+		return MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: t.TempDir(), Audit: (&auditRec{}).fn, CloneTips: x.tips()})
+	}
+	wantCap := func(t *testing.T, got *MergeResult) {
+		t.Helper()
+		wantMergeReason(t, got, MergeFailed)
+		if !strings.Contains(got.Detail, errScanCap.Error()) {
+			t.Fatalf("Detail = %q, want %q", got.Detail, errScanCap.Error())
+		}
+	}
+	t.Run("imported files past the cap", func(t *testing.T) {
+		old := mergeImportFiles
+		mergeImportFiles = 4
+		t.Cleanup(func() { mergeImportFiles = old })
+		wantCap(t, run(t, map[string]string{"CLAUDE.md": "@a.md @b.md @c.md @d.md @e.md\n"}, nil))
+	})
+	t.Run("imported files under the cap merge", func(t *testing.T) {
+		old := mergeImportFiles
+		mergeImportFiles = 20
+		t.Cleanup(func() { mergeImportFiles = old })
+		wantMerged(t, run(t, map[string]string{"CLAUDE.md": "@a.md @b.md @c.md @d.md @e.md\n"}, nil))
+	})
+	t.Run("rules folder past the entry cap", func(t *testing.T) {
+		old := mergeRulesEntries
+		mergeRulesEntries = 2
+		t.Cleanup(func() { mergeRulesEntries = old })
+		wantCap(t, run(t, nil, map[string]string{".claude/rules/a.md": "a\n", ".claude/rules/b.md": "b\n", ".claude/rules/c.md": "c\n"}))
+	})
+	t.Run("rules folder at the entry cap merges", func(t *testing.T) {
+		old := mergeRulesEntries
+		mergeRulesEntries = 2
+		t.Cleanup(func() { mergeRulesEntries = old })
+		wantMerged(t, run(t, nil, map[string]string{".claude/rules/a.md": "a\n", ".claude/rules/b.md": "b\n"}))
+	})
+}
