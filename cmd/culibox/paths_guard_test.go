@@ -65,6 +65,9 @@ var pathEscapes = map[string]int{
 	"internal/clone/merge_gitconfig.go env XDG_CONFIG_HOME": 1,
 	"internal/clone/merge_gitconfig.go literal .config":     1,
 	"internal/clone/merge.go literal .config":               1,
+	// The scan of the host repo's own configs (#370) reads mise's .config/mise.*
+	// files inside the repo top: names under the repo, never a write.
+	"internal/clone/merge_refs_scan.go literal .config": 3,
 	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
 	// data root there; it is still derived from it (a hash) and holds only sockets.
 	"internal/abduco/socketpath.go literal /tmp": 1,

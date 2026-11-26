@@ -20,9 +20,11 @@ import (
 // has not written.
 
 const (
-	mergeImportHops  = 5       // Claude Code's import depth
-	mergeImportFiles = 200     // files read per check
-	mergeImportBytes = 1 << 20 // read per file; an import past it is not seen
+	mergeImportHops   = 5       // Claude Code's import depth
+	mergeImportFiles  = 200     // files read per check
+	mergeImportBytes  = 1 << 20 // read per file; an import past it is not seen
+	mergeRulesDepth   = 4       // folders below .claude/rules that are walked
+	mergeRulesEntries = 500     // entries read per rules folder
 )
 
 // agentImportDenies returns whether a repo-relative path from the range is at,
@@ -46,7 +48,8 @@ func (m *merger) agentImportDenies(home string) (func(p string) bool, error) {
 // exists. A file that cannot be read is skipped, and parsing never fails: only
 // the ls-files call can.
 func (m *merger) importTargets(home string) ([]string, error) {
-	out, err := m.run(m.env(), "ls-files", "-z", "--", ":(icase,glob)**/CLAUDE.md", ":(icase,glob)**/CLAUDE.local.md")
+	out, err := m.run(m.env(), "ls-files", "-z", "--", ":(icase,glob)**/CLAUDE.md", ":(icase,glob)**/CLAUDE.local.md",
+		":(icase,glob).claude/rules/**/*.md")
 	if err != nil {
 		return nil, err
 	}
@@ -61,10 +64,36 @@ func (m *merger) importTargets(home string) ([]string, error) {
 		}
 	}
 	w.walk(filepath.Join(w.of, "CLAUDE.local.md"), 0)
+	w.walk(filepath.Join(w.of, ".claude", "CLAUDE.md"), 0) // untracked: git did not list it
+	w.walkRules(filepath.Join(w.of, ".claude", "rules"), 0)
 	if home != "" {
 		w.walk(filepath.Join(home, ".claude", "CLAUDE.md"), 0)
 	}
 	return w.targets, nil
+}
+
+// walkRules walks the untracked markdown files under the top-level
+// .claude/rules, which Claude Code loads as memory files like a CLAUDE.md
+// (git lists the tracked ones). Real directories only, a few levels deep.
+func (w *importGuard) walkRules(dir string, depth int) {
+	if w.root == nil || depth > mergeRulesDepth || w.reads >= mergeImportFiles {
+		return
+	}
+	rel := relInside(w.of, dir)
+	d, err := w.root.Open(filepath.FromSlash(rel))
+	if err != nil {
+		return
+	}
+	ents, _ := d.ReadDir(mergeRulesEntries)
+	d.Close()
+	for _, e := range ents {
+		switch {
+		case e.IsDir():
+			w.walkRules(filepath.Join(dir, e.Name()), depth+1)
+		case strings.HasSuffix(strings.ToLower(e.Name()), ".md"):
+			w.walk(filepath.Join(dir, e.Name()), 0)
+		}
+	}
 }
 
 type importGuard struct {
@@ -133,6 +162,12 @@ func (w *importGuard) read(file string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readRegular(f)
+}
+
+// readRegular returns up to mergeImportBytes of f when it is a regular file,
+// and closes it.
+func readRegular(f *os.File) ([]byte, error) {
 	defer f.Close()
 	if fi, err := f.Stat(); err != nil {
 		return nil, err

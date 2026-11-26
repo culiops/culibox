@@ -31,6 +31,15 @@ func TestCommandPaths(t *testing.T) {
 		{".envrc.local", []string{".envrc.local"}, nil},
 		{"!./bin/st.sh --x", []string{"./bin/st.sh"}, nil},
 		{"!f(){./a/b.sh;}; f", []string{"./a/b.sh"}, nil},
+		{"export PATH=./scripts:$PATH", []string{"./scripts"}, nil},
+		{"A=/usr/bin:./bin:$X cmd", []string{"/usr/bin", "./bin"}, nil},
+		{"$PWD/tools/x.sh", []string{"./tools/x.sh"}, nil},
+		{"\"$PWD\"/tools/x.sh", []string{"./tools/x.sh"}, nil},
+		{"${PWD}/tools/x.sh", []string{"./tools/x.sh"}, nil},
+		{"$(pwd)/tools/x.sh", []string{"./tools/x.sh"}, nil},
+		{"{{config_root}}/scripts/e.sh", []string{"./scripts/e.sh"}, nil},
+		{"{{ config_root }}/scripts/e.sh", []string{"./scripts/e.sh"}, nil},
+		{"$MISE_PROJECT_ROOT/scripts/e.sh", []string{"./scripts/e.sh"}, nil},
 		{"", nil, nil},
 	}
 	for _, c := range cases {

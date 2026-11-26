@@ -20,6 +20,11 @@ import (
 // becomes "./" so what follows reads as a relative path.
 var projectDirSpellings = []string{
 	`"${CLAUDE_PROJECT_DIR}"/`, `"$CLAUDE_PROJECT_DIR"/`, `${CLAUDE_PROJECT_DIR}/`, `$CLAUDE_PROJECT_DIR/`,
+	// direnv runs in the repo top, mise names it config_root or the project root.
+	`"${PWD}"/`, `"$PWD"/`, `${PWD}/`, `$PWD/`, `"$(pwd)"/`, `$(pwd)/`,
+	`{{ config_root }}/`, `{{config_root}}/`, `{{ cwd }}/`, `{{cwd}}/`,
+	`"${MISE_PROJECT_ROOT}"/`, `${MISE_PROJECT_ROOT}/`, `$MISE_PROJECT_ROOT/`,
+	`"${MISE_CONFIG_ROOT}"/`, `${MISE_CONFIG_ROOT}/`, `$MISE_CONFIG_ROOT/`,
 }
 
 // commandRunners are programs that read a manifest at the repo top (a script
@@ -55,24 +60,27 @@ func commandPaths(s string) (paths []string, runners []string) {
 	}
 	for _, tok := range strings.FieldsFunc(s, commandDelim) {
 		tok = strings.TrimRight(strings.TrimLeft(tok, "!{"), "}") // git's "!" alias prefix, a shell function's braces
+		cands := []string{tok}
 		if strings.HasPrefix(tok, "-") {
 			i := strings.Index(tok, "=")
 			if i < 0 {
 				continue
 			}
-			tok = tok[i+1:]
+			cands = []string{tok[i+1:]}
 		} else if loc := envAssignRE.FindStringIndex(tok); loc != nil {
-			tok = tok[loc[1]:]
+			cands = strings.Split(tok[loc[1]:], ":") // PATH=./bin:$PATH names ./bin
 		}
-		if tok == "" || tok == "." || tok == ".." || strings.HasPrefix(tok, "-") ||
-			strings.HasPrefix(tok, "$") || strings.HasPrefix(tok, "~") || strings.Contains(tok, "://") {
-			continue
-		}
-		if b := path.Base(tok); commandRunners[b] && !slices.Contains(runners, b) {
-			runners = append(runners, b)
-		}
-		if strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || hasScriptExt(tok) {
-			paths = append(paths, tok)
+		for _, tok := range cands {
+			if tok == "" || tok == "." || tok == ".." || strings.HasPrefix(tok, "-") ||
+				strings.HasPrefix(tok, "$") || strings.HasPrefix(tok, "~") || strings.Contains(tok, "://") {
+				continue
+			}
+			if b := path.Base(tok); commandRunners[b] && !slices.Contains(runners, b) {
+				runners = append(runners, b)
+			}
+			if strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || hasScriptExt(tok) {
+				paths = append(paths, tok)
+			}
 		}
 	}
 	return paths, runners
@@ -101,15 +109,7 @@ func repoDenyPaths(of string, raws []string) []string {
 		}
 	}
 	for _, raw := range raws {
-		var rel string
-		if filepath.IsAbs(raw) {
-			rel = absInside(of, raw)
-		} else {
-			rel = path.Clean(filepath.ToSlash(raw))
-			if rel == ".." || strings.HasPrefix(rel, "../") {
-				rel = ""
-			}
-		}
+		rel := repoRel(of, raw)
 		if rel == "" || rel == "." {
 			continue
 		}
@@ -117,4 +117,17 @@ func repoDenyPaths(of string, raws []string) []string {
 		add(path.Dir(rel))
 	}
 	return out
+}
+
+// repoRel maps one path spelling (relative ones to the repo top of) to a
+// repo-relative, slash-separated path, "" when it leaves the repo.
+func repoRel(of, raw string) string {
+	if filepath.IsAbs(raw) {
+		return absInside(of, raw)
+	}
+	rel := path.Clean(filepath.ToSlash(raw))
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
 }

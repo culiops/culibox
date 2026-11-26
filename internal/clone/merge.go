@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/handback"
@@ -75,7 +76,15 @@ var MergeDenyNames = append(box.InPlaceGuardFiles(),
 	"mise.local.toml", ".mise.local.toml",
 	".pre-commit-config.yaml", ".pre-commit-hooks.yaml", ".overcommit.yml",
 	"lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
-	"lefthook-local.yml", "lefthook-local.yaml", ".lefthook-local.yml", ".lefthook-local.yaml")
+	"lefthook-local.yml", "lefthook-local.yaml", ".lefthook-local.yml", ".lefthook-local.yaml",
+	// direnv's dotenv, nix-direnv and devenv load these on the next prompt in the
+	// folder, node and yarn run what these name on every call.
+	".env", "flake.nix", "flake.lock", "shell.nix", "default.nix", "devenv.nix", "devenv.yaml",
+	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc")
+
+// MergeDenyPatterns are path.Match patterns for more file names, matched like
+// MergeDenyNames (any depth, case-insensitive, by the basename).
+var MergeDenyPatterns = []string{".env.*", ".envrc*", "mise.*.toml", ".mise.*.toml", "*.code-workspace", ".aider*"}
 
 // MergeDenyDirs are directory names, matched case-insensitively against every
 // path component, under which a box's commits block the merge: an agent's
@@ -87,7 +96,14 @@ var MergeDenyDirs = []string{".claude"}
 // tool configs (mise reads mise/ and .config/mise/), which run commands when the
 // host opens or commits in the repo. clone_of's own core.hooksPath is added at
 // run time when it is inside the repo.
-var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config"}
+var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config",
+	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue"}
+
+// MergeDenyTopPaths are repo-relative paths (a file or a folder, matched by
+// whole components, case-insensitive) a box's commits must not touch: other
+// agents' instructions that load by themselves. CI definitions are not here:
+// they run on the user's next push.
+var MergeDenyTopPaths = []string{".github/copilot-instructions.md", ".github/instructions", ".github/prompts"}
 
 const (
 	mergeRetryAfter = 30 * time.Minute
@@ -335,17 +351,18 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
 	}
+	refDenied, _ := m.configRefDenies()
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || refDenied(e.path)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
 	}
 	if len(denied) > 0 {
-		return m.result(MergeGuarded, "the commits touch files host tools load by themselves "+
-			"(agent settings, hooks, attributes, editor tasks, git config) or a submodule", denied)
+		return m.result(MergeGuarded, "the commits touch files host tools load or run by themselves "+
+			"(agent, direnv and mise settings and the files they name, hooks, attributes, editor tasks, git config) or a submodule", denied)
 	}
 
 	// 4b. No path a git filter would process on checkout (one cheap check-attr,
@@ -507,7 +524,8 @@ func octalMode(s string) bool {
 }
 
 // mergeDenied reports whether p (a repo-relative path from the range) is a
-// file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or at,
+// file host tools trust: MergeDenyNames, MergeDenyPatterns, MergeDenyDirs,
+// MergeDenyTop, MergeDenyTopPaths, or at,
 // under or a parent of one of hookDirs (repo-relative directories, "." for the
 // whole repo). Case-insensitive throughout, by strings.EqualFold per path
 // component: on a case-insensitive file system (macOS) .Claude/ is .claude/,
@@ -524,6 +542,17 @@ func mergeDenied(p string, hookDirs []string) bool {
 	base := comps[len(comps)-1]
 	for _, n := range MergeDenyNames {
 		if strings.EqualFold(base, n) {
+			return true
+		}
+	}
+	fb := foldKey(base)
+	for _, pat := range MergeDenyPatterns {
+		if ok, _ := path.Match(foldKey(pat), fb); ok {
+			return true
+		}
+	}
+	for _, tp := range MergeDenyTopPaths {
+		if foldPrefix(strings.Split(tp, "/"), comps) {
 			return true
 		}
 	}
@@ -546,6 +575,19 @@ func mergeDenied(p string, hookDirs []string) bool {
 		}
 	}
 	return false
+}
+
+// foldKey maps every letter of s to the smallest member of its case-folding
+// orbit, so two strings that strings.EqualFold match have the same key, and a
+// pattern keyed the same way matches what EqualFold would.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			m = min(m, f)
+		}
+		return m
+	}, s)
 }
 
 // foldPrefix reports whether the path components pre are the first components
