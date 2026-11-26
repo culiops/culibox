@@ -114,6 +114,12 @@ const (
 	mergeFlaggedDetail = "the commits carry flagged files"
 )
 
+// MergeFlaggedFound reports whether the Detail of a flagged result says the
+// inspection found flagged files, a settled answer for its range. A flagged
+// result without it is a scan that could not finish (a deadline, a git failure),
+// which is run again.
+func MergeFlaggedFound(detail string) bool { return strings.HasPrefix(detail, mergeFlaggedDetail) }
+
 // MergeHome fast-forwards X, the branch checked out in r.Of, to box/X when box/X
 // is this clone's own tip for X (r.CloneTips) and strictly ahead, the tree is
 // clean and the guard passes. It returns nil when there is nothing to do or
@@ -309,7 +315,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	// retry window above). A scan that found no flag but could not finish (a
 	// deadline, a git failure) is not held: it runs again, in full.
 	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
-		strings.HasPrefix(p.Detail, mergeFlaggedDetail) {
+		MergeFlaggedFound(p.Detail) {
 		return p
 	}
 

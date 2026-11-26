@@ -1758,6 +1758,55 @@ func TestReturnForRepoContinuesAMergeCutBeforeGit(t *testing.T) {
 	}
 }
 
+// A flagged merge whose scan found no flag could not finish (the deadline cut
+// it), so it continues in the background; flags found are a settled answer.
+func TestReturnForRepoContinuesAScanCutShort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+		detail string
+		wantBg bool
+	}{
+		{"scan ran out of time", clone.MergeFlagged, "the commits could not be fully inspected: ran out of time or was cancelled before it finished", true},
+		{"scan found no flag and failed", clone.MergeFlagged, "the commits could not be fully inspected: could not inspect: x", true},
+		{"flags found", clone.MergeFlagged, "the commits carry flagged files", false},
+		{"flags found, scan also cut", clone.MergeFlagged, "the commits carry flagged files: ran out of time or was cancelled before it finished", false},
+		{"another refusal", clone.MergeGuarded, "the commits touch files host tools load", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			of, dir := resolvedTemp(t), cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+			bg := make(chan struct{}, 4)
+			var first atomic.Bool
+			f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+				if first.CompareAndSwap(false, true) {
+					<-ctx.Done()
+					return clone.ReturnResult{Merge: &clone.MergeResult{Branch: "main", Reason: tc.reason, Detail: tc.detail}}
+				}
+				bg <- struct{}{}
+				return clone.ReturnResult{}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			sums := f.h.ReturnForRepo(ctx, of)
+			if len(sums) != 1 || sums[0].Merge == nil || sums[0].Merge.Reason != tc.reason {
+				t.Fatalf("summaries = %+v, want the merge result kept", sums)
+			}
+			select {
+			case <-bg:
+				if !tc.wantBg {
+					t.Fatal("a settled merge result was continued in the background")
+				}
+			case <-time.After(300 * time.Millisecond):
+				if tc.wantBg {
+					t.Fatal("a flagged scan cut short was not continued in the background")
+				}
+			}
+		})
+	}
+}
+
 // I5: a profile whose copy was never made (no box spawned yet) has nothing to
 // return: no summary, no return, nothing recorded.
 func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
