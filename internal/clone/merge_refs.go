@@ -127,6 +127,9 @@ type plainWord struct {
 	word  string
 	bases []string // repo-relative folders to look in, "." for the repo top
 	tool  bool     // the tool-config prefix rule applies: the command word and a fetcher's tool
+	// srcOnly: only "<word>.<ext>" entries, not the word itself (a make
+	// built-in rule's sources, #370 N2).
+	srcOnly bool
 }
 
 // cmdInfo is what parseCommand finds in a command line.

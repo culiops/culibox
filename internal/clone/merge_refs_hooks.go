@@ -603,6 +603,40 @@ func (s *refSink) scanRecipesIn(data []byte, dir, kind string) {
 		if dir != "." { // an included file's recipes may run in its folder
 			s.command("cd " + dir + " && " + t)
 		}
+		if isMake {
+			s.makeBuiltinSources(t, dir)
+		}
+	}
+}
+
+// makeBuiltinSources looks up, for each path with no extension that a make line
+// names ("./check", "bin/tool"), every file named after it with an extension
+// ("check.sh", "check.c"): make's built-in rules can make the program from such
+// a file (%: %.sh copies it, %: %.c compiles it) before the recipe runs it
+// (#370 N2). A file the range adds is matched too (plainMatcher).
+func (s *refSink) makeBuiltinSources(t, dir string) {
+	for _, tok := range strings.FieldsFunc(t, commandDelim) {
+		if !strings.Contains(tok, "/") || path.Ext(path.Base(tok)) != "" || strings.HasSuffix(tok, "/") {
+			continue
+		}
+		c := cleanRaw(tok)
+		if c == "" || path.IsAbs(c) {
+			if c != "" {
+				c = absInside(s.of, filepath.FromSlash(c))
+			}
+			if c == "" {
+				continue
+			}
+		}
+		c = path.Clean(c)
+		if strings.HasPrefix(c, "../") || c == "." || c == ".." {
+			continue
+		}
+		bases := []string{path.Dir(c)}
+		if dir != "." {
+			bases = append(bases, path.Join(dir, path.Dir(c)))
+		}
+		s.plainWord(plainWord{word: path.Base(c), bases: bases, srcOnly: true})
 	}
 }
 
@@ -711,9 +745,11 @@ func (s *refSink) recipeCommand(t, dir string) {
 	}
 }
 
-// makeAutoRE is an automatic variable that names a prerequisite: $< $^ $+ $?
-// $* $| and their $(<D) / ${^F} forms.
-var makeAutoRE = regexp.MustCompile(`\$[<^+?*|]|\$[({][<^+?*|]`)
+// makeAutoRE is an automatic variable: $@ $% $< $^ $+ $? $* $| and their
+// $(@D) / ${^F} forms. Each can name a target or prerequisite a recipe then runs
+// ("$(MAKE) -C $@", "bash $<"), so a make scan that meets one reads every
+// prerequisite (#370 R18, N2).
+var makeAutoRE = regexp.MustCompile(`\$[@%<^+?*|]|\$[({][@%<^+?*|]`)
 
 // makeAutoUse reports whether a make file uses an automatic variable, sets
 // .RECIPEPREFIX, or assigns or defines a variable whose name is computed ("$(R)

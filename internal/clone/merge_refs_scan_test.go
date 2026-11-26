@@ -933,6 +933,15 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"make plain prerequisite, $? in an include read later: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "mk/a.mk": "x:\n\techo $?\n", "Makefile": "lint: foo\n\ttrue\ninclude mk/a.mk\n"}, "foo", true},
 		{"make plain prerequisite, computed variable name: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "$(R)PREFIX = >\nlint: foo\n\ttrue\n"}, "foo", true},
 		{"make plain prerequisite, no automatic variable: foo merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "test/a_test.go": "h\n", "Makefile": "lint: foo\n\ttrue\n"}, "foo", false},
+		{"make $(MAKE) -C $@: foo/Makefile refused", map[string]string{".claude/settings.json": hookSettings("make"), "foo/Makefile": "h\n", "Makefile": "all: foo\nfoo:\n\t$(MAKE) -C $@\n"}, "foo/Makefile", true},
+		{"make cd $@ && ./run.sh: foo/run.sh refused", map[string]string{".claude/settings.json": hookSettings("make"), "foo/run.sh": "h\n", "Makefile": "all: foo\nfoo:\n\tcd $@ && ./run.sh\n"}, "foo/run.sh", true},
+		{"make bash $@.bash: gen.bash refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: gen\ngen:\n\tbash $@.bash\n"}, "gen.bash", true},
+		{"make echo $@: foo refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: foo\n\techo $@\n"}, "foo", true},
+		{"make built-in rule: a check.sh the box adds is refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: check\n\t./check\n"}, "check.sh", true},
+		{"make built-in rule: check.c the box adds is refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: check\n\t./check\n"}, "check.c", true},
+		{"make $% counts: foo refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: foo\n\techo $%\n"}, "foo", true},
+		{"make ${@D} counts: foo refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: foo\n\tmkdir -p ${@D}\n"}, "foo", true},
+		{"make built-in rule: an unrelated new file merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "foo": "h\n", "Makefile": "lint: check\n\t./check\n"}, "other.sh", false},
 		{"make .RECIPEPREFIX: every line read", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": ".RECIPEPREFIX = >\nlint:\n>build.sh x: y\n"}, "build.sh", true},
 	}
 	for _, c := range cases {

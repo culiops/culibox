@@ -520,6 +520,9 @@ func (s *refSink) plainWord(pw plainWord) {
 		if pw.tool {
 			key += "\x00t"
 		}
+		if pw.srcOnly {
+			key += "\x00s"
+		}
 		if s.plainSeen[key] {
 			continue
 		}
@@ -528,6 +531,18 @@ func (s *refSink) plainWord(pw plainWord) {
 			return
 		}
 		s.plainSeen[key] = true
+		if pw.srcOnly {
+			s.pm.addSrc(base, pw.word)
+			if s.root == nil {
+				continue
+			}
+			l := s.listing(base)
+			w := strings.ToLower(pw.word) + "."
+			for i := sort.SearchStrings(l.sorted, w); i < len(l.sorted) && strings.HasPrefix(l.sorted[i], w); i++ {
+				s.addRaw(path.Join(base, l.names[l.sorted[i]]))
+			}
+			continue
+		}
 		s.pm.add(base, pw.word, pw.tool) // the range match applies with or without a work tree
 		if s.root == nil {
 			continue
@@ -553,8 +568,9 @@ func (s *refSink) plainWord(pw plainWord) {
 // plainPattern is one plain word looked up in a folder: word is
 // foldKey(strings.ToLower(word)); tool adds the tool-config prefix rule.
 type plainPattern struct {
-	word string
-	tool bool
+	word    string
+	tool    bool
+	srcOnly bool // only "<word>.<ext>": a make built-in rule's sources
 }
 
 // plainMatcher holds the look-ups plainWord made, by folder (foldKey of the
@@ -566,6 +582,18 @@ type plainPattern struct {
 type plainMatcher struct {
 	byBase map[string][]plainPattern
 	globs  map[string][]string // folder -> path.Match patterns, case-folded
+}
+
+// addSrc records a look-up of "<word>.<ext>" in base (plainWord.srcOnly).
+func (pm *plainMatcher) addSrc(base, word string) {
+	if pm.byBase == nil {
+		pm.byBase = map[string][]plainPattern{}
+	}
+	k := foldKey(base)
+	pp := plainPattern{word: foldKey(strings.ToLower(word)), srcOnly: true}
+	if !slices.Contains(pm.byBase[k], pp) {
+		pm.byBase[k] = append(pm.byBase[k], pp)
+	}
 }
 
 // add records a look-up of word in base.
@@ -594,8 +622,13 @@ func (pm *plainMatcher) addGlob(base, pat string) {
 // merge adds the look-ups of o.
 func (pm *plainMatcher) merge(o *plainMatcher) {
 	for base, pps := range o.byBase {
-		for _, pp := range pps {
-			pm.add(base, pp.word, pp.tool)
+		if pm.byBase == nil {
+			pm.byBase = map[string][]plainPattern{}
+		}
+		for _, pp := range pps { // already folded: copied as they are, srcOnly kept
+			if !slices.Contains(pm.byBase[base], pp) {
+				pm.byBase[base] = append(pm.byBase[base], pp)
+			}
 		}
 	}
 	for base, gs := range o.globs {
@@ -639,6 +672,12 @@ func (pm *plainMatcher) denied(p string) bool {
 		}
 		for _, pp := range pps {
 			w := pp.word
+			if pp.srcOnly {
+				if strings.HasPrefix(c, w+".") {
+					return true
+				}
+				continue
+			}
 			if c == w {
 				return true
 			}
