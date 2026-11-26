@@ -178,6 +178,12 @@ func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []stri
 			if t := includeTarget(home, holder, e.value); t != "" {
 				deny(absInside(of, t))
 			}
+		case strings.EqualFold(e.key, "core.attributesfile"):
+			// A file git reads attributes (filter, textconv) from: a path, not a
+			// command. Relative to the repo top as git runs there; "~/" is home.
+			if e.hasValue {
+				deny(hooksDirOf(of, home, e.value))
+			}
 		case isProgramKey(e):
 			paths, _ := commandPaths(e.value)
 			raws = append(raws, paths...)
@@ -217,8 +223,8 @@ func includeTarget(home, holder, v string) string {
 }
 
 // isProgramKey reports whether the entry sets a command git runs: a filter,
-// diff or merge driver, a pager or editor, a credential or gpg helper, a shell
-// alias, an ssh command or an fsmonitor hook.
+// diff or merge driver or tool, a pager or editor, a credential or gpg helper,
+// a shell alias, an ssh command or git proxy, or an fsmonitor hook.
 func isProgramKey(e configEntry) bool {
 	if !e.hasValue || e.value == "" {
 		return false
@@ -233,7 +239,7 @@ func isProgramKey(e configEntry) bool {
 	switch k {
 	case "core":
 		switch name {
-		case "sshcommand", "pager", "editor", "askpass":
+		case "sshcommand", "pager", "editor", "askpass", "gitproxy":
 			return first == last
 		case "fsmonitor":
 			return first == last && !isConfigBool(e.value)
@@ -250,8 +256,10 @@ func isProgramKey(e configEntry) bool {
 		return first != last && (name == "clean" || name == "smudge" || name == "process")
 	case "merge":
 		return first != last && name == "driver"
+	case "difftool", "mergetool":
+		return first != last && name == "cmd"
 	case "gpg":
-		return name == "program"
+		return name == "program" || (name == "defaultkeycommand" && strings.EqualFold(e.key, "gpg.ssh.defaultKeyCommand"))
 	case "credential":
 		return name == "helper"
 	case "alias":

@@ -142,6 +142,15 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"credential helper", "[credential]\n\thelper = !./bin/cred\n", nil, "bin/cred", true},
 		{"credential url helper", "[credential \"https://h.example\"]\n\thelper = /ABS/bin/cred2\n", nil, "bin/cred2", true},
 		{"shell alias", "[alias]\n\tst = !./bin/st.sh\n", nil, "bin/st.sh", true},
+		{"gpg ssh defaultKeyCommand", "[gpg \"ssh\"]\n\tdefaultKeyCommand = ./bin/keycmd\n", nil, "bin/keycmd", true},
+		{"core gitProxy", "[core]\n\tgitProxy = ./bin/proxy for example.com\n", nil, "bin/proxy", true},
+		{"difftool cmd", "[difftool \"x\"]\n\tcmd = ./bin/dt \"$LOCAL\" \"$REMOTE\"\n", nil, "bin/dt", true},
+		{"mergetool cmd", "[mergetool \"x\"]\n\tcmd = ./bin/mt \"$MERGED\"\n", nil, "bin/mt", true},
+		{"core attributesFile, relative", "[core]\n\tattributesFile = tools/attrs\n", nil, "tools/attrs", true},
+		{"core attributesFile, absolute in the tree", "[core]\n\tattributesFile = /ABS/cfg/attrs\n", nil, "cfg/attrs", true},
+		{"core attributesFile folds case", "[Core]\n\tAttributesFile = Tools/Attrs\n", nil, "tools/attrs", true},
+		{"core attributesFile outside the tree", "[core]\n\tattributesFile = /elsewhere/attrs\n", nil, "elsewhere/attrs", false},
+		{"core attributesFile escaping the tree", "[core]\n\tattributesFile = ../attrs\n", nil, "attrs", false},
 		{"keys fold case", "[Filter \"X\"]\n\tClean = ./scripts/clean.sh\n", nil, "scripts/clean.sh", true},
 		{"path case folds", "[filter \"x\"]\n\tclean = ./Scripts/Clean.sh\n", nil, "scripts/clean.sh", true},
 		// What is not a program or an include is not denied.
@@ -241,6 +250,12 @@ func TestMergeHomeGlobalGitConfigDenied(t *testing.T) {
 		{"global program in the work tree", func(t *testing.T, home, of string) {
 			put(t, filepath.Join(home, ".gitconfig"), "[filter \"x\"]\n\tclean = "+of+"/bin/clean\n")
 		}, "bin/clean", true},
+		{"global attributesFile in the work tree", func(t *testing.T, home, of string) {
+			put(t, filepath.Join(home, ".gitconfig"), "[core]\n\tattributesFile = "+of+"/ga/attrs\n")
+		}, "ga/attrs", true},
+		{"global attributesFile under home", func(t *testing.T, home, of string) {
+			put(t, filepath.Join(home, ".gitconfig"), "[core]\n\tattributesFile = ~/.gitattributes\n")
+		}, "gitattributes", false},
 		{"global program by a relative path", func(t *testing.T, home, of string) {
 			put(t, filepath.Join(home, ".config", "git", "config"), "[core]\n\tpager = tools/pager.sh\n")
 		}, "tools/pager.sh", true},
