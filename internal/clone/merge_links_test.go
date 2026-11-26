@@ -214,9 +214,13 @@ func TestMergeHomeLinkLoopGuarded(t *testing.T) {
 	y.link("loop", "CLAUDE.md")
 	y.link("CLAUDE.md", "loop")
 	y.box("main", map[string]string{"src/new.go": "package x\n"})
-	res := wantGuardedBy(t, y, "CLAUDE.md")
-	if !strings.Contains(res.Detail, "link") {
-		t.Fatalf("Detail = %q", res.Detail)
+	// The import walk cannot read a CLAUDE.md that loops, so the merge fails
+	// as for .mcp.json (#370 R17), before the link check would guard it.
+	before = y.tip()
+	res := y.run(newRec(t), a)
+	wantMergeReason(t, res, MergeFailed)
+	if !strings.Contains(res.Detail, "CLAUDE.md") || y.tip() != before || len(a.calls) != 0 {
+		t.Fatalf("result = %+v, audit %q", res, a.calls)
 	}
 }
 
