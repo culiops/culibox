@@ -142,6 +142,18 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"plain word, other entries stay free", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "README.md", false},
 		{"plain word in a hook", map[string]string{".claude/settings.json": hookSettings("node hookdir"), "hookdir/main.js": "h\n"}, nil, "hookdir/main.js", true},
 		{"plain word in an envrc", map[string]string{".envrc": "tool envdir\n", "envdir/x.sh": "h\n"}, nil, "envdir/x.sh", true},
+		// A tool's own config at the repo top (R2-I1).
+		{"tool config: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "eslint.config.js", true},
+		{"tool config: .eslintrc.cjs", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), ".eslintrc.cjs": "h\n"}, nil, ".eslintrc.cjs", true},
+		{"tool config: .prettierrc.js", map[string]string{".claude/settings.json": hookSettings("prettier --write ."), ".prettierrc.js": "h\n"}, nil, ".prettierrc.js", true},
+		{"tool config: prettier.config.cjs", map[string]string{".claude/settings.json": hookSettings("prettier --write ."), "prettier.config.cjs": "h\n"}, nil, "prettier.config.cjs", true},
+		{"tool config: jest.config.ts", map[string]string{".claude/settings.json": hookSettings("jest --bail"), "jest.config.ts": "h\n"}, nil, "jest.config.ts", true},
+		{"tool config folds case", map[string]string{".claude/settings.json": hookSettings("jest --bail"), "Jest.Config.ts": "h\n"}, nil, "jest.config.ts", true},
+		{"tool config in a cd folder", map[string]string{".claude/settings.json": hookSettings("cd web && jest"), "web/jest.config.js": "h\n"}, nil, "web/jest.config.js", true},
+		{"tool config, README still merges", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "README.md", false},
+		{"tool config, tsc has none", map[string]string{".claude/settings.json": hookSettings("tsc --noEmit"), "tsconfig.json": "{}\n"}, nil, "tsconfig.json", false},
+		{"tool config, a name that only contains the word", map[string]string{".claude/settings.json": hookSettings("jest --bail"), "myjest.config.ts": "h\n"}, nil, "myjest.config.ts", false},
+		{"tool config, a one-character word", map[string]string{".claude/settings.json": hookSettings("x run"), "x.txt": "h\n"}, nil, "x.txt", false},
 		{"--directory folder", map[string]string{".mcp.json": mcpCmd("uv", "run", "--directory", "mcp", "srv")}, nil, "mcp/x.py", true},
 		{"--directory=folder", map[string]string{".mcp.json": mcpCmd("uv", "run", "--directory=mcp2", "srv")}, nil, "mcp2/x.py", true},
 		{"--cwd folder", map[string]string{".mcp.json": mcpCmd("srv", "--cwd", "w1")}, nil, "w1/a.js", true},
@@ -372,6 +384,26 @@ func TestConfigRefsBounded(t *testing.T) {
 		got := scanRefs(t, files).paths()
 		if !slices.Contains(got, "zzword") {
 			t.Fatalf("paths = %q, want the word as spelled", got)
+		}
+	})
+	t.Run("past the look-up cap the word is denied with each script extension", func(t *testing.T) {
+		old := mergeRefPlain
+		mergeRefPlain = 1
+		t.Cleanup(func() { mergeRefPlain = old })
+		got := scanRefs(t, map[string]string{".envrc": "tool zzfirst zzsecond\n"}).paths()
+		for _, want := range []string{"zzsecond", "zzsecond.js", "zzsecond.py", "zzsecond.sh", "zzsecond.toml"} {
+			if !slices.Contains(got, want) {
+				t.Errorf("paths = %q, missing %q", got, want)
+			}
+		}
+	})
+	t.Run("a folder past the listing limit denies the word with each script extension", func(t *testing.T) {
+		files := map[string]string{".envrc": "tool zzword\n"}
+		for i := 0; i < mergeRefDirScan+10; i++ {
+			files["f"+strings.Repeat("0", 5)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))] = ""
+		}
+		if got := scanRefs(t, files).paths(); !slices.Contains(got, "zzword.js") {
+			t.Fatalf("paths = %q, want zzword.js", got)
 		}
 	})
 	t.Run("path count", func(t *testing.T) {

@@ -153,6 +153,13 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"core attributesFile escaping the tree", "[core]\n\tattributesFile = ../attrs\n", nil, "attrs", false},
 		{"keys fold case", "[Filter \"X\"]\n\tClean = ./scripts/clean.sh\n", nil, "scripts/clean.sh", true},
 		{"path case folds", "[filter \"x\"]\n\tclean = ./Scripts/Clean.sh\n", nil, "scripts/clean.sh", true},
+		{"textconv plain word", "[diff \"x\"]\n\ttextconv = node conv\n", map[string]string{"conv.js": "h\n"}, "conv.js", true},
+		{"filter plain word, a folder", "[filter \"x\"]\n\tclean = node cleaner\n", map[string]string{"cleaner/index.js": "h\n"}, "cleaner/index.js", true},
+		{"filter python -mmodule", "[filter \"x\"]\n\tclean = python -mcleaner2\n", nil, "cleaner2/__main__.py", true},
+		{"pager's own config at the top", "[core]\n\tpager = mypager\n", map[string]string{".mypagerrc": "h\n"}, ".mypagerrc", true},
+		{"textconv plain word, README still merges", "[diff \"x\"]\n\ttextconv = node conv\n", map[string]string{"conv.js": "h\n"}, "README.md", false},
+		{"textconv plain word, nothing there", "[diff \"x\"]\n\ttextconv = node nothere\n", nil, "nothere.js", false},
+		{"textconv runner manifest is not added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", false},
 		// What is not a program or an include is not denied.
 		{"alias that is not a shell command", "[alias]\n\tst = status ./bin/st.sh\n", nil, "bin/st.sh", false},
 		{"unrelated key naming a path", "[core]\n\texcludesFile = tools/ignore\n[user]\n\tsigningkey = keys/me.pub\n", nil, "tools/ignore", false},

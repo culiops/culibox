@@ -12,7 +12,7 @@ import (
 // Paths that a protected config names inside the work tree (#370). A command
 // line that a git config, an agent setting or an .envrc runs names files the
 // host then executes or loads, so a box commit that changes them is as trusted
-// as a change to the config itself. commandPaths is the shared tokenizer and
+// as a change to the config itself. parseCommand is the shared tokenizer and
 // repoDenyPaths turns what it finds into the repo-relative paths the merge
 // refuses.
 
@@ -100,8 +100,8 @@ func commandPaths(s string) (paths []string, runners []string) {
 // split it, without evaluating anything. A token is a path when it holds a "/",
 // starts with ".", or ends in a script or config extension; it is returned as
 // spelled (the caller resolves it: repoDenyPaths). Also read:
-//   - "python -m a.b", "uv run -m a.b" and "node --import/-r/--require a": the
-//     module's first part is a path ("a", "a.py", "a.js" ...), found or not;
+//   - "python -m a.b" (also "-ma.b"), "uv run -m a.b" and "node --import/-r/--require
+//     a": the module's first part is a path ("a", "a.py", "a.js" ...), found or not;
 //   - the value of --directory, --cwd, --prefix, --dir, --project and -C, and the
 //     argument of cd and pushd, is a folder (dirs); every path or plain word that
 //     follows is also resolved against it (of makes an absolute folder repo-relative);
@@ -201,6 +201,9 @@ func parseCommand(of, s string) cmdInfo {
 				case name == "-m" && pyish && !hasVal && i+1 < len(toks):
 					i++
 					emitModule(toks[i])
+					continue
+				case pyish && !hasVal && len(name) > 2 && strings.HasPrefix(name, "-m"):
+					emitModule(name[2:]) // "-mmodule", no space
 					continue
 				case nodeModuleFlags[name] && nodeish:
 					if !hasVal && i+1 < len(toks) {

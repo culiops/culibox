@@ -29,11 +29,14 @@ const (
 	mergeRefPaths     = 2048 // path spellings kept per check
 	mergeRefDirScan   = 4096 // entries read of the repo top, for mise.*.toml
 	mergeRefLines     = 20000
-	mergeRefStmtLines = 200  // lines one TOML statement may span
-	mergeRefDepth     = 24   // JSON nesting followed
-	mergeRefListings  = 64   // folders read for plain words
-	mergeRefPlain     = 8192 // plain word look-ups
+	mergeRefStmtLines = 200 // lines one TOML statement may span
+	mergeRefDepth     = 24  // JSON nesting followed
+	mergeRefListings  = 64  // folders read for plain words
 )
+
+// mergeRefPlain is the number of plain word look-ups made per check (a var so a
+// test can lower it).
+var mergeRefPlain = 8192
 
 // runnerManifests are the files a task runner reads at the repo top and runs
 // what they say. Matching is case-insensitive, so one spelling each.
@@ -92,6 +95,7 @@ type refSink struct {
 // cannot be read as a folder of the repo.
 type dirListing struct {
 	names     map[string]string
+	sorted    []string // the keys of names, sorted, for prefix look-ups
 	truncated bool
 }
 
@@ -220,13 +224,21 @@ func (s *refSink) command(c string) {
 
 // plainWord denies the entries a plain word of a command names: an entry of
 // that name in the repo top or in a folder the command moved to (a script, a
-// program's folder), and the same with a script extension ("node server" runs
-// server.js or server/index.js). A word with no such entry names nothing. Past
-// the look-up caps, or in a folder too big to list, the word is denied as
-// spelled: more refusals, never fewer.
+// program's folder), the same with a script extension ("node server" runs
+// server.js or server/index.js), and a tool's own config, any entry named
+// "<word>.*" or ".<word>*" ("eslint" reads eslint.config.js and .eslintrc.cjs,
+// "prettier" reads .prettierrc.js; not for a word of one character). A word
+// with no such entry names nothing. Past the look-up caps, or in a folder too
+// big to list, the word is denied as spelled and with each script extension:
+// more refusals, never fewer.
 func (s *refSink) plainWord(pw plainWord) {
 	if s.root == nil {
 		return
+	}
+	spelled := func(base string) {
+		for _, cand := range append([]string{""}, scriptExts...) {
+			s.addRaw(path.Join(base, pw.word+cand))
+		}
 	}
 	for _, base := range pw.bases {
 		key := base + "\x00" + pw.word
@@ -234,18 +246,27 @@ func (s *refSink) plainWord(pw plainWord) {
 			continue
 		}
 		if len(s.plainSeen) >= mergeRefPlain {
-			s.addRaw(path.Join(base, pw.word))
+			spelled(base)
 			continue
 		}
 		s.plainSeen[key] = true
 		l := s.listing(base)
 		if l.truncated {
-			s.addRaw(path.Join(base, pw.word))
+			spelled(base)
 			continue
 		}
 		for _, cand := range append([]string{""}, scriptExts...) {
 			if name, ok := l.names[strings.ToLower(pw.word+cand)]; ok {
 				s.addRaw(path.Join(base, name))
+			}
+		}
+		if len(pw.word) < 2 {
+			continue
+		}
+		w := strings.ToLower(pw.word)
+		for _, prefix := range []string{w + ".", "." + w} {
+			for i := sort.SearchStrings(l.sorted, prefix); i < len(l.sorted) && strings.HasPrefix(l.sorted[i], prefix); i++ {
+				s.addRaw(path.Join(base, l.names[l.sorted[i]]))
 			}
 		}
 	}
@@ -277,8 +298,10 @@ func (s *refSink) listing(base string) *dirListing {
 		k := strings.ToLower(e.Name())
 		if _, ok := l.names[k]; !ok {
 			l.names[k] = e.Name()
+			l.sorted = append(l.sorted, k)
 		}
 	}
+	sort.Strings(l.sorted)
 	return l
 }
 
