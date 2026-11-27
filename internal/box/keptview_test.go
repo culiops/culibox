@@ -510,8 +510,8 @@ func TestKeptForgetRemovesAndRemembers(t *testing.T) {
 		t.Fatalf("Forgotten %v, want [.culiops]", st.Forgotten)
 	}
 	rows := audit.of(keptAuditForget)
-	if len(rows) != 1 || rows[0].name != "p" || rows[0].detail != "path=.culiops" || rows[0].actor != "web" {
-		t.Fatalf("audit rows %+v, want one box_kept_forget by web for p, path=.culiops", rows)
+	if want := `key="` + keptTestKey + `" path=".culiops"`; len(rows) != 1 || rows[0].name != "p" || rows[0].detail != want || rows[0].actor != "web" {
+		t.Fatalf("audit rows %+v, want one box_kept_forget by web for p, %s", rows, want)
 	}
 
 	// The next pass leaves the folder in the box home: it is never kept again.
@@ -633,5 +633,101 @@ func TestTakeKeptNewsDoesNotWaitOnStoreLock(t *testing.T) {
 	}
 	if got := m.TakeKeptNews(keptTestKey); !slices.Equal(got, []string{".culiops"}) {
 		t.Fatalf("after the lock is free: %v, want the news still there", got)
+	}
+}
+
+// Forget on an older-copies row removes the copies of that folder alone,
+// every form toClash makes, and keeps the folder, its entry and the forgotten
+// list as they are. No box is in its way: copies are never mounted.
+func TestKeptForgetClashes(t *testing.T) {
+	m, f, audit, store := keptForgetSetup(t)
+	keptWrite(t, store, "clash/"+keptTestBox+"/~1/.culiops/fallback.json", "fallback")
+	keptWrite(t, store, "clash/"+keptTestBox+"/.config/other/z", "stay")
+	f.mu.Lock()
+	f.running[keptTestBox] = true // a box of the store runs: copies go all the same
+	f.mu.Unlock()
+	m.mu.Lock()
+	m.active[keptTestBox] = 1
+	m.mu.Unlock()
+	if err := m.KeptForgetClashes(context.Background(), keptTestKey, ".culiops", "web"); err != nil {
+		t.Fatalf("KeptForgetClashes: %v", err)
+	}
+	for _, p := range []string{"clash/" + keptTestBox + "/.culiops", "clash/" + keptTestBox + "/.culiops~2",
+		"clash/ab-box-aaaaaaaaaaaa/.culiops", "clash/" + keptTestBox + "/~1/.culiops"} {
+		if _, err := os.Lstat(filepath.Join(store, p)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s still there (%v)", p, err)
+		}
+	}
+	for _, p := range []string{"home/.culiops/a.txt", "clash/" + keptTestBox + "/.culiops-not-a-copy/x", "clash/" + keptTestBox + "/.config/other/z"} {
+		if _, err := os.Lstat(filepath.Join(store, p)); err != nil {
+			t.Errorf("%s removed: %v", p, err)
+		}
+	}
+	st := keptLoad(t, m)
+	if _, ok := keptEntry(st, ".culiops"); !ok || len(st.Forgotten) != 0 {
+		t.Fatalf("entry or forgotten list changed: %+v", st)
+	}
+	f.mu.Lock()
+	stopped := slices.Clone(f.stopped)
+	f.mu.Unlock()
+	if len(stopped) != 0 {
+		t.Fatalf("a forget of older copies stopped %v", stopped)
+	}
+	rows := audit.of(keptAuditForget)
+	want := `key="` + keptTestKey + `" path=".culiops" clash=1`
+	if len(rows) != 1 || rows[0].detail != want || rows[0].actor != "web" || rows[0].name != "p" {
+		t.Fatalf("audit rows %+v, want one by web for p: %s", rows, want)
+	}
+	// None left: nothing to forget.
+	if err := m.KeptForgetClashes(context.Background(), keptTestKey, ".culiops", "web"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("again: %v, want fs.ErrNotExist", err)
+	}
+	for _, rel := range []string{"", ".config", "../x", ".ssh"} {
+		if err := m.KeptForgetClashes(context.Background(), keptTestKey, rel, "web"); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("KeptForgetClashes(%q): %v, want fs.ErrNotExist", rel, err)
+		}
+	}
+}
+
+// Audit details quote every value: a folder name with a space and "=" cannot
+// read as another field.
+func TestKeptAuditDetailsQuoted(t *testing.T) {
+	m, _, home, audit := keptPassSetup(t)
+	const odd = ".x box=ab-box-000000000000"
+	keptWrite(t, home, odd+"/f", "x")
+	mustPass(t, m, keptTestBox)
+	rows := audit.of(keptAuditKept)
+	want := `key="` + keptTestKey + `" paths=[".x box=ab-box-000000000000"] box="` + keptTestBox + `"`
+	if len(rows) != 1 || rows[0].detail != want {
+		t.Fatalf("box_kept rows %+v, want %s", rows, want)
+	}
+	if err := m.KeptForget(context.Background(), keptTestKey, odd, "web"); err != nil {
+		t.Fatal(err)
+	}
+	frows := audit.of(keptAuditForget)
+	fwant := `key="` + keptTestKey + `" path=".x box=ab-box-000000000000"`
+	if len(frows) != 1 || frows[0].detail != fwant {
+		t.Fatalf("forget rows %+v, want %s", frows, fwant)
+	}
+}
+
+// The toast tells only of folders that are kept: a held one is not mounted,
+// so it is not news until it is kept.
+func TestTakeKeptNewsOnlyKept(t *testing.T) {
+	m, _, _, _ := keptPassSetup(t)
+	st := KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{
+		{Path: ".held", KeptAt: time.Now(), Status: keptStatusHeld, HeldReason: "looks like credentials: .held/x"},
+		{Path: ".ok", KeptAt: time.Now(), Status: keptStatusKept}}}
+	keptSeedState(t, m, st)
+	if got := m.TakeKeptNews(keptTestKey); !slices.Equal(got, []string{".ok"}) {
+		t.Fatalf("news %q, want [.ok]", got)
+	}
+	if e, _ := keptEntry(keptLoad(t, m), ".held"); e.Announced {
+		t.Fatal("a held folder was marked told")
+	}
+	st.Kept[0].Status, st.Kept[0].HeldReason, st.Kept[1].Announced = keptStatusKept, "", true
+	keptSeedState(t, m, st)
+	if got := m.TakeKeptNews(keptTestKey); !slices.Equal(got, []string{".held"}) {
+		t.Fatalf("news once kept %q, want [.held]", got)
 	}
 }

@@ -220,3 +220,38 @@ test("folder listing: quick clicks before the reply neither throw nor list twice
   assert.ok(uls.length <= 1, "at most one open listing");
   assert.ok(uls.every((u) => items(u) === 2), "no duplicated entries");
 });
+
+test("an older-copies row has View and Forget, and its Forget says the kept folder stays", () => {
+  const m = K.keptSectionModel([store({ kept: [entry(".culiops")], clashes: ["clash/b1/.culiops"] })]);
+  global.document = { createElement: (t) => new El(t) };
+  try {
+    const got = [];
+    const el = K.keptDrawSection(m, { onForgetClash: (c, btn) => got.push([c.rel, c.key, btn.tag]) });
+    const rows = el.children[2].children.filter((c) => c.className === "pfv-kept-row");
+    const clashRow = rows[1];
+    const btns = [];
+    clashRow.walk((n) => { if (n.tag === "button") btns.push(n); });
+    assert.deepStrictEqual(btns.map((b) => b.textContent), ["View", "Forget"]);
+    btns[1].handlers.click();
+    assert.deepStrictEqual(got, [[".culiops", "aaaaaaaaaaaa", "button"]]);
+  } finally {
+    delete global.document;
+  }
+  const ask = K.keptForgetClashAsk(".culiops");
+  assert.strictEqual(ask.body, "Delete the older copies of ~/.culiops? The kept folder stays.");
+  assert.strictEqual(ask.confirmLabel, "Delete");
+  assert.strictEqual(ask.danger, true);
+});
+
+test("forget of older copies: confirm says the folder stays, POST carries clash, then reload", async () => {
+  const calls = [], asks = [];
+  const k = load({
+    askConfirm: async (a) => { asks.push(a.body); return true; },
+    showToast() { throw new Error("no toast expected"); },
+    api: (url, opt) => { calls.push([url, opt && opt.method, opt && opt.body]); return Promise.resolve(opt ? {} : apiStores("p")); },
+  });
+  await k.keptForget("p", { key: "aaaaaaaaaaaa", path: ".culiops" }, null, true);
+  assert.deepStrictEqual(asks, ["Delete the older copies of ~/.culiops? The kept folder stays."]);
+  assert.deepStrictEqual(calls[0], ["/api/profiles/p/kept/forget", "POST", JSON.stringify({ key: "aaaaaaaaaaaa", path: ".culiops", clash: true })]);
+  assert.strictEqual(calls[1][0], "/api/profiles/p/kept");
+});

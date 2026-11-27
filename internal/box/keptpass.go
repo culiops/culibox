@@ -69,8 +69,10 @@ var (
 
 // Audit actions of the pass.
 const (
-	keptAuditKept = "box_kept"      // detail: paths=<a,b> box=<name>
-	keptAuditHeld = "box_kept_held" // detail: path=<p> reason=<r>
+	// Every value in a detail is quoted (%q): a folder name may hold a space
+	// and an "=", and must not read as another field.
+	keptAuditKept = "box_kept"      // detail: key="<k>" paths=["<a>","<b>"] box="<name>"
+	keptAuditHeld = "box_kept_held" // detail: key="<k>" path="<p>" reason="<r>"
 )
 
 // keptActorCuliBox is the audit actor of what the keep pass does on its own.
@@ -841,15 +843,15 @@ func (p *keptPass) finish(before KeptState) {
 	}
 	slices.Sort(paths)
 	if len(paths) > 0 {
-		p.audit(keptAuditKept, "paths="+strings.Join(paths, ",")+" box="+p.box)
 		q := make([]string, len(paths))
 		for i, rel := range paths {
 			q[i] = strconv.Quote(rel)
 		}
+		p.audit(keptAuditKept, fmt.Sprintf("key=%q paths=[%s] box=%q", p.key, strings.Join(q, ","), p.box))
 		log.Printf("box: %s: kept %s for its profile", p.box, strings.Join(q, ", "))
 	}
 	for _, e := range p.held {
-		p.audit(keptAuditHeld, "path="+e.Path+" reason="+e.HeldReason)
+		p.audit(keptAuditHeld, fmt.Sprintf("key=%q path=%q reason=%q", p.key, e.Path, e.HeldReason))
 		log.Printf("box: %s: kept folder %q is held, not mounted into the profile's boxes until a later check passes: %q",
 			p.box, e.Path, e.HeldReason)
 	}

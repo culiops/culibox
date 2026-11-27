@@ -158,7 +158,7 @@ func TestPassKeepsAndRecords(t *testing.T) {
 		t.Fatalf("profile = %q, want it kept as p", st.Profile)
 	}
 	rows := audit.of(keptAuditKept)
-	want := keptAuditRow{keptAuditKept, "p", "paths=.config/culiops,.culiops box=" + keptTestBox, keptActorCuliBox}
+	want := keptAuditRow{keptAuditKept, "p", `key="` + keptTestKey + `" paths=[".config/culiops",".culiops"] box="` + keptTestBox + `"`, keptActorCuliBox}
 	if len(rows) != 1 || rows[0] != want {
 		t.Fatalf("audit = %+v, want one %+v", audit.rows, want)
 	}
@@ -313,7 +313,7 @@ func TestPassRescreenHolds(t *testing.T) {
 		t.Fatalf("entry = %+v, want held for .culiops/id_rsa, kept_at unchanged", e)
 	}
 	rows := audit.of(keptAuditHeld)
-	want := keptAuditRow{keptAuditHeld, "p", "path=.culiops reason=looks like credentials: .culiops/id_rsa", keptActorCuliBox}
+	want := keptAuditRow{keptAuditHeld, "p", `key="` + keptTestKey + `" path=".culiops" reason="looks like credentials: .culiops/id_rsa"`, keptActorCuliBox}
 	if len(rows) != 1 || rows[0] != want {
 		t.Fatalf("held audit = %+v, want one %+v", rows, want)
 	}
@@ -358,7 +358,7 @@ func TestPassAdoptsUnrecordedStoreFolder(t *testing.T) {
 	if e, ok := keptEntry(st, ".bar"); !ok || e.Status != keptStatusHeld {
 		t.Fatalf("entry = %+v %v, want .bar adopted as held", e, ok)
 	}
-	if rows := audit.of(keptAuditHeld); len(rows) != 1 || !strings.HasPrefix(rows[0].detail, "path=.bar ") {
+	if rows := audit.of(keptAuditHeld); len(rows) != 1 || !strings.HasPrefix(rows[0].detail, `key="`+keptTestKey+`" path=".bar" `) {
 		t.Fatalf("held audit = %+v", rows)
 	}
 }
@@ -809,7 +809,7 @@ func TestPassAuditsClashOnlyMove(t *testing.T) {
 	if got := keptRead(t, filepath.Join(KeptStoreDir(m.opts.StateRoot, keptTestKey), keptTestClash), ".culiops/a"); got != "2" {
 		t.Fatalf("clash copy = %q", got)
 	}
-	if rows := audit.of(keptAuditKept); len(rows) != 1 || rows[0].detail != "paths=.culiops box="+keptTestBox {
+	if rows := audit.of(keptAuditKept); len(rows) != 1 || rows[0].detail != `key="`+keptTestKey+`" paths=[".culiops"] box="`+keptTestBox+`"` {
 		t.Fatalf("audit = %+v, want the clash-only move audited", audit.rows)
 	}
 }

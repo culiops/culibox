@@ -113,6 +113,16 @@ function keptForgetAsk(path) {
   };
 }
 
+// keptForgetClashAsk: the confirm for Forget on an older-copies row. Only the copies go.
+function keptForgetClashAsk(rel) {
+  return {
+    title: "Forget older copies",
+    body: "Delete the older copies of " + keptHome(rel) + "? The kept folder stays.",
+    confirmLabel: "Delete",
+    danger: true,
+  };
+}
+
 // --- drawing -------------------------------------------------------------------------------------
 
 function keptMk(tag, cls, text) {
@@ -130,8 +140,9 @@ function keptBtn(label, aria, onclick) {
   return b;
 }
 
-// keptDrawSection: the section for a model. hooks: onView(row, rowEl) and onForget(row) for a kept
-// row, onViewClash(clash, rowEl) for a clash row. Pure drawing: no fetch here.
+// keptDrawSection: the section for a model. hooks: onView(row, rowEl) and onForget(row, btn) for a
+// kept row, onViewClash(clash, rowEl) and onForgetClash(clash, btn) for a clash row. Pure drawing:
+// no fetch here.
 function keptDrawSection(model, hooks) {
   const h = hooks || {};
   const sec = keptMk("div", "pfv-kept-sec");
@@ -160,7 +171,8 @@ function keptDrawSection(model, hooks) {
     const line = keptMk("div", "pfv-kept-main");
     line.append(keptMk("span", "pfv-kept-line", c.text));
     const acts = keptMk("span", "pfv-kept-acts");
-    acts.append(keptBtn("View", "View " + c.text, () => h.onViewClash && h.onViewClash(c, row)));
+    const forgetBtn = keptBtn("Forget", "Forget " + c.text, () => h.onForgetClash && h.onForgetClash(c, forgetBtn));
+    acts.append(keptBtn("View", "View " + c.text, () => h.onViewClash && h.onViewClash(c, row)), forgetBtn);
     line.append(acts);
     row.append(line);
     card.append(row);
@@ -208,6 +220,7 @@ function keptPaint(host) {
     onView: (r, rowEl) => keptToggleTree(name, r.key, [r.path], rowEl),
     onViewClash: (c, rowEl) => keptToggleTree(name, c.key, c.paths, rowEl),
     onForget: (r, btn) => keptForget(name, r, btn),
+    onForgetClash: (c, btn) => keptForget(name, { key: c.key, path: c.rel }, btn, true),
   }));
 }
 
@@ -231,15 +244,17 @@ async function keptReload(name) {
   keptRepaint();
 }
 
-async function keptForget(name, r, btn) {
-  if (!(await askConfirm(keptForgetAsk(r.path)))) return;
+// keptForget: Forget for a kept row, or with clash for an older-copies row (r.path is then the kept
+// folder whose older copies go; the folder itself stays).
+async function keptForget(name, r, btn, clash) {
+  if (!(await askConfirm(clash ? keptForgetClashAsk(r.path) : keptForgetAsk(r.path)))) return;
   const label = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Forgetting..."; }
   try {
     await api("/api/profiles/" + encodeURIComponent(name) + "/kept/forget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: r.key, path: r.path }),
+      body: JSON.stringify(clash ? { key: r.key, path: r.path, clash: true } : { key: r.key, path: r.path }),
     });
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = label; }
@@ -291,5 +306,5 @@ function keptTreeItem(name, key, path, label, dir) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { keptSectionModel, keptToastPart, keptForgetAsk, keptDrawSection };
+  module.exports = { keptSectionModel, keptToastPart, keptForgetAsk, keptForgetClashAsk, keptDrawSection };
 }

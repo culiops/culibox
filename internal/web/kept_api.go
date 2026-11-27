@@ -29,6 +29,8 @@ type KeptService interface {
 	KeptOpenRoot(key, rel string) (*os.Root, error)
 	// KeptForget's actor is who asked, as spawnActor names them.
 	KeptForget(ctx context.Context, key, rel, actor string) error
+	// KeptForgetClashes removes only the older copies of rel, as actor asked.
+	KeptForgetClashes(ctx context.Context, key, rel, actor string) error
 }
 
 const (
@@ -46,6 +48,7 @@ const (
 	msgKeptBusy       = "the kept folders are busy; try again in a minute"
 	msgKeptNotRemoved = "the folder is forgotten and no box gets it again, but some of its files could not be removed (see the CuliBox log)"
 	msgKeptForgetFail = "could not forget the folder"
+	msgKeptClashFail  = "some of the older copies could not be removed (see the CuliBox log)"
 )
 
 // keptRoute splits a /api/profiles/ remainder of the form
@@ -69,6 +72,7 @@ func keptRoute(p string) (profile, sub string, ok bool) {
 //	GET  /api/profiles/{name}/kept/list?key=&path=         one directory, no link followed
 //	GET  /api/profiles/{name}/kept/file?key=&path=[&download=1]  one regular file, read-only
 //	POST /api/profiles/{name}/kept/forget {key, path}      behind csrfGuard, audited box_kept_forget as spawnActor's
+//	POST /api/profiles/{name}/kept/forget {key, path, clash: true}  only the older copies of path go
 //
 // path is <rel>[/<inner>] or clash/<box>/<rel>[/<inner>] (box.KeptSplitPath).
 // A key must be one of the profile's stores. Every refusal of a name or a
@@ -201,8 +205,9 @@ func keptHeaderName(name string) string {
 
 func (s *Server) handleKeptForget(w http.ResponseWriter, r *http.Request, profile string) {
 	var req struct {
-		Key  string `json:"key"`
-		Path string `json:"path"`
+		Key   string `json:"key"`
+		Path  string `json:"path"`
+		Clash bool   `json:"clash"` // only the older copies (clash/) of path
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, keptForgetBodyMax))
 	if err != nil || !decodeBytesStrict(raw, &req) {
@@ -219,6 +224,10 @@ func (s *Server) handleKeptForget(w http.ResponseWriter, r *http.Request, profil
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), keptForgetTimeout)
 	defer cancel()
+	if req.Clash {
+		s.handleKeptForgetClashes(ctx, w, profile, req.Key, req.Path, spawnActor(r))
+		return
+	}
 	err = s.Kept.KeptForget(ctx, req.Key, req.Path, spawnActor(r))
 	switch {
 	case err == nil:
@@ -237,6 +246,25 @@ func (s *Server) handleKeptForget(w http.ResponseWriter, r *http.Request, profil
 		writeErr(w, http.StatusInternalServerError, msgKeptNotRemoved)
 	default:
 		log.Printf("profile %q: forgetting a kept folder: %v", profile, err)
+		writeErr(w, http.StatusInternalServerError, msgKeptForgetFail)
+	}
+}
+
+// handleKeptForgetClashes is a forget of the older copies of path alone: the
+// kept folder stays, so no box is in the way.
+func (s *Server) handleKeptForgetClashes(ctx context.Context, w http.ResponseWriter, profile, key, p, actor string) {
+	err := s.Kept.KeptForgetClashes(ctx, key, p, actor)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"forgotten": p, "clash": true})
+	case errors.Is(err, fs.ErrNotExist):
+		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		writeErr(w, http.StatusServiceUnavailable, msgKeptBusy)
+	case errors.Is(err, box.ErrKeptClashNotRemoved):
+		writeErr(w, http.StatusInternalServerError, msgKeptClashFail)
+	default:
+		log.Printf("profile %q: removing the older copies of a kept folder: %v", profile, err)
 		writeErr(w, http.StatusInternalServerError, msgKeptForgetFail)
 	}
 }

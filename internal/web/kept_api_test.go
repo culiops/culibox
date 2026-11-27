@@ -345,7 +345,7 @@ func TestKeptAPIForgetCSRF(t *testing.T) {
 	if _, err := os.Lstat(folder); !os.IsNotExist(err) {
 		t.Fatalf("the folder is still there after forget: %v", err)
 	}
-	want := [4]string{"web", "box_kept_forget", "p", "path=.culiops"}
+	want := [4]string{"web", "box_kept_forget", "p", `key="` + f.key + `" path=".culiops"`}
 	if rows := f.audit.all(); len(rows) != 1 || rows[0] != want {
 		t.Fatalf("audit rows %v, want one %v: a forget is the person's, not CuliBox's", rows, want)
 	}
@@ -475,5 +475,34 @@ func TestKeptAPIGetDoesNoWalk(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total_bytes":1073741824`) ||
 		!strings.Contains(rec.Body.String(), `"path":".culiops"`) {
 		t.Fatalf("GET kept: %d %s, want the row and total_bytes from the state", rec.Code, rec.Body)
+	}
+}
+
+// Forget on an older-copies row: the copies go, the kept folder stays, and a
+// live session is not in the way (no box mounts a copy).
+func TestKeptAPIForgetClashes(t *testing.T) {
+	f := keptAPI(t)
+	keptAPIRecord(t, f)
+	f.m.AdoptBox(keptAPIBox) // a live session in the store's box
+	keptFile(t, f.store, "clash/"+keptAPIBox+"/.culiops/old.txt", "old")
+	rec := keptPost(f.s, "p", `{"key":"`+f.key+`","path":".culiops","clash":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forget clashes: %d %s", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(f.store, "clash/"+keptAPIBox+"/.culiops")); !os.IsNotExist(err) {
+		t.Fatalf("the older copy is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.store, "home/.culiops/a.txt")); err != nil {
+		t.Fatalf("the kept folder went with its older copies: %v", err)
+	}
+	want := [4]string{"web", "box_kept_forget", "p", `key="` + f.key + `" path=".culiops" clash=1`}
+	if rows := f.audit.all(); len(rows) != 1 || rows[0] != want {
+		t.Fatalf("audit rows %v, want %v", rows, want)
+	}
+	if rec := keptPost(f.s, "p", `{"key":"`+f.key+`","path":".culiops","clash":true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("again with no copy left: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if rec := keptPost(f.s, "q", `{"key":"`+f.key+`","path":".culiops","clash":true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("another profile's store: %d %s, want 404", rec.Code, rec.Body)
 	}
 }

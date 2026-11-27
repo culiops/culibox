@@ -65,9 +65,13 @@ var (
 	// listed any more), but some of its files could not be removed from the
 	// store and stay on disk there.
 	ErrKeptNotRemoved = errors.New("box: the folder is forgotten, but some of its files could not be removed")
+	// ErrKeptClashNotRemoved: some older copies of a kept folder could not be
+	// removed and stay on disk in the store.
+	ErrKeptClashNotRemoved = errors.New("box: some older copies of the folder could not be removed")
 )
 
-// keptAuditForget is the audit action of a forget. detail: path=<p>.
+// keptAuditForget is the audit action of a forget. detail: key="<k>"
+// path="<p>", and clash=1 when only the older copies went (KeptForgetClashes).
 const keptAuditForget = "box_kept_forget"
 
 // KeptStoreView is one store as the profile view and doctor show it, read
@@ -492,12 +496,53 @@ func (m *Manager) KeptForget(ctx context.Context, key, rel, actor string) error 
 	if err != nil {
 		return err
 	}
-	m.keptForgetAudit(key, next, rel, actor)
+	m.keptForgetAudit(key, next, rel, actor, false)
 	log.Printf("box: kept store %s: forgot %q on the user's word; it is not kept again", key, rel)
 	if err := keptRemoveCopies(ctx, store, rel); err != nil {
 		log.Printf("box: kept store %s: %q is forgotten, but some of its files stay in the store: %v", key, rel, err)
 		return fmt.Errorf("%w: %v", ErrKeptNotRemoved, err)
 	}
+	return nil
+}
+
+// KeptForgetClashes removes the older copies of the kept folder rel of store
+// key (clash/<box>/<rel>, the numbered <rel>~N beside it, and the
+// clash/<box>/~N/<rel> that toClash falls back to) on the word of actor. The
+// kept folder, its entry and the forgotten list stay as they are: only older
+// copies go, and no box mounts those, so no box is stopped and opMu is never
+// taken. It holds the store's lock, as every writer of the store does. The
+// audit row is box_kept_forget with clash=1.
+//
+// fs.ErrNotExist when key or rel cannot name a kept folder or the store holds
+// no older copy of rel. ErrKeptClashNotRemoved when some could not be removed.
+func (m *Manager) KeptForgetClashes(ctx context.Context, key, rel, actor string) error {
+	if !ValidConversationsKey(key) || !validKeptRel(rel) {
+		return fs.ErrNotExist
+	}
+	mu := m.keptStoreLock(key)
+	if err := lockWithin(ctx, mu); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+	store, err := keptOpenStore(m.opts.StateRoot, key)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	st, err := loadKeptState(store)
+	if err != nil {
+		return err
+	}
+	n, err := keptRemoveClashes(ctx, store, rel)
+	if n == 0 && err == nil {
+		return fs.ErrNotExist
+	}
+	m.keptForgetAudit(key, st, rel, actor, true)
+	if err != nil {
+		log.Printf("box: kept store %s: some older copies of %q stay in the store: %v", key, rel, err)
+		return fmt.Errorf("%w: %v", ErrKeptClashNotRemoved, err)
+	}
+	log.Printf("box: kept store %s: removed %d older copies of %q on the user's word", key, n, rel)
 	return nil
 }
 
@@ -595,9 +640,9 @@ func (m *Manager) keptClearBoxes(ctx context.Context, key string) error {
 	return nil
 }
 
-// keptForgetAudit writes the forget's audit row, as actor's. A failure is
-// logged: the forget has happened either way.
-func (m *Manager) keptForgetAudit(key string, st KeptState, rel, actor string) {
+// keptForgetAudit writes the forget's audit row, as actor's. clash: only the
+// older copies went. A failure is logged: the forget has happened either way.
+func (m *Manager) keptForgetAudit(key string, st KeptState, rel, actor string, clash bool) {
 	if m.opts.Audit == nil {
 		return
 	}
@@ -608,7 +653,11 @@ func (m *Manager) keptForgetAudit(key string, st KeptState, rel, actor string) {
 	if actor == "" {
 		actor = "unknown"
 	}
-	if err := m.opts.Audit(actor, keptAuditForget, name, "path="+rel); err != nil {
+	detail := fmt.Sprintf("key=%q path=%q", key, rel)
+	if clash {
+		detail += " clash=1"
+	}
+	if err := m.opts.Audit(actor, keptAuditForget, name, detail); err != nil {
 		log.Printf("box: kept store %s: audit row %s not written: %v", key, keptAuditForget, err)
 	}
 }
@@ -765,8 +814,8 @@ func keptRemoveOne(ctx context.Context, parent *os.Root, name string) error {
 // behind that.
 var keptNewsWait = 2 * time.Second
 
-// TakeKeptNews returns the paths kept in store key that no spawn has told the
-// person about yet, and marks them told. It takes the store's lock like the
+// TakeKeptNews returns the paths kept in store key (status kept, not held)
+// that no spawn has told the person about yet, and marks them told. It takes the store's lock like the
 // other writers of state.json, and never opMu (the lock order is store lock
 // first). It answers none, and marks nothing, for a bad key, an unknown or
 // unreadable store, a store busy for keptNewsWait, or a state that cannot be
@@ -794,7 +843,8 @@ func (m *Manager) TakeKeptNews(key string) []string {
 	next := keptCopy(st)
 	var news []string
 	for i := range next.Kept {
-		if !next.Kept[i].Announced {
+		// A held folder is not mounted: it is news once it is kept.
+		if next.Kept[i].Status == keptStatusKept && !next.Kept[i].Announced {
 			next.Kept[i].Announced = true
 			news = append(news, next.Kept[i].Path)
 		}
