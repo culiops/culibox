@@ -547,6 +547,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		boxUnavailable = boxUnavailableReason(err)
 	} else {
 		layer, boxes = l, l.boxes
+		// The keep pass writes box_kept/box_kept_held rows, from the first
+		// boot pass on.
+		l.setAudit(storeAudit.RecordCred)
 		// Docker is installed, but is its daemon usable? The layer stands either way
 		// (the daemon may start later); the page and every boxed spawn ask again
 		// (boxdaemon.go). Bounded, so a hung daemon cannot hold the boot.
@@ -1008,6 +1011,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 
 		Version: version,
 		Commit:  buildCommit(),
+	}
+	// The profile view's kept box folders; none without the box layer.
+	if boxes != nil {
+		srv.Kept = boxes // never a typed nil
 	}
 	// A companion shell runs the verified quick-shell profile, read when used.
 	api.QuickShell = srv.QuickShell

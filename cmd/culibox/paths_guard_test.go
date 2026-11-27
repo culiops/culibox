@@ -106,6 +106,12 @@ var pathEscapes = map[string]int{
 	// ".cache/go-build" is a path INSIDE a box home (pruned relative to an os.Root on
 	// <data root>/boxstate/<box>), not the user's ~/.cache.
 	"internal/box/reclaim.go literal .cache": 1,
+	// The app folders a box wrote in its home (keptscan.go): candidate levels,
+	// cache and credential dir names INSIDE a box home, read through an os.Root on
+	// <data root>/boxstate/<box>, never the user's own ~/.config, ~/.local or ~/.cache.
+	"internal/box/keptscan.go literal .config": 9,
+	"internal/box/keptscan.go literal .local":  6,
+	"internal/box/keptscan.go literal .cache":  1,
 	// gh's config dir INSIDE a GitHub-bound box (GHConfigDir): dies with the box.
 	"internal/broker/boxfiles.go literal /tmp": 1,
 	// The bundle container's own tmpfs and HOME (clone fetch), not a host path.

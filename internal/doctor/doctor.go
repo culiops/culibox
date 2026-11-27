@@ -297,6 +297,7 @@ func Checks(in Input) []Result {
 	out = append(out, guardLockRows(runtime.GOOS, bt.facts)...)
 	out = append(out, checkKeptHomes(dataDir)...)
 	out = append(out, checkConversations(dataDir)...)
+	out = append(out, checkKeptStores(dataDir, c.BoxInstance(), profileNameSet(c, stored, storeErr))...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
 		out = append(out, CheckEgressPort(c))

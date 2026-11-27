@@ -2113,6 +2113,13 @@ function toastHostReturnSuffix(s) {
   return t ? " \u00b7 " + t : "";
 }
 
+// toastKeptSuffix: the boxed spawn toast's tail when this spawn's profile now keeps folders it did not
+// before (paths are text in the toast, never markup). "" when there are none.
+function toastKeptSuffix(s) {
+  const t = keptToastPart(s.kept_new);
+  return t ? " \u00b7 " + t : "";
+}
+
 // sessionNotHomeLine: the clone session row's not-home line ("1 branch not home ·
 // 3 files not committed"), or "" for none. The rows put it FIRST in their line
 // (notHomePrefix): both clip it, and a clipped line keeps its start.
@@ -6466,7 +6473,7 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s) + toastHostReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s) + toastHostReturnSuffix(s) + toastKeptSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
     markHostNotHomeSeen(s.host_return);
   }

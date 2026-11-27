@@ -241,3 +241,12 @@ test("mdUnsafeLink: javascript:, vbscript: and data: hrefs, however they are spe
     assert.strictEqual(mdUnsafeLink(u), false, JSON.stringify(u));
   }
 });
+
+test("isLocalSrc: a kept file's read route is local, a look-alike or off-origin one is not", () => {
+  assert.strictEqual(isLocalSrc("/api/profiles/my%20prof/kept/file?key=aaaaaaaaaaaa&path=.culiops%2Fa.png"), true);
+  for (const u of [
+    "/api/profiles/x/kept/forget", "/api/profiles/x/kept/forget?key=a", "/api/profiles/x/kept/list?key=a",
+    "/api/profiles/x/y/kept/file?key=a", "/api/profiles//kept/file?key=a", "/api/profiles/x/kept/file",
+    "https://evil.example/api/profiles/x/kept/file?key=a", "//evil.example/api/profiles/x/kept/file?key=a",
+  ]) assert.strictEqual(isLocalSrc(u), false, u);
+});

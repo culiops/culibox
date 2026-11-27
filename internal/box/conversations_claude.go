@@ -228,7 +228,13 @@ func (m *Manager) ensureConversationsMount(name, convDir string, inside []Mount)
 // of mt's type: a directory for a directory bind, else a regular file. Lstat
 // throughout, so a link is never taken for either.
 func plainMountpoint(root *os.Root, mt Mount) error {
-	rel, err := filepath.Rel(ConversationsBox, filepath.Clean(mt.Box))
+	return plainMountpointUnder(root, ConversationsBox, mt)
+}
+
+// plainMountpointUnder is plainMountpoint for a root mounted at the in-box path
+// base (the home, for a kept folder's mountpoint).
+func plainMountpointUnder(root *os.Root, base string, mt Mount) error {
+	rel, err := filepath.Rel(base, filepath.Clean(mt.Box))
 	if err != nil {
 		return err
 	}

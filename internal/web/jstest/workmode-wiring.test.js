@@ -192,7 +192,7 @@ test("a session with no profile gets no work-home suffix; the spawn line and the
   assert.match(b, /p \? workHomeSuffix\(p, !!\(s\.clone && s\.clone\.push_repo\)\) : ""/);
   assert.match(app, /smeta\.textContent = notHomePrefix\(s\.clone_of \? sessionNotHomeLine\(s\) : "",\s*sessionMeta\(s, s\.clone_of \? wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/, "the phone row's meta starts with the not-home line");
   assert.match(body(app, "sessionNotHomeLine"), /sessionNotHome\(s, profiles\.find/);
-  assert.match(app, /toastHostReturnSuffix\(s\),\s*\{ undo[^\n]*\n\s*markHostNotHomeSeen\(s\.host_return\)/, "the Host toast marks what it announced as seen");
+  assert.match(app, /toastHostReturnSuffix\(s\)(?: \+ toastKeptSuffix\(s\))?,\s*\{ undo[^\n]*\n\s*markHostNotHomeSeen\(s\.host_return\)/, "the Host toast marks what it announced as seen");
   assert.match(app, /toastReturnSuffix\(s\) \+ toastHostReturnSuffix\(s\)/, "the spawn toast appends the Host return");
   assert.match(body(app, "toastHostReturnSuffix"), /hostReturnToast\(s\.host_return\)/);
   const sp = fs.readFileSync(path.join(STATIC, "spawnpanel.js"), "utf8");

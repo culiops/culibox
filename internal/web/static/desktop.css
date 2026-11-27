@@ -4278,6 +4278,23 @@
   #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
+
+  /* Kept from boxes (keptview.js): what boxed agents wrote outside the repo, one row per folder under the sheet. Box-chosen names, so
+     long ones wrap anywhere instead of widening the page. */
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-sec { margin-top: 24px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-note { margin: -4px 0 10px; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-row { padding: 12px 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-row + .pfv-kept-row, #page-host > #settings-modal.as-page #pfv .pfv-kept-row + .pfv-kept-nk { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-main { display: flex; align-items: baseline; gap: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-line { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-tag { font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-why { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-acts { display: inline-flex; gap: 12px; flex: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-tree { margin: 8px 0 0; padding-left: 16px; list-style: none; font-size: var(--t-sm); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-item { margin: 2px 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-nk { padding: 12px 20px; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-nkh { font-weight: 600; margin-bottom: 4px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kept-nkrow { overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 132px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; position: relative; padding: 14px 16px 14px 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
   /* No hover tint on a row (§B2: "No hover tint on blocks (none defined)"): the frame's rows do not light up; Edit's own hover is the kit's. */

@@ -342,6 +342,8 @@ function renderTierPick() {
     // Not while the user types in the workspace field: the picker reports every keystroke, so a path typed under the clone dir
     // would be swapped for the repo halfway through. A click (tierPick) and an open or fallback render still move it.
     if (m.pick !== "clone" && !tierTypingCwd()) tierLeaveCloneDir(currentProfile());
+    // The clone card picked again with the workspace still the repo: back to the clone dir (the field and the request agree). Same typing rule.
+    if (m.pick === "clone" && !tierTypingCwd() && !tierConvertNow()) tierEnterCloneDir(currentProfile());
   }
   // The critical-rm row's line and visibility follow the card shown (clone, in place, host), however the pick came about.
   syncCritRmRow();
@@ -397,6 +399,22 @@ function tierLeaveCloneDir(p) {
   return true;
 }
 
+// tierEnterCloneDir: the mirror of tierLeaveCloneDir. A clone profile whose workspace is the repo it was cloned from, and the clone
+// card is picked again: the workspace becomes the clone dir, which is what a clone session sends (spawnCwdFor). True when it moved.
+// Shares tierMoving, so the redraw the move causes cannot move again.
+function tierEnterCloneDir(p) {
+  if (tierMoving || !p || !p.clone_of || tierSamePath(p.clone_of, p.default_cwd, window.HOME_DIR || "")) return false;
+  if (!tierSamePath(getCwd(), p.clone_of, window.HOME_DIR || "")) return false;
+  tierMoving = true;
+  try {
+    setSpawnCwd(p.default_cwd, "");
+    onSpawnCwdChanged();
+  } finally {
+    tierMoving = false;
+  }
+  return true;
+}
+
 // tierShownRuntime: the runtime of the card on screen ("" before the first draw), the "before" of a runtime change.
 function tierShownRuntime() {
   const el = $("tierpick");
@@ -413,6 +431,7 @@ function tierPick(key) {
     profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", git: drawerDesktop() ? tierGitNow() : null, pick: key,
   });
   if (key !== "clone") tierLeaveCloneDir(currentProfile());
+  else if (!convert) tierEnterCloneDir(currentProfile());
   setSegValue($("runtime-seg"), tierWhere(key).runtime);
   renderTierPick();
   updateRuntimeWarning();

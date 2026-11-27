@@ -886,6 +886,11 @@ type Info struct {
 	// before this Host session started (one summary per clone). Host sessions
 	// only; absent when no clone is of this repo.
 	HostReturn []ReturnSummary `json:"host_return,omitempty"`
+	// KeptNew is the folders a boxed agent wrote outside the repo that this
+	// spawn's profile now keeps and nobody has been told about yet (home-relative
+	// paths, box-chosen text). Boxed sessions only; absent when there is none.
+	// The spawn toast reads it; it is not stored.
+	KeptNew []string `json:"kept_new,omitempty"`
 	// Return is the latest return of a clone-mode session (after an agent turn,
 	// at exit, or "Bring work home now"); absent until one has run. A Host
 	// session's own return is HostReturn.
@@ -1006,6 +1011,8 @@ type Session struct {
 	// HostReturn is Info.HostReturn: the pre-start return of the clones of this
 	// session's repo. Immutable after publication; Info hands out a deep copy.
 	HostReturn []ReturnSummary
+	// KeptNew is Info.KeptNew. Immutable after publication; Info clones it.
+	KeptNew []string
 	// ret is the latest exit or "now" return, returning that a "now" is running.
 	// Both guarded by mu; ret is not persisted (a restart drops it, the clone's
 	// state file keeps the truth).
@@ -1528,6 +1535,7 @@ func (s *Session) Info() Info {
 	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
 	in.HostReturn = copyReturns(s.HostReturn)
+	in.KeptNew = slices.Clone(s.KeptNew)
 	in.Return = s.ret.copy()
 	in.Handback = s.handback.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
@@ -2649,11 +2657,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var wsPath string        // boxed only: the workspace's real path when the box was made (Session.workspace)
 	var resumeSkipped string // boxed only: set when --resume was dropped
 	var transcriptKey string // boxed only: the conversations folder the box mounts (Session.transcriptKey)
+	var spawnBoxes Boxes     // boxed only: the layer this spawn used (for KeptNew)
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
+		spawnBoxes = boxes
 		// Profile is not identity: it names the conversations folder a box this
 		// spawn creates mounts (#330), shared by the profile's boxes in this folder.
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent, CopyDir: copyDir}
@@ -3009,6 +3019,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		cloneOf = cl.Of
 	}
 	wsRoot := m.workspaceRootFor(spec.Cwd, cloneOf, spec.ParentID)
+	// Outside m.mu: it waits on a store lock and reads the disk, and every Get/List needs m.mu.
+	keptNew := takeKeptNews(spawnBoxes, transcriptKey)
 	m.mu.Lock()
 	// Uniqueness is resolved in the SAME critical section that inserts
 	// m.sessions[id] below, so two concurrent spawns can never both win the
@@ -3053,6 +3065,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
 	sess.HostReturn = hostReturn
+	sess.KeptNew = keptNew
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
 	sess.CloneOf = cloneOf

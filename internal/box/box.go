@@ -275,6 +275,10 @@ type Client interface {
 	// destination dst ("" when it has none). Only the broker's mount is read this
 	// way (reuseBrokerDir), so a box pays the extra call only when it has one.
 	BindSource(ctx context.Context, name, dst string) (string, error)
+	// BindSources is BindSource for every bind of the running box at once (in-box
+	// destination → host path), for a check that needs several: whether the
+	// mounts reuseMounts did not ask for are all kept folders (keptOnly).
+	BindSources(ctx context.Context, name string) (map[string]string, error)
 }
 
 // Options configures a Manager.
@@ -303,6 +307,13 @@ type Options struct {
 	// stop, the removal of an idle box in a spawn's way, and the sweep's
 	// removal; nil = no notice.
 	OnStop func(name, workspace string)
+	// Audit records one row about a kept store: what the keep pass did
+	// (keptpass.go, action box_kept or box_kept_held, actor "culibox") or a
+	// forget (keptview.go, action box_kept_forget, actor the person who asked,
+	// as the web layer names it). name is the store's profile, detail as the
+	// caller writes it. A failure is logged and never stops what it records;
+	// nil = no rows.
+	Audit func(actor, action, name, detail string) error
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
 	// not the one virtiofs shows the box). ensure calls it, once, for the
@@ -462,6 +473,18 @@ type Manager struct {
 	memFallbackLogged bool
 	// locks are the macOS guard locks (Options.LockGuards); nil = off.
 	locks *guardLocks
+	// keptMu is, per kept store key, the lock a keep pass holds from reading
+	// the store's state.json to writing it back, so two passes of one store
+	// never interleave. Taken before opMu, never while holding it. The map is
+	// guarded by mu (keptStoreLock).
+	keptMu map[string]*sync.Mutex
+	// keptPasses counts the keep passes running in the background, started by
+	// stopped() and StartKeepStoppedHomes (WaitKeptPasses). Each is bounded:
+	// keptPassBudget, keptBootBudget.
+	keptPasses keptRunning
+	// keptBadAttr holds the store keys whose state.json named a profile it
+	// does not belong to, once logged. Guarded by mu.
+	keptBadAttr map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -503,6 +526,7 @@ func New(opts Options) (*Manager, error) {
 		ownerWS:       map[string]string{},
 		ended:         map[string]endedHold{},
 		conv:          map[string]string{},
+		keptMu:        map[string]*sync.Mutex{},
 		started:       time.Now(),
 	}
 	if opts.LockGuards {
@@ -1299,7 +1323,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	// The profile's conversations folder, from the same resolution as the name
 	// (#330). Not identity: the name above does not hash it.
 	conv := m.ConversationsKeyFor(ws.Path, key.Account, key.Profile)
-	if err := m.ensure(ctx, name, ws, extraRO, conv, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
+	if err := m.ensure(ctx, name, ws, extraRO, conv, keptOwner{Profile: key.Profile, Account: key.Account}, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		if key.Session != "" {
 			m.mu.Lock()
 			if !m.exclusive[name] { // no box of this session counted: nothing to own
@@ -1374,8 +1398,10 @@ func withoutNames(env, names []string) []string {
 // conv is the key of the conversations folder the spawn asks for ("" none): a
 // box created here mounts it; a running one is judged by reuseConversations.
 // Either way the key of the folder the box ends up mounting is remembered for
-// ConversationsKeyOf.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, conv string, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
+// ConversationsKeyOf. conv is also the key of the profile's kept-folder store:
+// a box created here mounts its kept folders (prepareKept), and owner is whose
+// spawn it is, for the box's record.
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, conv string, owner keptOwner, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1603,6 +1629,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			// into the folder before the mount hides it.
 			m.adoptConversations(ctx, name, convDir)
 		}
+		// The profile's kept folders, as its store holds them now: checked, their
+		// mountpoints made in the home, and the box's record written (with no
+		// profile, one left from a profile's spawn removed), all before the box
+		// exists. After the mountpoints above, so a kept folder that would hold
+		// one of them is left out.
+		var kept []Mount
+		if kept, err = m.prepareKept(name, conv, owner, wsm, extraRO); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 		if preAcceptBypass {
 			// Best effort, like the trust entry: without it the agent just asks.
 			if err := m.preAcceptBypass(name); err != nil {
@@ -1636,7 +1672,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory, convDir)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory, convDir, kept)); err != nil {
 			// A box that never came to be holds no lock. One docker may have left
 			// behind keeps it until it is removed.
 			if m.locks != nil {
@@ -1713,7 +1749,10 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 // is the norm, absent is a missing OPTIONAL mount (a box from before it existed
 // still runs; its screenshots just stay inside it). The conversations folder
 // (ConversationsBox, wantConv) is judged the same way: never an extra mount,
-// and a missing OPTIONAL one when the spawn asks for it.
+// and a missing OPTIONAL one when the spawn asks for it. A profile's kept
+// folders are neither asked for nor extra: they are applied at create only, so
+// a mount at a kept folder's path whose source is a kept store's folder
+// (keptOnly, the one host source read here) is left out of the comparison.
 //
 //   - Exactly what this spawn would create: reuse.
 //   - Idle (no session of this process uses it): removed and recreated, for a
@@ -1768,15 +1807,19 @@ func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []stri
 			required = append(required, d)
 		}
 	}
-	extra := false
+	// A mount the spawn did not ask for is an extra one, unless it is a kept
+	// folder's: those are applied at create only (keptMounts), so a box is never
+	// recreated because its profile's store changed since. Asked of docker only
+	// when it decides the answer.
+	var unasked []string
 	for d := range got {
-		if partial {
-			break
+		if !partial && !want[d] {
+			unasked = append(unasked, d)
 		}
-		if !want[d] {
-			extra = true
-			break
-		}
+	}
+	extra := len(unasked) > 0
+	if extra && len(missing) == 0 {
+		extra = !m.keptOnly(ctx, name, unasked)
 	}
 	if len(missing) == 0 && !extra {
 		return StateRunning, nil
@@ -2503,12 +2546,18 @@ func (m *Manager) stopWorkspace(ctx context.Context, name string) string {
 	return ""
 }
 
-// stopped tells OnStop that box name was stopped. It runs the hook in its own
-// goroutine, so a caller holding opMu never waits on it.
+// stopped tells OnStop that box name was stopped, then runs the keep pass on
+// its home (keepPass), each in its own goroutine, so a caller holding opMu
+// never waits on them. The pass takes opMu itself once it has screened.
 func (m *Manager) stopped(name, ws string) {
 	if h := m.opts.OnStop; h != nil {
 		go h(name, ws)
 	}
+	m.keptPasses.Add(1)
+	go func() {
+		defer m.keptPasses.Done()
+		m.runKeepPass(context.Background(), name, keptPassOpts{})
+	}()
 }
 
 // stopIfIdle re-checks under the lock, so a session started during the idle

@@ -30,10 +30,11 @@ var hostOnlyEnv = map[string]bool{
 }
 
 // runArgs builds `docker run -d` for a box. Deny by default: the only writable
-// mounts are the workspace, the box home, the out dir (PlaywrightOutBox) and,
-// when conv is not "", the profile's conversations folder over the home's
-// projects dir (#330); never the docker socket, the host home, or ~/.ssh. Every
-// extra bind, the in-place guards and a clone's mounts included, is read-only. The workspace mounts at
+// mounts are the workspace, the box home, the out dir (PlaywrightOutBox), when
+// conv is not "" the profile's conversations folder over the home's projects
+// dir (#330), and the profile's kept folders (kept, from keptMounts, each over
+// its own path in the home); never the docker socket, the host home, or ~/.ssh.
+// Every extra bind, the in-place guards and a clone's mounts included, is read-only. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
 // fenced (an AWS binding, or any box when EgressAll is on) adds the egress
@@ -44,7 +45,8 @@ var hostOnlyEnv = map[string]bool{
 // share a folder with. caBundle != "" adds the extra-CA label and bundle mount;
 // "" leaves the output exactly as it was before extra CAs existed.
 // memory is the resolved --memory value (see memoryCap), never "" or "max".
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle, memory, conv string) []string {
+// No kept folders (nil) leaves the output exactly as it was before them.
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle, memory, conv string, kept []Mount) []string {
 	pids, tmpSize := m.opts.PidsLimit, m.opts.TmpSize
 	if pids == 0 {
 		pids = DefaultPidsLimit
@@ -86,6 +88,11 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		// first, so this one covers the home's projects dir. Writable: Claude Code
 		// writes its conversations there.
 		args = append(args, "--mount", bindMount(conv, ConversationsBox, false))
+	}
+	// The same way, each over its path in the home. Writable: the agent keeps
+	// writing in them, and its next stop's keep pass screens them again.
+	for _, mt := range kept {
+		args = append(args, "--mount", bindMount(mt.Host, mt.Box, false))
 	}
 	// No box_cpus, no flag: the box can use every core docker has.
 	if m.opts.CPUs > 0 {

@@ -18,6 +18,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/datacompat"
@@ -71,6 +72,10 @@ type boxLayer struct {
 	// onStop is the box-stop hook, installed after the box manager exists
 	// (setOnStop): the hook needs the clone hooks, which need this layer.
 	onStop atomic.Pointer[func(name, workspace string)]
+	// audit is the audit store's sink for the box manager's keep-pass rows,
+	// installed once the store exists (setAudit); nil until then, and the rows
+	// are then not written (the pass logs that and goes on).
+	audit atomic.Pointer[func(broker.CredEvent) error]
 	// daemon is the local docker daemon's state (nil on darwin: the box VM starts
 	// on the first boxed spawn, and prepare reports what stops it). See boxdaemon.go.
 	daemon *daemonWatch
@@ -93,6 +98,9 @@ type boxLayer struct {
 	// reclaimKept remembers the kept box homes last logged (#330), so the same
 	// set is not logged on every pass.
 	reclaimKept logOnChange
+	// reclaimHeld is the same for the homes reclaim keeps because a folder to
+	// keep for their profile could not be moved out of them yet.
+	reclaimHeld logOnChange
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 	// ctl is the VM folder control (macOS, set by the daemon): while it reports
@@ -248,6 +256,16 @@ func (l *boxLayer) setOnStop(f func(name, workspace string)) {
 	l.onStop.Store(&f)
 }
 
+// setAudit installs the audit store the box manager's keep-pass rows go to
+// (box.Options.Audit). Call once at boot; nil removes it.
+func (l *boxLayer) setAudit(f func(broker.CredEvent) error) {
+	if f == nil {
+		l.audit.Store(nil)
+		return
+	}
+	l.audit.Store(&f)
+}
+
 // options is what the box manager is built with. Off darwin there are no hooks:
 // Linux behaves exactly as before the VM existed.
 func (l *boxLayer) options(cfg config.Config) box.Options {
@@ -279,6 +297,17 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 			if f := l.onStop.Load(); f != nil {
 				(*f)(name, workspace)
 			}
+		},
+		// The kept stores' rows, for the store's profile: the keep pass's
+		// (box_kept, box_kept_held) with the actor "culibox", like the clone
+		// merge's (cloneHooks.mergeAudit), and a forget's (box_kept_forget)
+		// with the person the web layer names.
+		Audit: func(actor, action, name, detail string) error {
+			f := l.audit.Load()
+			if f == nil {
+				return errors.New("no audit store")
+			}
+			return (*f)(broker.CredEvent{Action: action, Kind: "box", Name: name, Actor: actor, Detail: detail})
 		},
 	}
 	if l.adoptable {
@@ -610,6 +639,11 @@ func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 	if err := l.boxes.Reconcile(ctx); err != nil {
 		log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
 	}
+	// The homes of boxes stopped while the daemon was down: their app folders
+	// move into their profile's kept store, in the background, so the boot and
+	// a spawn's VM start never wait on it. Reclaim below runs its own pass on a
+	// home before it removes it.
+	l.boxes.StartKeepStoppedHomes(ctx)
 	l.reclaimBoxState(ctx)
 }
 
@@ -619,10 +653,15 @@ func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 // testable without a daemon; the printing belongs here.
 func (l *boxLayer) reclaimBoxState(ctx context.Context) {
 	done, err := l.boxes.ReclaimState(ctx, box.DefaultStateTTL, box.DefaultCacheTTL)
-	var kept, keptNames []string
+	var kept, keptNames, held []string
 	for _, r := range done {
 		mib := r.Bytes / (1024 * 1024)
-		if r.Kept {
+		switch {
+		case r.Kept && r.KeptWhy != "":
+			// KeptWhy quotes every path it names: they are box-chosen. Its ages
+			// stay out, like the kept set's, so a stuck folder logs once.
+			held = append(held, r.Box+": "+r.KeptWhy)
+		case r.Kept:
 			kept = append(kept, fmt.Sprintf("%s (unused %d days)", r.Box, int(r.Age.Hours()/24)))
 			keptNames = append(keptNames, r.Box)
 		}
@@ -646,6 +685,11 @@ func (l *boxLayer) reclaimBoxState(ctx context.Context) {
 		log.Printf("kept box state %s: unused for over %d days, but each holds Claude Code conversations, "+
 			"so reclaim keeps it (its caches still go). `culibox doctor` lists their sizes and how to remove one.",
 			strings.Join(kept, ", "), int(box.DefaultStateTTL.Hours()/24))
+	}
+	// Logged on change too: a folder that cannot move says the same every hour.
+	if (err == nil || len(held) > 0) && l.reclaimHeld.changed(strings.Join(held, "; ")) {
+		log.Printf("kept box state past %d days unused, because a folder to keep for its profile is still in it "+
+			"(reclaim tries again every pass): %s", int(box.DefaultStateTTL.Hours()/24), strings.Join(held, "; "))
 	}
 	if err == nil {
 		l.reclaimErr.changed("") // a clean pass: the same error later is news again

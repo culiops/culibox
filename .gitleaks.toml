@@ -69,6 +69,20 @@ regexes = [
   '''^-----BEGIN RSA PRIVATE KEY-----\\nMIIB\\nabc\\n-----END RSA PRIVATE KEY-----", "\[masked:private-key\]"\},\s*\{"pem middle", "before\\n-----BEGIN PRIVATE KEY-----$''',
   '''^-----BEGIN OPENSSH PRIVATE KEY-----\\nb3BlbnNzaC1rZXk\\nmore text", "x \[masked:private-key\]"\},\s*\{"key inside pem masked once", "-----BEGIN PRIVATE KEY-----$''',
 ]
+[[allowlists]]
+description = "internal/secretshape and internal/box kept-folder screen tests: fake credential shapes the screen must flag (made-up AWS key ids, the jwt.io sample payload with a 'signature' signature, a 12-hex store key)"
+regexes = [
+  '''^(AKIA|ASIA)QWERTYUIOPASDFGH$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.c2lnbmF0dXJl$''',
+  '''^0123456789(ab|AB)$''',
+]
+[[allowlists]]
+description = "internal/secretshape/secretshape_test.go and internal/box/keptscan_test.go: fake PEM headers with no key body (or the 4-byte body MIIE). The PEM rule's match runs on to the next header in the test file, so each regex is anchored at both ends on the test text around it; a real key has a long body right after its header and cannot match"
+regexes = [
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----", "pem-private-key"\},\n\t\t\{"pem rsa", "x\\n-----BEGIN RSA PRIVATE KEY-----$''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----\\n"\)\n\tkeptWrite\(t, dir, "\.ssh/key", "-----BEGIN OPENSSH PRIVATE KEY-----$''',
+  '''^-----BEGIN RSA PRIVATE KEY-----\\nMIIE\\n", "looks like credentials: \.culiops/data\.txt"\},\n\t\t\{"aws secret", [^\n]*\n\t\t\{"jwt", [^\n]*\n\t\t\{"cloudtrail ids", cloudTrail, ""\},[^-]*\+ "\\n-----BEGIN RSA PRIVATE KEY-----$''',
+]
 
 # Public identifiers.
 

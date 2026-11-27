@@ -51,6 +51,8 @@ type fakeClient struct {
 	// filter, as docker would for `--filter label=<key>`.
 	others  []BoxInfo
 	listErr error
+	// listCalls and inspectCalls count ListBoxes and Inspect.
+	listCalls, inspectCalls int
 
 	// mounts holds the bind destinations of each box, as `docker inspect`
 	// reports them: recorded from every --mount of a Run, or set by a test to
@@ -202,6 +204,7 @@ func (f *fakeClient) Inspect(_ context.Context, name string) (State, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inspectCalls++
 	switch {
 	case f.inspectErr != nil:
 		return StateMissing, f.inspectErr
@@ -216,6 +219,7 @@ func (f *fakeClient) Inspect(_ context.Context, name string) (State, error) {
 func (f *fakeClient) ListBoxes(_ context.Context, filter string) ([]BoxInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -313,6 +317,19 @@ func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, er
 	return f.sources[name][dst], nil
 }
 
+func (f *fakeClient) BindSources(_ context.Context, name string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bindErr != nil {
+		return nil, f.bindErr
+	}
+	out := map[string]string{}
+	for d, s := range f.sources[name] {
+		out[d] = s
+	}
+	return out, nil
+}
+
 func (f *fakeClient) HasRuntime(ctx context.Context, name string) (bool, error) {
 	f.mu.Lock()
 	f.runtimeCalls++
@@ -394,6 +411,10 @@ func newTestManagerWithFakeTTL(t *testing.T, ttl time.Duration) (*Manager, *fake
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A box a test stops runs its keep pass in the background, which writes in
+	// the state root once the box has a kept-folder record (any spawn with a
+	// profile). Registered after the state root's TempDir, so it runs first.
+	t.Cleanup(m.WaitKeptPasses)
 	return m, f
 }
 
