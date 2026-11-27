@@ -121,9 +121,10 @@ func (s *Service) resolvePending() {
 	if s.resolveEnv != nil {
 		env = s.resolveEnv()
 	}
+	z := NewResolver(env, known) // rule 5's candidates, slugged once for the whole pass
 	failed := 0
 	for _, r := range rows {
-		if err := s.store.SetResolved(r.SessionID, r.Project, Resolve(r.DimIn, env, known)); err != nil {
+		if err := s.store.SetResolved(r.SessionID, r.Project, z.Resolve(r.DimIn)); err != nil {
 			if failed == 0 {
 				log.Printf("analytics: filing session %s: %v", r.SessionID, err)
 			}

@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -297,5 +298,52 @@ func TestKnownPaths(t *testing.T) {
 	sort.Strings(got)
 	if want := []string{"/a", "/a/wt", "/b"}; !slices.Equal(got, want) {
 		t.Fatalf("KnownPaths = %v, want %v", got, want)
+	}
+}
+
+// Rule 5's candidates are slugged once per pass, however many sessions wait
+// for a workspace: a pass costs O(known + profiles + clone dirs), never
+// O(pending x known). Counted, not timed.
+func TestResolvePendingSlugsEachCandidateOncePerPass(t *testing.T) {
+	calls := 0
+	orig := slugFn
+	slugFn = func(p string) string { calls++; return orig(p) }
+	t.Cleanup(func() { slugFn = orig })
+	env := ResolveEnv{
+		Profiles:  []ProfileRef{{Name: "a", DefaultCwd: "/clones/a", CloneOf: "/repos/a"}, {Name: "b", DefaultCwd: "/clones/b"}},
+		CloneDirs: []string{"/clones/old"},
+	}
+	const known, config = 20, 4 // 20 matched folders; two default_cwd, one clone_of, one clone dir
+	for _, pending := range []int{3, 300} {
+		svc, err := New(filepath.Join(t.TempDir(), "a.db"), nil, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		svc.SetResolveEnv(func() ResolveEnv { return env })
+		for i := 0; i < known; i++ {
+			if _, err := svc.store.db.Exec(`INSERT INTO session_dim(session_id,project,workspace,runtime,parsed) VALUES(?,?,?,'host',0)`,
+				fmt.Sprintf("K%d", i), "-p", fmt.Sprintf("/known/k%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < pending; i++ {
+			if _, err := svc.store.db.Exec(`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES(?,?,'box',0)`,
+				fmt.Sprintf("L%d", i), fmt.Sprintf("-nowhere-%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for pass := 0; pass < 2; pass++ { // unmatched rows stay pending: every pass costs the same
+			calls = 0
+			if _, err := svc.Ingest(); err != nil {
+				t.Fatal(err)
+			}
+			if calls != known+config {
+				t.Errorf("%d pending, pass %d: %d slugs computed, want %d (one per candidate)", pending, pass, calls, known+config)
+			}
+		}
+		if d := readResolved(t, svc, "L0", "-nowhere-0"); d.unmatched != 1 || d.via != "legacy" {
+			t.Errorf("%d pending: L0 = %+v, want unmatched legacy", pending, d)
+		}
+		svc.Close()
 	}
 }

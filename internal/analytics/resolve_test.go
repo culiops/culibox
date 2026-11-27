@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// resolveOnce files one session with a Resolver of its own.
+func resolveOnce(d DimIn, env ResolveEnv, known []string) Resolved {
+	return NewResolver(env, known).Resolve(d)
+}
+
 func TestResolve(t *testing.T) {
 	profiles := []ProfileRef{
 		{Name: "dev", DefaultCwd: "/work/clone-a", CloneOf: "/work/repo-a", Account: "acc"},
@@ -149,7 +154,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Resolve(tc.d, tc.env, tc.known); got != tc.want {
+			if got := resolveOnce(tc.d, tc.env, tc.known); got != tc.want {
 				t.Fatalf("Resolve(%+v)\n got %+v\nwant %+v", tc.d, got, tc.want)
 			}
 		})
@@ -166,9 +171,9 @@ func TestResolveBoxNeverCallsRepoRoot(t *testing.T) {
 		},
 	}
 	for _, cwd := range []string{"/work/clone-a", "/work/x", "/work/x/.claude/worktrees/w", "/work/clone-a/.worktrees/w"} {
-		Resolve(DimIn{Cwd: cwd, Runtime: "box"}, env, nil)
+		resolveOnce(DimIn{Cwd: cwd, Runtime: "box"}, env, nil)
 	}
-	Resolve(DimIn{Project: "-work-x"}, env, []string{"/work/x"})
+	resolveOnce(DimIn{Project: "-work-x"}, env, []string{"/work/x"})
 }
 
 // A box-supplied path is cleaned and nothing more: a symlink in it is not
@@ -184,12 +189,12 @@ func TestResolveBoxCwdIsNotResolved(t *testing.T) {
 		t.Skipf("no symlinks here: %v", err)
 	}
 	sub := filepath.Join(link, "sub")
-	got := Resolve(DimIn{Cwd: sub, Runtime: "box"}, ResolveEnv{}, nil)
+	got := resolveOnce(DimIn{Cwd: sub, Runtime: "box"}, ResolveEnv{}, nil)
 	if got.Workspace != sub || got.Via != "inplace" {
 		t.Fatalf("box cwd was altered: %+v, want workspace %q", got, sub)
 	}
 	// A host cwd that is not a repo falls back to the normalised spelling.
-	host := Resolve(DimIn{Cwd: link, Runtime: "host"}, ResolveEnv{RepoRoot: func(string) string { return "" }}, nil)
+	host := resolveOnce(DimIn{Cwd: link, Runtime: "host"}, ResolveEnv{RepoRoot: func(string) string { return "" }}, nil)
 	want, err := filepath.EvalSymlinks(link)
 	if err != nil {
 		t.Fatal(err)

@@ -46,19 +46,50 @@ var slugNonAlnum = regexp.MustCompile(`[^a-zA-Z0-9]`)
 // projectSlug mirrors session.projectSlug (internal/session/usage.go).
 func projectSlug(cwd string) string { return slugNonAlnum.ReplaceAllString(cwd, "-") }
 
+// slugFn is the slug rule 5 compares; a var so a test can count its calls.
+var slugFn = projectSlug
+
 // worktreeMarkers are the folders a worktree of a repository lives under.
 var worktreeMarkers = []string{"/.claude/worktrees/", "/.worktrees/"}
 
 const convRootPrefix = ".conversations/"
+
+// Resolver files sessions against one config snapshot and one set of rule-5
+// candidates. A pass builds one (NewResolver) and asks it for every session it
+// files, so the candidates are indexed once per pass and each session costs a
+// map lookup. Not safe for concurrent use: the pass is serialized.
+type Resolver struct {
+	env    ResolveEnv
+	legacy legacyIndex
+}
+
+// NewResolver indexes rule 5's candidates once: the known folders, then each
+// profile's default_cwd and clone_of, then the clone dirs, the order Resolve
+// offers them in. Each candidate is cleaned and slugged here and nowhere else.
+func NewResolver(env ResolveEnv, known []string) *Resolver {
+	z := &Resolver{env: env, legacy: legacyIndex{bySlug: map[string][]legacyCand{}, found: map[string][]string{}}}
+	for _, k := range known { // may be box-supplied: cleaned, never resolved
+		z.legacy.add(k, candKnown, env.FoldCase)
+	}
+	for _, p := range env.Profiles {
+		z.legacy.add(p.DefaultCwd, candCloneDir, env.FoldCase)
+		z.legacy.add(p.CloneOf, candCloneOf, env.FoldCase)
+	}
+	for _, cd := range env.CloneDirs {
+		z.legacy.add(cd, candCloneDir, env.FoldCase)
+	}
+	return z
+}
 
 // Resolve applies spec §6.3 rules 1 to 5, first match wins. It is pure string
 // work plus config: a box-supplied path (cwd, any prefix of it, a known
 // candidate) is only cleaned, never stat'ed or resolved through links. Only
 // config-derived paths and the host-runtime fallback go through gitrepo.Normalize,
 // and RepoRoot is called only for a host runtime.
-func Resolve(d DimIn, env ResolveEnv, known []string) Resolved {
+func (z *Resolver) Resolve(d DimIn) Resolved {
+	env := z.env
 	if d.Cwd == "" {
-		return resolveLegacy(d, env, known)
+		return z.resolveLegacy(d)
 	}
 	cwd := filepath.Clean(d.Cwd)
 	if prefix, wt, ok := splitWorktree(cwd, env.FoldCase); ok {
@@ -151,53 +182,82 @@ func splitWorktree(cwd string, fold bool) (prefix, worktree string, ok bool) {
 	return prefix, cwd[:end], true
 }
 
+// candKind is what a rule-5 candidate is, which says how it folds to a workspace.
+type candKind uint8
+
+const (
+	candKnown    candKind = iota // an earlier session's folder; may be box-supplied
+	candCloneDir                 // a profile's default_cwd or a clone-dirs entry
+	candCloneOf                  // a profile's clone_of
+)
+
+type legacyCand struct {
+	path string // cleaned
+	kind candKind
+}
+
+// legacyIndex is rule 5's candidates keyed by their slug (lower-cased when
+// FoldCase). The workspaces one slug stands for are worked out on its first
+// lookup and kept, so a candidate is folded at most once per pass.
+type legacyIndex struct {
+	bySlug map[string][]legacyCand
+	found  map[string][]string // slug key -> its distinct workspaces, in offer order
+}
+
+// foldKey is s as a map key: lower-cased when paths compare case-folded.
+func foldKey(s string, fold bool) string {
+	if fold {
+		return strings.ToLower(s)
+	}
+	return s
+}
+
+func (ix *legacyIndex) add(p string, kind candKind, fold bool) {
+	if p == "" {
+		return
+	}
+	c := filepath.Clean(p)
+	k := foldKey(slugFn(c), fold)
+	ix.bySlug[k] = append(ix.bySlug[k], legacyCand{path: c, kind: kind})
+}
+
+// workspaces is the distinct workspaces the candidates under one slug key stand
+// for, the first spelling of each kept (case-folded on darwin). A known
+// candidate folds through rules 2 and 1 by string rules (foldKnown); a clone
+// dir maps to its profile's clone_of when config has one; a clone_of is
+// normalized. Only config entries reach gitrepo.Normalize.
+func (ix *legacyIndex) workspaces(key string, env ResolveEnv) []string {
+	if ws, ok := ix.found[key]; ok {
+		return ws
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range ix.bySlug[key] {
+		var ws string
+		switch c.kind {
+		case candKnown:
+			ws = foldKnown(c.path, env)
+		case candCloneDir:
+			ws = cloneDirWorkspace(c.path, env)
+		default:
+			ws = gitrepo.Normalize(c.path)
+		}
+		k := foldKey(ws, env.FoldCase)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, ws)
+		}
+	}
+	ix.found[key] = out
+	return out
+}
+
 // resolveLegacy is rule 5: a session with no cwd is matched to a workspace by
 // its project slug against every folder the config and earlier sessions know.
-func resolveLegacy(d DimIn, env ResolveEnv, known []string) Resolved {
-	var found []string
-	seen := map[string]bool{}
-	add := func(ws string) {
-		key := ws
-		if env.FoldCase {
-			key = strings.ToLower(ws)
-		}
-		if !seen[key] {
-			seen[key] = true
-			found = append(found, ws)
-		}
-	}
-	matches := func(c string) bool { return c != "" && foldEq(projectSlug(c), d.Project, env.FoldCase) }
-
-	for _, k := range known { // may be box-supplied: cleaned, never resolved
-		if k == "" {
-			continue
-		}
-		if c := filepath.Clean(k); matches(c) {
-			add(foldKnown(c, env))
-		}
-	}
-	for _, p := range env.Profiles {
-		if p.DefaultCwd != "" {
-			if c := filepath.Clean(p.DefaultCwd); matches(c) {
-				add(cloneDirWorkspace(c, env))
-			}
-		}
-		if p.CloneOf != "" {
-			if c := filepath.Clean(p.CloneOf); matches(c) {
-				add(gitrepo.Normalize(c))
-			}
-		}
-	}
-	for _, cd := range env.CloneDirs {
-		if cd == "" {
-			continue
-		}
-		if c := filepath.Clean(cd); matches(c) {
-			add(cloneDirWorkspace(c, env))
-		}
-	}
-	if len(found) == 1 {
-		return Resolved{Workspace: found[0], Via: "legacy"}
+// Exactly one workspace matches, or the slug stays its name, unmatched.
+func (z *Resolver) resolveLegacy(d DimIn) Resolved {
+	if ws := z.legacy.workspaces(foldKey(d.Project, z.env.FoldCase), z.env); len(ws) == 1 {
+		return Resolved{Workspace: ws[0], Via: "legacy"}
 	}
 	return Resolved{Workspace: d.Project, Via: "legacy", Unmatched: true}
 }
