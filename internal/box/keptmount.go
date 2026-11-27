@@ -101,6 +101,7 @@ func (m *Manager) keptMounts(key string, extraRO []Mount) ([]Mount, []keptRefusa
 	cb := keptMountRels(targets)
 	var out []Mount
 	var refs []keptRefusal
+	seen := map[[2]uint64]bool{} // the folders mounted, by device and inode
 	for _, e := range kst.Kept {
 		rel := e.Path
 		if e.Status != keptStatusKept || !validKeptRel(rel) {
@@ -114,7 +115,7 @@ func (m *Manager) keptMounts(key string, extraRO []Mount) ([]Mount, []keptRefusa
 			refs = append(refs, keptRefusal{Rel: rel, Reason: keptReasonInMount})
 			continue
 		}
-		f, _, err := keptOpenPath(state, storeRel+"/"+keptHomeDirName+"/"+rel)
+		f, fst, err := keptOpenPath(state, storeRel+"/"+keptHomeDirName+"/"+rel)
 		switch {
 		case err == nil:
 			f.Close()
@@ -134,11 +135,14 @@ func (m *Manager) keptMounts(key string, extraRO []Mount) ([]Mount, []keptRefusa
 			refs = append(refs, keptRefusal{Rel: rel, Reason: keptReasonName})
 			continue
 		}
-		// Two spellings of one folder on a case-insensitive home: the second
-		// mount would only cover the first.
-		if slices.ContainsFunc(out, func(o Mount) bool { return strings.EqualFold(o.Box, mt.Box) }) {
+		// Two spellings of one folder on a case-insensitive volume: the second
+		// mount would only cover the first. Told apart by the folder, not the
+		// name, so two folders whose names differ in case (Linux) both mount.
+		id := [2]uint64{uint64(fst.Dev), uint64(fst.Ino)}
+		if seen[id] {
 			continue
 		}
+		seen[id] = true
 		out = append(out, mt)
 	}
 	return out, refs

@@ -55,16 +55,24 @@ var (
 	// kept, too slow to check, and goes with the home (ruling R11): about a
 	// day at the hourly pass.
 	keptReclaimRetries = 24
+	// keptPassUseSlack is how long after a pass begins a touch of its box's
+	// marker is still taken for the release that stopped the box, not a new
+	// use. A box created, used and released again takes seconds (a docker
+	// create and start alone is most of one), so a use during the pass is
+	// still seen.
+	keptPassUseSlack = time.Second
 )
 
 // Test hooks. keptPassLockHook, when set, runs between the home's screens and
 // the moves, with no lock but the store's held. keptPassMovedHook runs right
 // after the moves, once opMu is let go, before the store's re-screen.
-// keptMergeMove is mergeMove, replaced by a test to fail a move.
+// keptMergeMove is mergeMove, replaced by a test to fail a move, and
+// keptPassSave is saveKeptState, replaced by a test to fail a save.
 var (
 	keptPassLockHook  func(box string)
 	keptPassMovedHook func(box string)
 	keptMergeMove     = mergeMove
+	keptPassSave      = saveKeptState
 )
 
 // Audit actions of the pass.
@@ -440,13 +448,19 @@ type keptPass struct {
 	ready []keptCandidate     // home folders that passed, to move
 	sizes map[string][2]int64 // bytes and files the home's screen counted, by ready folder
 	moved []string            // home folders moved into the store
-	rows  []KeptRefusalRow    // new not-kept rows
-	errs  keptErrs            // keepable home folders not moved
-	kept  []string            // folders the store now records, or kept again
-	held  []KeptEntry         // entries that became held
-	drop  map[int]bool        // entries whose folder is gone from the store
+	// movedIDs are the store folders (device, inode) the moves went into: on
+	// a case-insensitive volume a moved .Culiops is the entry .culiops.
+	movedIDs map[[2]uint64]bool
+	rows     []KeptRefusalRow // new not-kept rows
+	errs     keptErrs         // keepable home folders not moved
+	kept     []string         // folders the store now records, or kept again
+	held     []KeptEntry      // entries that became held
+	drop     map[int]bool     // entries whose folder is gone from the store
 	// unchecked counts the store folders not screened in time.
 	unchecked int
+	// screenedAll: screenStore screened every entry, in time. finish marks the
+	// store in opts.screened once that is saved.
+	screenedAll bool
 	// retries is how many reclaim passes in a row kept this home for a folder
 	// too slow to check, before this one; slow is set when this one did.
 	retries int
@@ -582,7 +596,12 @@ func (p *keptPass) move(ctx context.Context) {
 		return
 	}
 	defer m.opMu.Unlock()
-	if _, ok := m.stillUnused(ctx, p.box, 0); !ok {
+	// Unused since the pass began: a box created and gone again while the
+	// home was screened touched its marker, and its home may hold what that
+	// box wrote after the screen. keptPassUseSlack forgives the touch of the
+	// release that stopped the box (ReleaseBox touches the marker while its
+	// zero-TTL stop, and so this pass, may already run).
+	if _, ok := m.stillUnused(ctx, p.box, max(0, time.Since(p.now)-keptPassUseSlack)); !ok {
 		for _, c := range p.ready {
 			p.fail(c.Rel, errKeptBusy)
 		}
@@ -613,6 +632,12 @@ func (p *keptPass) move(ctx context.Context) {
 			continue
 		}
 		p.moved = append(p.moved, c.Rel)
+		if id, err := keptFolderID(p.shome, c.Rel); err == nil {
+			if p.movedIDs == nil {
+				p.movedIDs = map[[2]uint64]bool{}
+			}
+			p.movedIDs[id] = true
+		}
 	}
 }
 
@@ -655,7 +680,7 @@ func (p *keptPass) recordMoved() {
 	if !added {
 		return
 	}
-	if err := saveKeptState(p.store, p.st); err != nil {
+	if err := keptPassSave(p.store, p.st); err != nil {
 		log.Printf("box: %s: the kept store's state was not saved after the moves (%v); it is saved again after the store's check", p.box, err)
 	}
 }
@@ -675,15 +700,19 @@ func (p *keptPass) screenStore(ctx context.Context) {
 	inState := map[string]bool{}
 	ids := map[[2]uint64]bool{} // the entries' folders
 	for i, e := range p.st.Kept {
+		id, idErr := keptFolderID(p.shome, e.Path)
+		// By folder, not only by name: on a case-insensitive volume the home's
+		// .Culiops merged into the entry .culiops.
+		movedInto := slices.Contains(p.moved, e.Path) || (idErr == nil && p.movedIDs[id])
 		switch {
-		case again && !slices.Contains(p.moved, e.Path):
+		case again && !movedInto:
 		case e.Status == keptStatusHeld:
 			held = append(held, i)
 		default:
 			kept = append(kept, i)
 		}
 		inState[e.Path] = true
-		if id, err := keptFolderID(p.shome, e.Path); err == nil {
+		if idErr == nil {
 			ids[id] = true
 		}
 	}
@@ -722,9 +751,7 @@ func (p *keptPass) screenStore(ctx context.Context) {
 			return
 		}
 	}
-	if p.opts.screened != nil {
-		p.opts.screened[p.key] = true
-	}
+	p.screenedAll = !again
 }
 
 // screenEntry screens entry i's folder in the store. false: out of time, the
@@ -824,12 +851,26 @@ func (p *keptPass) finish(before KeptState) {
 	})
 	p.st.NotKept = append(p.st.NotKept, p.rows...)
 	saved := false
-	if !reflect.DeepEqual(cleanKeptState(before), cleanKeptState(p.st)) {
-		if err := saveKeptState(p.store, p.st); err != nil {
+	changed := !reflect.DeepEqual(cleanKeptState(before), cleanKeptState(p.st))
+	if changed {
+		err := keptPassSave(p.store, p.st)
+		if err != nil && len(p.held) > 0 {
+			// recordMoved may have saved a folder held now as kept, and a box
+			// created next would mount it: one more try.
+			err = keptPassSave(p.store, p.st)
+			if err != nil {
+				log.Printf("box: ERROR: %s: kept store %s: the state that holds %d folder(s) was not saved (%v); a box created before a later pass saves it may still mount them",
+					p.box, p.key, len(p.held), err)
+			}
+		} else if err != nil {
 			log.Printf("box: %s: the kept store's state was not saved (%v); the next pass records what moved", p.box, err)
-		} else {
-			saved = true
 		}
+		saved = err == nil
+	}
+	// A run skips the full re-screen of a store only when what it found is on
+	// disk: a save that failed leaves the next home of the run to do it again.
+	if p.screenedAll && p.opts.screened != nil && (saved || !changed) {
+		p.opts.screened[p.key] = true
 	}
 	recorded := p.kept
 	if !saved {

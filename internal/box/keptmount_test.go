@@ -117,6 +117,23 @@ func TestKeptMountsSkipsHeld(t *testing.T) {
 	}
 }
 
+// Two kept folders whose names differ only in case are two folders where the
+// volume tells them apart (Linux), and both are mounted; on a volume that
+// ignores case they are one folder, mounted once.
+func TestKeptMountsCaseVariants(t *testing.T) {
+	m := newTestManager(t)
+	st := KeptState{Profile: "p", Workspace: "/w", Kept: keptEntries(keptStatusKept, ".Culiops", ".culiops")}
+	shome := keptSeed(t, m, keptTestKey, st)
+	want := []string{boxHome + "/.Culiops", boxHome + "/.culiops"}
+	if _, err := os.Lstat(filepath.Join(shome, ".CULIOPS")); err == nil {
+		want = want[:1] // one folder under two spellings
+	}
+	got, refs := m.keptMounts(keptTestKey, nil)
+	if !slices.Equal(mountBoxes(got), want) || len(refs) != 0 {
+		t.Fatalf("mounts %q refusals %+v, want %q", mountBoxes(got), refs, want)
+	}
+}
+
 // A kept folder, or a folder on its way, swapped for a link (the macOS VM can
 // write boxstate) is dropped with a refusal, and what it points at is never
 // opened or stat'ed.

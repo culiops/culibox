@@ -1,8 +1,10 @@
 package box
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1070,5 +1072,179 @@ func TestReclaimScreensStoreOncePerRun(t *testing.T) {
 	}
 	if screens != 1 {
 		t.Fatalf("the store's kept folder was screened %d times in one reclaim run, want 1", screens)
+	}
+}
+
+// keptFailSaves makes the pass's next n saves of state.json fail.
+func keptFailSaves(t *testing.T, n *int) {
+	t.Helper()
+	keptHook(t, &keptPassSave, func(store *os.Root, st KeptState) error {
+		if *n > 0 {
+			*n--
+			return errors.New("injected: disk full")
+		}
+		return saveKeptState(store, st)
+	})
+}
+
+// A run marks a store screened only once what the screen found is saved: a
+// failed save leaves the next home of the run to screen it in full again.
+func TestPassScreenedMarkAfterSave(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{
+		{Path: ".culiops", KeptAt: time.Now(), Status: keptStatusKept}}})
+	keptWrite(t, keptStoreHomeDir(m), ".culiops/f", "x")
+	keptWrite(t, home, ".aws/credentials", "[default]\n") // a not-kept row: the state changes
+	fails := 1
+	keptFailSaves(t, &fails)
+	o := keptPassOpts{screened: map[string]bool{}}
+	if _, err := m.keepPassWith(context.Background(), keptTestBox, o); err != nil {
+		t.Fatal(err)
+	}
+	if o.screened[keptTestKey] {
+		t.Fatal("the store is marked screened though the state the screen built was not saved")
+	}
+	if _, err := m.keepPassWith(context.Background(), keptTestBox, o); err != nil {
+		t.Fatal(err)
+	}
+	if !o.screened[keptTestKey] {
+		t.Fatal("a screen that was saved did not mark the store")
+	}
+}
+
+// In a run that screened the store already, an entry a folder was merged into
+// is screened again even when the home spelt it differently (a
+// case-insensitive volume): the match is by folder, not by name.
+func TestPassAgainMatchesMovedByFolder(t *testing.T) {
+	m, _, _, _ := keptPassSetup(t)
+	keptWrite(t, keptStoreHomeDir(m), ".culiops/f", "x")
+	store, err := ensureKeptStore(m.opts.StateRoot, keptTestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	shome, err := keptStoreHome(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shome.Close()
+	id, err := keptFolderID(shome, ".culiops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	screens := 0
+	keptHook(t, &keptOpenHook, func(p string) {
+		if p == ".culiops/f" {
+			screens++
+		}
+	})
+	p := &keptPass{m: m, box: keptTestBox, key: keptTestKey, store: store, shome: shome, now: time.Now(),
+		opts:  keptPassOpts{screened: map[string]bool{keptTestKey: true}},
+		st:    KeptState{Kept: []KeptEntry{{Path: ".culiops", KeptAt: time.Now(), Status: keptStatusKept}}},
+		moved: []string{".Culiops"}, movedIDs: map[[2]uint64]bool{id: true}}
+	p.screenStore(context.Background())
+	if screens != 1 {
+		t.Fatalf("the entry merged into under another spelling was screened %d times, want 1", screens)
+	}
+}
+
+// The same on a volume that ignores case (macOS by default): skipped where
+// the test's temp dir tells names apart by case.
+func TestPassAgainCaseInsensitiveVolume(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	probe := filepath.Join(home, ".casecheck")
+	keptMkdir(t, home, ".casecheck")
+	_, err := os.Lstat(filepath.Join(home, ".CASECHECK"))
+	os.Remove(probe)
+	if err != nil {
+		t.Skip("the temp dir tells names apart by case")
+	}
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{
+		{Path: ".culiops", KeptAt: time.Now(), Status: keptStatusKept}}})
+	keptWrite(t, keptStoreHomeDir(m), ".culiops/f", "x")
+	keptWrite(t, home, ".Culiops/new", "aws_secret_access_key = abc") // merged in under another spelling
+	o := keptPassOpts{screened: map[string]bool{keptTestKey: true}}
+	if _, err := m.keepPassWith(context.Background(), keptTestBox, o); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := keptEntry(keptLoad(t, m), ".culiops"); !ok || e.Status != keptStatusHeld {
+		t.Fatalf("entry %+v %v, want held: what was merged into it is screened", e, ok)
+	}
+}
+
+// A box that was used and gone again while the pass screened (its marker
+// touched after the pass began, past the release's slack) is not moved from.
+func TestPassMoveRefusesBoxUsedDuringPass(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptAgeHome(t, m, keptTestBox, time.Hour)
+	setCap(t, &keptPassUseSlack, 200*time.Millisecond)
+	used := func(string) { // a spawn's release, past the slack into the pass
+		time.Sleep(2 * keptPassUseSlack)
+		m.touchMarker(keptTestBox)
+	}
+	keptHook(t, &keptPassLockHook, used)
+	n, err := m.keepPass(context.Background(), keptTestBox)
+	if n != 0 || !errors.Is(err, errKeptBusy) {
+		t.Fatalf("kept %d, %v; want nothing moved, busy", n, err)
+	}
+	if got := keptRead(t, home, ".culiops/x"); got != "x" {
+		t.Fatal("the folder left the home")
+	}
+	// The release that stopped the box touches the marker as the pass starts:
+	// that is no new use.
+	keptPassLockHook = func(string) { m.touchMarker(keptTestBox) }
+	if n, err := m.keepPass(context.Background(), keptTestBox); n != 1 || err != nil {
+		t.Fatalf("kept %d, %v; want .culiops moved despite the release's own touch", n, err)
+	}
+}
+
+// A folder the re-screen holds after the interim save recorded it kept must
+// not stay mountable when the final save fails once: it is saved again.
+func TestPassHeldSavedAgain(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "clean")
+	keptHook(t, &keptPassMovedHook, func(string) {
+		keptWrite(t, keptStoreHomeDir(m), ".culiops/late", "aws_secret_access_key = abc")
+	})
+	saves := 0
+	keptHook(t, &keptPassSave, func(store *os.Root, st KeptState) error {
+		saves++
+		if saves == 2 { // the final save; the interim one was the first
+			return errors.New("injected: disk full")
+		}
+		return saveKeptState(store, st)
+	})
+	if _, err := m.keepPass(context.Background(), keptTestBox); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := keptEntry(keptLoad(t, m), ".culiops"); !ok || e.Status != keptStatusHeld {
+		t.Fatalf("entry %+v %v, want held after the save was tried again", e, ok)
+	}
+}
+
+// When the final save fails twice, the pass says so at error level: a held
+// folder may still be mountable until a later pass saves the state.
+func TestPassHeldSaveFailsLogsError(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "clean")
+	keptHook(t, &keptPassMovedHook, func(string) {
+		keptWrite(t, keptStoreHomeDir(m), ".culiops/late", "aws_secret_access_key = abc")
+	})
+	saves := 0
+	keptHook(t, &keptPassSave, func(store *os.Root, st KeptState) error {
+		if saves++; saves > 1 {
+			return errors.New("injected: disk full")
+		}
+		return saveKeptState(store, st)
+	})
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	if _, err := m.keepPass(context.Background(), keptTestBox); err != nil {
+		t.Fatal(err)
+	}
+	if saves != 3 || !strings.Contains(logs.String(), "ERROR") || !strings.Contains(logs.String(), "1 folder(s) was not saved") {
+		t.Fatalf("saves %d, log %q; want the final save tried twice and an error line", saves, logs.String())
 	}
 }

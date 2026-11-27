@@ -101,11 +101,19 @@ type keptCandidate struct {
 type keptRefusal struct{ Rel, Reason string }
 
 // keptNameOK reports whether rel can name a kept folder: docker --mount and
-// the macOS VM's YAML can carry it (MountUnsafe on its in-box path), and no
-// component holds a control character, ':', ',' or '"'.
+// the macOS VM's YAML can carry it (MountUnsafe on its in-box path), no
+// component holds a control character, ':', ',' or '"', and none ends in a
+// space or a dot, which not every reader keeps as it is (docker's answers are
+// read back trimmed: a mount destination ending in a space never matches, and
+// its box would be recreated at every reuse).
 func keptNameOK(rel string) bool {
 	if rel == "" || MountUnsafe(boxHome+"/"+rel) != "" {
 		return false
+	}
+	for _, c := range strings.Split(rel, "/") {
+		if strings.HasSuffix(c, " ") || strings.HasSuffix(c, ".") {
+			return false
+		}
 	}
 	return !strings.ContainsFunc(rel, func(r rune) bool {
 		return unicode.IsControl(r) || r == ':' || r == ',' || r == '"'

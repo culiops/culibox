@@ -262,7 +262,7 @@ func TestCandidatesHoldsCuliBoxMount(t *testing.T) {
 
 func TestCandidatesNameNotAllowed(t *testing.T) {
 	dir, home := keptHome(t)
-	bad := []string{".a,b", ".a:b", `.a"b`, ".a\tb", ".config/a,b"}
+	bad := []string{".a,b", ".a:b", `.a"b`, ".a\tb", ".config/a,b", ".trail ", ".config/dot."}
 	for _, rel := range bad {
 		keptWrite(t, dir, rel+"/f", "x")
 	}
@@ -297,6 +297,11 @@ func TestKeptNameOK(t *testing.T) {
 		".config/a:b":         false,
 		".bad\xffutf8":        false,
 		".local/share/ok-1.2": true,
+		".a b":                true,
+		".a ":                 false, // a trailing space or dot: docker and the VM can read it another way
+		".a.":                 false,
+		".config/a ":          false,
+		".local/share/x.":     false,
 	} {
 		if got := keptNameOK(rel); got != want {
 			t.Errorf("keptNameOK(%q) = %v, want %v", rel, got, want)
