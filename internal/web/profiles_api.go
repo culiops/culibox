@@ -59,6 +59,10 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		s.handleConvertAWS(w, r, base)
 		return
 	}
+	if base, sub, ok := keptRoute(name); ok {
+		s.handleKept(w, r, base, sub)
+		return
+	}
 	if name == "" {
 		writeErr(w, http.StatusBadRequest, "name required")
 		return

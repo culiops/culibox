@@ -1,0 +1,666 @@
+package box
+
+// The kept-folder stores (keptstore.go) as the profile view and doctor read
+// them, and the user's forget.
+//
+// Everything in a store was written by a box, or, on macOS, can be written by
+// the VM, which shares boxstate read-write. So a read here is a read of
+// hostile input: state.json is read no-follow with a size cap and cleaned
+// (loadKeptState), every path is checked again (validKeptRel), and every
+// directory is reached one descriptor at a time and never through a link
+// (keptOpenRootPath). os.Root alone is not enough: it follows a link that
+// stays inside it when the link is a middle component.
+//
+// The view reads state.json and nothing under home/: sizes and file counts
+// are the ones the keep pass's screen counted. The only directories it lists
+// are .kept (to find the stores) and each store's clash/ (to find older
+// copies); a kept folder is listed only by the one-directory listing the web
+// layer asks for (KeptOpenRoot).
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"math"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+// View bounds. Variables so tests can lower them.
+var (
+	keptViewMaxStores     = 256 // stores read per call
+	keptViewMaxClashBoxes = 64  // clash/<box> folders looked at per store
+)
+
+// keptViewListHook, when set (tests only), runs before every directory the
+// view lists, with its path under boxstate/.kept's parent (".kept") or under
+// .kept ("<key>/clash").
+var keptViewListHook func(rel string)
+
+var (
+	// ErrKeptInUse: a box whose record names the store is running, or has a
+	// session, so its kept folders are mounted and cannot be forgotten now.
+	ErrKeptInUse = errors.New("box: a box of this kept store is running")
+	// ErrKeptRunUnknown: whether a box of the store runs could not be read
+	// (docker did not answer, a record could not be listed). Nothing changed.
+	ErrKeptRunUnknown = errors.New("box: could not tell whether a box of this kept store is running")
+	// ErrKeptNotRemoved: the folder is forgotten (not kept, not mounted, not
+	// listed any more), but some of its files could not be removed from the
+	// store and stay on disk there.
+	ErrKeptNotRemoved = errors.New("box: the folder is forgotten, but some of its files could not be removed")
+)
+
+// keptAuditForget is the audit action of a forget. detail: path=<p>.
+const keptAuditForget = "box_kept_forget"
+
+// KeptStoreView is one store as the profile view and doctor show it, read
+// from its state.json only. Profile, Workspace and Account are set only when
+// the state hashes to the store's key (keptStateAttribution): a store whose
+// state names someone else names nobody. Every path, reason and box name in
+// it was chosen by a box: it is data, shown as text, never markup.
+type KeptStoreView struct {
+	Key       string           `json:"key"`
+	Profile   string           `json:"profile"`
+	Workspace string           `json:"workspace"`
+	Account   string           `json:"account"`
+	Kept      []KeptEntry      `json:"kept"`
+	NotKept   []KeptRefusalRow `json:"not_kept"`
+	// Clashes are the older copies of kept folders, as store-relative folder
+	// paths clash/<box>/<rel> that KeptOpenRoot opens. Filled by
+	// Manager.KeptStores only.
+	Clashes []string `json:"clashes"`
+	// TotalBytes is the sum of the kept entries' Bytes (saturating).
+	TotalBytes int64 `json:"total_bytes"`
+}
+
+// ReadKeptStores reads the state of every store under stateRoot, at most
+// keptViewMaxStores of them, in key order. instance is the box instance the
+// keys hash with. A store whose state cannot be read is left out; the error
+// says which, and that more stores were there than were read. Clashes is
+// left empty: it is not state.
+func ReadKeptStores(stateRoot, instance string) ([]KeptStoreView, error) {
+	state, err := os.OpenRoot(filepath.Join(stateRoot, stateDirName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("box: kept stores: %w", err)
+	}
+	defer state.Close()
+	keys, err := keptStoreKeys(state)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("box: kept stores: %w", err)
+	}
+	var errs []error
+	if len(keys) > keptViewMaxStores {
+		errs = append(errs, fmt.Errorf("box: %d kept stores; only the first %d are read", len(keys), keptViewMaxStores))
+		keys = keys[:keptViewMaxStores]
+	}
+	views := make([]KeptStoreView, 0, len(keys))
+	for _, key := range keys {
+		v, err := readKeptStoreView(state, instance, key)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("box: kept store %s: %w", key, err))
+			continue
+		}
+		views = append(views, v)
+	}
+	return views, errors.Join(errs...)
+}
+
+// keptStoreKeys lists the store keys in .kept, sorted.
+func keptStoreKeys(state *os.Root) ([]string, error) {
+	if keptViewListHook != nil {
+		keptViewListHook(keptDirName)
+	}
+	d, _, err := keptOpenPath(state, keptDirName)
+	if err != nil {
+		return nil, err
+	}
+	names, err := keptReadNames(d)
+	d.Close()
+	if err != nil {
+		return nil, err
+	}
+	keys := slices.DeleteFunc(names, func(n string) bool { return !ValidConversationsKey(n) })
+	slices.Sort(keys)
+	return keys, nil
+}
+
+// readKeptStoreView reads store key's state into its view.
+func readKeptStoreView(state *os.Root, instance, key string) (KeptStoreView, error) {
+	store, err := keptOpenRootPath(state, keptDirName+"/"+key)
+	if err != nil {
+		return KeptStoreView{}, err
+	}
+	defer store.Close()
+	st, err := loadKeptState(store)
+	if err != nil {
+		return KeptStoreView{}, err
+	}
+	return keptView(instance, key, st), nil
+}
+
+func keptView(instance, key string, st KeptState) KeptStoreView {
+	v := KeptStoreView{Key: key, Kept: st.Kept, NotKept: st.NotKept, Clashes: []string{}}
+	if v.Kept == nil {
+		v.Kept = []KeptEntry{}
+	}
+	if v.NotKept == nil {
+		v.NotKept = []KeptRefusalRow{}
+	}
+	if p, w, a, ok := keptStateAttribution(instance, key, st); ok {
+		v.Profile, v.Workspace, v.Account = p, w, a
+	}
+	for _, e := range v.Kept { // cleanKeptState made every Bytes >= 0
+		if v.TotalBytes > math.MaxInt64-e.Bytes {
+			v.TotalBytes = math.MaxInt64
+		} else {
+			v.TotalBytes += e.Bytes
+		}
+	}
+	return v
+}
+
+// KeptStores is the stores of profile (ReadKeptStores, filtered to the ones
+// whose state hashes to their key and names profile), with their clash copies.
+// What could not be read is logged and left out.
+func (m *Manager) KeptStores(profile string) []KeptStoreView {
+	if profile == "" {
+		return nil
+	}
+	views, err := ReadKeptStores(m.opts.StateRoot, m.opts.Instance)
+	if err != nil {
+		log.Printf("box: reading the kept stores: %v", err)
+	}
+	var out []KeptStoreView
+	for _, v := range views {
+		if v.Profile != profile {
+			continue
+		}
+		v.Clashes = keptClashes(m.opts.StateRoot, v.Key, v.Kept)
+		out = append(out, v)
+	}
+	return out
+}
+
+// KeptStore is store key's view when it is profile's (as KeptStores decides),
+// read from its own state.json alone. Clashes is left empty.
+func (m *Manager) KeptStore(profile, key string) (KeptStoreView, bool) {
+	if profile == "" || !ValidConversationsKey(key) {
+		return KeptStoreView{}, false
+	}
+	state, err := os.OpenRoot(filepath.Join(m.opts.StateRoot, stateDirName))
+	if err != nil {
+		return KeptStoreView{}, false
+	}
+	defer state.Close()
+	v, err := readKeptStoreView(state, m.opts.Instance, key)
+	if err != nil || v.Profile != profile {
+		return KeptStoreView{}, false
+	}
+	return v, true
+}
+
+// keptClashes lists, for each clash/<box> of store key (box names only, at
+// most keptViewMaxClashBoxes, in name order), which kept paths have an older
+// copy there: a real directory clash/<box>/<rel>, reached without a link. The
+// store's clash/ is the only directory listed; nothing below is.
+func keptClashes(stateRoot, key string, kept []KeptEntry) []string {
+	out := []string{}
+	if len(kept) == 0 {
+		return out
+	}
+	store, err := keptOpenStore(stateRoot, key)
+	if err != nil {
+		return out
+	}
+	defer store.Close()
+	clash, err := keptOpenRootPath(store, keptClashDirName)
+	if err != nil {
+		return out
+	}
+	defer clash.Close()
+	if keptViewListHook != nil {
+		keptViewListHook(key + "/" + keptClashDirName)
+	}
+	boxes, err := keptBoxDirs(clash)
+	if err != nil {
+		return out
+	}
+	if len(boxes) > keptViewMaxClashBoxes {
+		boxes = boxes[:keptViewMaxClashBoxes]
+	}
+	for _, b := range boxes {
+		for _, e := range kept {
+			d, _, err := keptOpenPath(clash, b+"/"+e.Path)
+			if err != nil {
+				continue
+			}
+			d.Close()
+			out = append(out, keptClashDirName+"/"+b+"/"+e.Path)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// keptBoxDirs lists the names in root that are box names, sorted.
+func keptBoxDirs(root *os.Root) ([]string, error) {
+	d, err := openDirIn(root, ".")
+	if err != nil {
+		return nil, err
+	}
+	names, err := keptReadNames(d)
+	d.Close()
+	if err != nil {
+		return nil, err
+	}
+	names = slices.DeleteFunc(names, func(n string) bool { return !isBoxName(n) })
+	slices.Sort(names)
+	return names, nil
+}
+
+// KeptSplitPath splits p, a path the profile view names inside a store, into
+// the folder KeptOpenRoot opens and the path below it ("." for the folder
+// itself). p is <rel>[/<inner>], a kept folder (validKeptRel) and a path in
+// it, or clash/<box>/<rel>[/<inner>], an older copy of one. It must be clean
+// and local. The kept folder is the shortest leading part of p that is one:
+// the four levels make that unique.
+func KeptSplitPath(p string) (folder, inner string, ok bool) {
+	if p == "" || p == "." || !filepath.IsLocal(p) || path.Clean(p) != p {
+		return "", "", false
+	}
+	parts := strings.Split(p, "/")
+	prefix := ""
+	if parts[0] == keptClashDirName {
+		if len(parts) < 3 || !isBoxName(parts[1]) {
+			return "", "", false
+		}
+		prefix, parts = parts[0]+"/"+parts[1]+"/", parts[2:]
+	}
+	for n := 1; n <= 3 && n <= len(parts); n++ {
+		rel := strings.Join(parts[:n], "/")
+		if !validKeptRel(rel) {
+			continue
+		}
+		inner = "."
+		if n < len(parts) {
+			inner = strings.Join(parts[n:], "/")
+		}
+		return prefix + rel, inner, true
+	}
+	return "", "", false
+}
+
+// keptFolderRel is the store-relative path of the folder rel names: a kept
+// folder (home/<rel>) or an older copy of one (clash/<box>/<rel>).
+func keptFolderRel(rel string) (string, bool) {
+	if validKeptRel(rel) {
+		return keptHomeDirName + "/" + rel, true
+	}
+	rest, ok := strings.CutPrefix(rel, keptClashDirName+"/")
+	if !ok {
+		return "", false
+	}
+	b, krel, ok := strings.Cut(rest, "/")
+	if !ok || !isBoxName(b) || !validKeptRel(krel) {
+		return "", false
+	}
+	return rel, true
+}
+
+// KeptOpenRoot opens the folder rel of store key as a root: a kept folder
+// (rel passes validKeptRel) or an older copy of one (clash/<box>/<rel>). Every
+// directory from boxstate down to it is reached one descriptor at a time, a
+// real directory and never a link (keptOpenRootPath). The root still follows
+// a link inside the folder when a path through it has one in the middle, so
+// a caller opens what is below it one descriptor at a time too
+// (boxread.OpenIn, boxread.ReadDirIn). fs.ErrNotExist for a key or rel that
+// cannot name a folder. The caller closes the root.
+func (m *Manager) KeptOpenRoot(key, rel string) (*os.Root, error) {
+	sub, ok := keptFolderRel(rel)
+	if !ValidConversationsKey(key) || !ok {
+		return nil, fs.ErrNotExist
+	}
+	store, err := keptOpenStore(m.opts.StateRoot, key)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return keptOpenRootPath(store, sub)
+}
+
+// keptOpenStore opens store key, never creating it.
+func keptOpenStore(stateRoot, key string) (*os.Root, error) {
+	if !ValidConversationsKey(key) {
+		return nil, fs.ErrNotExist
+	}
+	state, err := os.OpenRoot(filepath.Join(stateRoot, stateDirName))
+	if err != nil {
+		return nil, err
+	}
+	defer state.Close()
+	return keptOpenRootPath(state, keptDirName+"/"+key)
+}
+
+// keptOpenRootPath opens the directory rel (clean, local, not ".") under root
+// as a root of its own, one component at a time: each is checked with
+// keptOpenPath (fstatat no-follow on its parent's descriptor: a real
+// directory, never a link), opened as a root of that one name, and checked to
+// be the directory just seen (keptRootIs). A name with more than one
+// component is never handed to os.Root, which would follow a link in its
+// middle. A link is errKeptLink, a non-directory errKeptNotDir, a missing
+// component fs.ErrNotExist.
+func keptOpenRootPath(root *os.Root, rel string) (*os.Root, error) {
+	if rel == "" || rel == "." || !filepath.IsLocal(rel) || filepath.Clean(rel) != rel {
+		return nil, fmt.Errorf("box: %q is not a clean relative path", rel)
+	}
+	cur := root
+	for _, c := range strings.Split(rel, "/") {
+		d, st, err := keptOpenPath(cur, c)
+		if err != nil {
+			if cur != root {
+				cur.Close()
+			}
+			return nil, err
+		}
+		d.Close()
+		next, err := cur.OpenRoot(c)
+		if cur != root {
+			cur.Close()
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !keptRootIs(next, st) {
+			next.Close()
+			return nil, fmt.Errorf("box: %s: %w", keptShow(rel), errKeptChanged)
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+// lockWithin takes mu, or returns ctx's error if ctx ends first. An abandoned
+// wait still takes mu when it frees up, and gives it straight back (as
+// lockOp does for opMu).
+func lockWithin(ctx context.Context, mu *sync.Mutex) error {
+	if mu.TryLock() {
+		return nil
+	}
+	got := make(chan struct{})
+	go func() {
+		mu.Lock()
+		close(got)
+	}()
+	select {
+	case <-got:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-got
+			mu.Unlock()
+		}()
+		return ctx.Err()
+	}
+}
+
+// KeptForget forgets the kept folder rel of store key, on the user's word:
+// its home/<rel> and every older copy of it (clash/<box>/<rel>, and the
+// numbered <rel>~N) are removed, its entry and not-kept rows go, and rel is
+// added to the store's forgotten list, so no keep pass keeps it again. The
+// audit row box_kept_forget names the store's profile (keptStateAttribution),
+// else "unknown".
+//
+// It takes the store's lock first and opMu after it, the keep pass's order,
+// and it is refused with ErrKeptInUse while any box whose record names the
+// store runs or has a session (its folders are mounted): the check and the
+// state's save happen under opMu, so no box is created between them, and a
+// box created after mounts nothing of rel (ensure reads state.json under
+// opMu). The removal runs after opMu is let go, under the store's lock only:
+// a large folder must not hold every spawn. When some of it cannot be
+// removed the error is ErrKeptNotRemoved: rel is forgotten all the same, and
+// a forget of rel again tries the rest while anything is left at home/<rel>.
+//
+// fs.ErrNotExist when key or rel cannot name a kept folder, or the store has
+// neither an entry nor a folder for rel. ErrKeptRunUnknown when whether a box
+// runs could not be read. A state that cannot be read is never written over.
+func (m *Manager) KeptForget(ctx context.Context, key, rel string) error {
+	if !ValidConversationsKey(key) || !validKeptRel(rel) {
+		return fs.ErrNotExist
+	}
+	mu := m.keptStoreLock(key)
+	if err := lockWithin(ctx, mu); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+	store, err := keptOpenStore(m.opts.StateRoot, key)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	st, err := loadKeptState(store)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(st.Kept, func(e KeptEntry) bool { return e.Path == rel }) && !keptPresent(store, rel) {
+		return fs.ErrNotExist
+	}
+	next := keptCopy(st)
+	next.Kept = slices.DeleteFunc(next.Kept, func(e KeptEntry) bool { return e.Path == rel })
+	next.NotKept = slices.DeleteFunc(next.NotKept, func(r KeptRefusalRow) bool { return strings.EqualFold(r.Path, rel) })
+	if !keptFoldIn(rel, next.Forgotten) {
+		next.Forgotten = append(next.Forgotten, rel)
+	}
+
+	if err := m.lockOp(ctx); err != nil {
+		return err
+	}
+	err = m.keptNoneRunning(ctx, key)
+	if err == nil {
+		err = saveKeptState(store, next)
+	}
+	m.opMu.Unlock()
+	if err != nil {
+		return err
+	}
+	m.keptForgetAudit(key, next, rel)
+	log.Printf("box: kept store %s: forgot %q on the user's word; it is not kept again", key, rel)
+	if err := keptRemoveCopies(ctx, store, rel); err != nil {
+		log.Printf("box: kept store %s: %q is forgotten, but some of its files stay in the store: %v", key, rel, err)
+		return fmt.Errorf("%w: %v", ErrKeptNotRemoved, err)
+	}
+	return nil
+}
+
+// keptPresent reports whether the store's home/ has anything at rel, reached
+// without a link (a link there counts, as itself).
+func keptPresent(store *os.Root, rel string) bool {
+	dir := keptHomeDirName
+	if d := path.Dir(rel); d != "." {
+		dir += "/" + d
+	}
+	parent, err := keptOpenRootPath(store, dir)
+	if err != nil {
+		return false
+	}
+	defer parent.Close()
+	_, err = parent.Lstat(path.Base(rel)) // one name: nothing to follow
+	return err == nil
+}
+
+// keptNoneRunning returns ErrKeptInUse when a box whose record names store
+// key, or whose record cannot be read (it may), has a session or a running
+// container, and ErrKeptRunUnknown when that cannot be told. The caller holds
+// opMu.
+func (m *Manager) keptNoneRunning(ctx context.Context, key string) error {
+	state, err := os.OpenRoot(filepath.Join(m.opts.StateRoot, stateDirName))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrKeptRunUnknown, err)
+	}
+	defer state.Close()
+	d, _, err := keptOpenPath(state, keptDirName+"/"+keptBoxesDirName)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // no box was ever created with a store
+	}
+	if err != nil {
+		return fmt.Errorf("%w: the box records: %v", ErrKeptRunUnknown, err)
+	}
+	names, err := keptReadNames(d)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("%w: the box records: %v", ErrKeptRunUnknown, err)
+	}
+	for _, name := range names {
+		if !isBoxName(name) {
+			continue // a record's temp file
+		}
+		if rec, ok := readKeptBoxRecord(m.opts.StateRoot, name); ok && rec.Key != key {
+			continue
+		}
+		if !m.idle(name) {
+			return fmt.Errorf("%w: %s has a session", ErrKeptInUse, name)
+		}
+		st, err := m.opts.Client.Inspect(ctx, name)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrKeptRunUnknown, name, err)
+		}
+		if st == StateRunning {
+			return fmt.Errorf("%w: %s", ErrKeptInUse, name)
+		}
+	}
+	return nil
+}
+
+// keptForgetAudit writes the forget's audit row. A failure is logged: the
+// forget has happened either way.
+func (m *Manager) keptForgetAudit(key string, st KeptState, rel string) {
+	if m.opts.Audit == nil {
+		return
+	}
+	name, _, _, ok := keptStateAttribution(m.opts.Instance, key, st)
+	if !ok {
+		name = "unknown"
+	}
+	if err := m.opts.Audit(keptAuditForget, name, "path="+rel); err != nil {
+		log.Printf("box: kept store %s: audit row %s not written: %v", key, keptAuditForget, err)
+	}
+}
+
+// keptRemoveCopies removes home/<rel> and the older copies of rel in every
+// clash/<box> of the store (a box name, reached without a link).
+func keptRemoveCopies(ctx context.Context, store *os.Root, rel string) error {
+	var errs []error
+	if err := keptRemoveIn(ctx, store, keptHomeDirName+"/"+rel, false); err != nil {
+		errs = append(errs, err)
+	}
+	clash, err := keptOpenRootPath(store, keptClashDirName)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errKeptLink) || errors.Is(err, errKeptNotDir):
+		// None of the store's own there: a link is never followed.
+		return errors.Join(errs...)
+	case err != nil:
+		return errors.Join(append(errs, err)...)
+	}
+	defer clash.Close()
+	boxes, err := keptBoxDirs(clash)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	for _, b := range boxes {
+		if err := keptRemoveIn(ctx, clash, b+"/"+rel, true); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// keptRemoveIn removes rel (two components or more) under root: its parent is
+// reached by keptOpenRootPath, so a link or a non-directory on the way means
+// there is nothing of the store's to remove. numbered also removes the
+// numbered clash copies <name>~2 .. <name>~keptClashTries beside it.
+func keptRemoveIn(ctx context.Context, root *os.Root, rel string, numbered bool) error {
+	parent, err := keptOpenRootPath(root, path.Dir(rel))
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errKeptLink) || errors.Is(err, errKeptNotDir) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	base := path.Base(rel)
+	names := []string{base}
+	if numbered {
+		all, err := keptAllNames(parent)
+		if err != nil {
+			return err
+		}
+		for _, n := range all {
+			if keptNumbered(n, base) {
+				names = append(names, n)
+			}
+		}
+	}
+	var errs []error
+	for _, n := range names {
+		if err := keptRemoveOne(ctx, parent, n); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %s", strconv.Quote(path.Join(path.Dir(rel), n)), removalCause(err)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// keptAllNames lists root's own directory.
+func keptAllNames(root *os.Root) ([]string, error) {
+	d, err := openDirIn(root, ".")
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	return keptReadNames(d)
+}
+
+// keptNumbered reports whether n is base~k for k in 2..keptClashTries, as
+// toClash names a later copy.
+func keptNumbered(n, base string) bool {
+	k, ok := strings.CutPrefix(n, base+"~")
+	if !ok {
+		return false
+	}
+	i, err := strconv.Atoi(k)
+	return err == nil && i >= 2 && i <= keptClashTries && strconv.Itoa(i) == k
+}
+
+// keptRemoveOne removes the entry name of parent and all below it.
+// os.Root.RemoveAll of a single name resolves nothing: it unlinks the name
+// from parent's own descriptor, and below it walks by descriptor, opening
+// each directory with O_NOFOLLOW|O_DIRECTORY and unlinking a link as the link
+// (Go's removeAllFrom), so it never follows a link inside the tree. A tree it
+// cannot empty (directories without write permission, a Go module cache) is
+// made removable and removed again, as reclaim does (makeRemovable). That walk
+// is through a root on the folder itself, so the most a link swapped in can
+// redirect it to is another directory of the same doomed folder.
+func keptRemoveOne(ctx context.Context, parent *os.Root, name string) error {
+	err := parent.RemoveAll(name)
+	if err == nil {
+		return nil
+	}
+	sub, serr := keptOpenRootPath(parent, name)
+	if serr != nil {
+		return err
+	}
+	makeRemovable(ctx, sub, ".")
+	sub.Close()
+	return parent.RemoveAll(name)
+}

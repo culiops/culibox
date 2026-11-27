@@ -24,6 +24,7 @@ var removeAllSites = map[string]int{
 	"internal/web/fsops.go":               1, // the file tree's user-confirmed delete (a person's action, not cleanup)
 	"internal/box/boxout.go":              1, // box output dirs under the state root
 	"internal/box/reclaim.go":             3, // a box's home and out dirs under the state root (one call in a loop over those two paths), and one of four fixed cache paths inside a home through an os.Root, never through a symlink (two calls: the retry after the chmod walk)
+	"internal/box/keptview.go":            2, // the user's forget of a kept folder: one validated kept name (or its numbered clash copy) under boxstate/.kept/<key>/home or clash/<box>, removed from a parent reached one descriptor at a time, never through a link (two calls: the retry after the chmod walk)
 	"internal/clone/create.go":            1, // the temp dir a new clone is built in, before it is renamed into place
 	"internal/doctor/doctor.go":           1, // doctor's throwaway probe dir
 	"internal/upgradebackup/copy.go":      1, // a leftover backups/.tmp-* dir, through an os.Root on the data root: only upgrade-backup copies of small files, never a clone dir (clone-dirs is copied as a file)

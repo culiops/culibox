@@ -123,6 +123,11 @@ type Server struct {
 	// untrusted and is sanitized before it reaches the quota display.
 	BoxFiles func(rel string, max int64) []session.BoxFile
 
+	// Kept is the box manager's kept-folder stores, behind
+	// /api/profiles/{name}/kept. Nil (no box layer) → no store is shown and
+	// none can be read or forgotten. Never a typed nil.
+	Kept KeptService
+
 	// BoxTrees reports, per fs request, the host trees a box can write: denied
 	// ones are refused, contained ones (boxed workspaces) are served only through
 	// os.Root so a box-planted symlink cannot reach host files. Nil → no boxed

@@ -1012,6 +1012,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Version: version,
 		Commit:  buildCommit(),
 	}
+	// The profile view's kept box folders; none without the box layer.
+	if boxes != nil {
+		srv.Kept = boxes // never a typed nil
+	}
 	// A companion shell runs the verified quick-shell profile, read when used.
 	api.QuickShell = srv.QuickShell
 	// The macOS VM state for the New session dialog; nil without the box layer.
