@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS ingest_state (
   size INTEGER NOT NULL,
   read_offset INTEGER NOT NULL,
   mtime INTEGER NOT NULL,
-  seen_ids TEXT NOT NULL DEFAULT ''
+  seen_ids TEXT NOT NULL DEFAULT '',
+  backfilled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS session_rollup (
   day TEXT NOT NULL,
@@ -70,6 +71,39 @@ CREATE TABLE IF NOT EXISTS attribution_rollup (
 );
 CREATE INDEX IF NOT EXISTS idx_session_day ON session_rollup(day);
 CREATE INDEX IF NOT EXISTS idx_attr_day ON attribution_rollup(day);
+` + schemaV3Tables
+
+// schemaV3Tables are the tables schema version 3 adds. They are a separate
+// constant because the v2 -> v3 migration runs them alone, on top of a DB whose
+// other tables must stay exactly as they are.
+const schemaV3Tables = `
+CREATE TABLE IF NOT EXISTS session_dim (
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  cwd        TEXT NOT NULL DEFAULT '',
+  branch     TEXT NOT NULL DEFAULT '',
+  runtime    TEXT NOT NULL DEFAULT '',
+  account    TEXT NOT NULL DEFAULT '',
+  root_key   TEXT NOT NULL DEFAULT '',
+  workspace  TEXT NOT NULL DEFAULT '',
+  unmatched  INTEGER NOT NULL DEFAULT 0,
+  profile    TEXT NOT NULL DEFAULT '',
+  via        TEXT NOT NULL DEFAULT '',
+  via_path   TEXT NOT NULL DEFAULT '',
+  parsed     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, project)
+);
+CREATE TABLE IF NOT EXISTS driver_rollup (
+  day TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  parent TEXT NOT NULL DEFAULT '',
+  cost_usd REAL NOT NULL DEFAULT 0,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, session_id, project, kind, name, parent)
+);
 `
 
 // Open opens (creating if needed) the analytics DB at path and ensures the schema.
@@ -97,23 +131,40 @@ func Open(path string) (*Store, error) {
 // schemaVersion is the PRAGMA user_version this code writes. Version 2 stores the
 // per-message cost and the 1h cache-write split, and counts each message once;
 // rollups written before that (version 0) are ~2x inflated and are rebuilt.
-const schemaVersion = 2
+// Version 3 adds session_dim, driver_rollup and ingest_state.backfilled and keeps
+// every existing row.
+const schemaVersion = 3
 
-// migrate brings a DB to schemaVersion. A DB from before v2 is not converted: its
-// numbers are wrong, so the analytics tables are dropped and the next ingest pass
-// rebuilds them from the transcripts on disk (ingest_state is empty, so every
-// transcript is read from offset 0). The old DB is first copied to
-// <path>.pre-dedupe.bak through SQLite (VACUUM INTO — a consistent snapshot that
-// includes the WAL, safe while the DB is live). The backup is made once and never
-// overwritten. If it cannot be made, nothing is dropped and the error is returned.
+// migrate brings a DB to schemaVersion.
+//
+// A DB from before v2 is not converted: its numbers are wrong, so the analytics
+// tables are dropped and the next ingest pass rebuilds them from the transcripts
+// on disk (ingest_state is empty, so every transcript is read from offset 0). The
+// old DB is first copied to <path>.pre-dedupe.bak through SQLite (VACUUM INTO — a
+// consistent snapshot that includes the WAL, safe while the DB is live). The
+// backup is made once and never overwritten. If it cannot be made, nothing is
+// dropped and the error is returned. That path creates the current (v3) schema.
+//
+// A v2 DB is only added to: its session_rollup history may outlive the
+// transcripts it came from, so nothing is dropped or rewritten (migrateV2ToV3).
 func migrate(db *sql.DB, path string) error {
 	var version int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
-	if version >= schemaVersion {
+	switch {
+	case version >= schemaVersion:
 		return nil
+	case version < 2:
+		return migrateRebuild(db, path)
+	default:
+		return migrateV2ToV3(db, path)
 	}
+}
+
+// migrateRebuild is the pre-v2 path: back up, drop the analytics tables, create
+// the current schema. A brand-new DB takes it too, with nothing to back up or drop.
+func migrateRebuild(db *sql.DB, path string) error {
 	var existing int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('ingest_state','session_rollup','attribution_rollup')`).Scan(&existing); err != nil {
 		return fmt.Errorf("inspect schema: %w", err)
@@ -148,6 +199,41 @@ func migrate(db *sql.DB, path string) error {
 	if rebuilt {
 		log.Printf("analytics: schema v2 — rebuilt rollups from transcripts (backup %s)", path+".pre-dedupe.bak")
 	}
+	return nil
+}
+
+// migrateV2ToV3 adds session_dim, driver_rollup and ingest_state.backfilled and
+// sets user_version = 3, in one transaction, after a one-time backup to
+// <path>.pre-v3.bak. Nothing is dropped; existing rows get backfilled = 0.
+func migrateV2ToV3(db *sql.DB, path string) error {
+	bak := path + ".pre-v3.bak"
+	if err := backupOnce(db, bak); err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(schemaV3Tables); err != nil {
+		return fmt.Errorf("schema v3 tables: %w", err)
+	}
+	var has int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ingest_state') WHERE name='backfilled'`).Scan(&has); err != nil {
+		return fmt.Errorf("inspect ingest_state: %w", err)
+	}
+	if has == 0 {
+		if _, err := tx.Exec(`ALTER TABLE ingest_state ADD COLUMN backfilled INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add ingest_state.backfilled: %w", err)
+		}
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("analytics: schema v3 — added session and cost-driver tables, kept all rows (backup %s)", bak)
 	return nil
 }
 

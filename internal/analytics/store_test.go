@@ -341,8 +341,8 @@ func TestOpenMigratesOnceAndBacksUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := userVersion(t, s); v != 2 {
-		t.Errorf("user_version = %d, want 2", v)
+	if v := userVersion(t, s); v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
 	}
 	for _, tbl := range []string{"session_rollup", "ingest_state", "attribution_rollup"} {
 		if n := countRows(t, path, tbl); n != 0 {
@@ -422,8 +422,8 @@ func TestOpenFreshDBMakesNoBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := userVersion(t, s); v != 2 {
-		t.Errorf("user_version = %d, want 2", v)
+	if v := userVersion(t, s); v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
 	}
 	if _, err := os.Stat(path + ".pre-dedupe.bak"); !os.IsNotExist(err) {
 		t.Errorf("fresh DB made a backup: %v", err)
@@ -465,6 +465,213 @@ func TestOpenBackupPathWithQuote(t *testing.T) {
 	defer s.Close()
 	if n := countRows(t, path+".pre-dedupe.bak", "session_rollup"); n != 1 {
 		t.Errorf("backup rows = %d, want 1", n)
+	}
+}
+
+// schemaV2 is the analytics schema at user_version 2 (before session_dim,
+// driver_rollup and ingest_state.backfilled), copied verbatim so the v2 -> v3
+// migration is tested against what shipped.
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS ingest_state (
+  path TEXT PRIMARY KEY,
+  size INTEGER NOT NULL,
+  read_offset INTEGER NOT NULL,
+  mtime INTEGER NOT NULL,
+  seen_ids TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS session_rollup (
+  day TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read INTEGER NOT NULL DEFAULT 0,
+  cache_creation INTEGER NOT NULL DEFAULT 0,
+  cache_creation_1h INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  prompts INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, session_id, project, model)
+);
+CREATE TABLE IF NOT EXISTS attribution_rollup (
+  day TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  records INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, session_id, project, kind, name)
+);
+CREATE INDEX IF NOT EXISTS idx_session_day ON session_rollup(day);
+CREATE INDEX IF NOT EXISTS idx_attr_day ON attribution_rollup(day);
+`
+
+// makeV2DB builds a version-2 DB with 3 session_rollup, 2 attribution_rollup and
+// 2 ingest_state rows, then closes it. It returns the summed session cost.
+func makeV2DB(t *testing.T, path string) float64 {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, q := range []string{
+		schemaV2,
+		`INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES ('/t/a.jsonl',10,10,1,'m1 m2'),('/t/b.jsonl',20,15,2,'')`,
+		`INSERT INTO session_rollup(day,session_id,project,model,input_tokens,cost_usd,prompts) VALUES
+		  ('2026-08-05','S1','p','m1',100,1.25,2),
+		  ('2026-08-05','S1','p','m2',200,2.5,1),
+		  ('2026-08-06','S2','q','m1',300,0.125,4)`,
+		`INSERT INTO attribution_rollup VALUES ('2026-08-05','S1','p','skill','x',3),('2026-08-06','S2','q','agent','y',1)`,
+		`PRAGMA user_version = 2`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return 1.25 + 2.5 + 0.125
+}
+
+func tableExists(t *testing.T, s *Store, name string) bool {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n == 1
+}
+
+// A version-2 DB keeps every row: v3 only adds tables and a column.
+func TestMigrateV2ToV3KeepsRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	wantCost := makeV2DB(t, path)
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	for tbl, want := range map[string]int{"session_rollup": 3, "attribution_rollup": 2, "ingest_state": 2} {
+		if n := countRows(t, path, tbl); n != want {
+			t.Errorf("%s rows = %d, want %d", tbl, n, want)
+		}
+	}
+	var cost float64
+	if err := s.db.QueryRow(`SELECT SUM(cost_usd) FROM session_rollup`).Scan(&cost); err != nil {
+		t.Fatal(err)
+	}
+	if cost != wantCost {
+		t.Errorf("SUM(cost_usd) = %v, want %v", cost, wantCost)
+	}
+	if v := userVersion(t, s); v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
+	}
+	fi, err := os.Stat(path + ".pre-v3.bak")
+	if err != nil {
+		t.Fatalf("pre-v3 backup: %v", err)
+	}
+	if !fi.Mode().IsRegular() {
+		t.Errorf("pre-v3 backup is not a regular file: %v", fi.Mode())
+	}
+	if n := countRows(t, path+".pre-v3.bak", "session_rollup"); n != 3 {
+		t.Errorf("backup session_rollup rows = %d, want 3", n)
+	}
+	if _, err := os.Stat(path + ".pre-dedupe.bak"); !os.IsNotExist(err) {
+		t.Errorf("v2 -> v3 must not take the rebuild backup: %v", err)
+	}
+	for _, tbl := range []string{"session_dim", "driver_rollup"} {
+		if !tableExists(t, s, tbl) {
+			t.Errorf("table %s missing", tbl)
+		}
+	}
+	var withBackfilled0 int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ingest_state WHERE backfilled = 0`).Scan(&withBackfilled0); err != nil {
+		t.Fatal(err)
+	}
+	if withBackfilled0 != 2 {
+		t.Errorf("ingest_state rows with backfilled = 0: %d, want 2", withBackfilled0)
+	}
+	// The new tables take the spec columns.
+	if _, err := s.db.Exec(`INSERT INTO session_dim(session_id,project,via,via_path) VALUES ('S1','p','clone','/x')`); err != nil {
+		t.Errorf("session_dim insert: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO driver_rollup(day,session_id,project,kind,name) VALUES ('2026-08-05','S1','p','skill','x')`); err != nil {
+		t.Errorf("driver_rollup insert: %v", err)
+	}
+}
+
+// A v3 DB reopens cleanly and takes no second backup.
+func TestMigrateV3Reopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	makeV2DB(t, path)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path + ".pre-v3.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fi.ModTime()
+	s.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if v := userVersion(t, s2); v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
+	}
+	fi2, err := os.Stat(path + ".pre-v3.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi2.ModTime().Equal(before) {
+		t.Errorf("backup rewritten on reopen: mtime %v -> %v", before, fi2.ModTime())
+	}
+	if n := countRows(t, path, "session_rollup"); n != 3 {
+		t.Errorf("session_rollup rows after reopen = %d, want 3", n)
+	}
+}
+
+// A version-0 DB still takes the v2 drop-and-rebuild path, then lands on v3.
+func TestMigrateV0StillRebuilds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	old := makeV0DB(t, path)
+	defer old.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s); v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
+	}
+	fi, err := os.Stat(path + ".pre-dedupe.bak")
+	if err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("pre-dedupe backup missing or not a file: %v", err)
+	}
+	if _, err := os.Stat(path + ".pre-v3.bak"); !os.IsNotExist(err) {
+		t.Errorf("a rebuilt DB has nothing to keep; pre-v3 backup should not exist: %v", err)
+	}
+	for _, tbl := range []string{"session_rollup", "ingest_state", "attribution_rollup", "session_dim", "driver_rollup"} {
+		if !tableExists(t, s, tbl) {
+			t.Errorf("table %s missing", tbl)
+		}
+	}
+	for _, tbl := range []string{"session_rollup", "ingest_state", "attribution_rollup"} {
+		if n := countRows(t, path, tbl); n != 0 {
+			t.Errorf("%s rows = %d, want 0 after rebuild", tbl, n)
+		}
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ingest_state') WHERE name='backfilled'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("ingest_state.backfilled column: n=%d err=%v", n, err)
 	}
 }
 
