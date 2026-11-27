@@ -3760,6 +3760,14 @@
   #page-host > #analytics-modal.as-page > .an-pcustom[hidden] { display: none; }
   /* The kit's .input is the width of its container. A date field keeps the width of its value. */
   #page-host > #analytics-modal.as-page > .an-pcustom .input { width: auto; flex: none; }
+  /* The Where select (§3.0): drawn as one control the height of a seg, "Where:" in the label and the choice in the native select, which
+     keeps its own menu and keyboard. The select's own border goes; the control's focus ring is the label's. */
+  #page-host > #analytics-modal.as-page .an-where { display: inline-flex; align-items: center; gap: 6px; height: var(--h-ctl); padding-left: 10px; flex: none; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #analytics-modal.as-page .an-where > span { flex: none; }
+  #page-host > #analytics-modal.as-page .an-wsel { width: auto; height: calc(var(--h-ctl) - 2px); padding-left: 0; border: 0; background-color: transparent; font-size: var(--t-sm); font-weight: var(--w-medium); text-overflow: ellipsis; cursor: pointer; }
+  #page-host > #analytics-modal.as-page .an-wsel:hover { border: 0; }
+  #page-host > #analytics-modal.as-page .an-wsel:focus-visible { border: 0; box-shadow: none; }
+  #page-host > #analytics-modal.as-page .an-where:has(.an-wsel:focus-visible) { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 1px var(--accent); }
   #page-host > #analytics-modal.as-page > .dlg-body { padding: 0 var(--sp-8) var(--sp-6); background: var(--bg); }
   /* app.css's `.an-date:focus` drops the outline and keeps the accent border; the 1px shadow beside it is the field focus's
      second pixel (desktop-focus.test.js), the same one the kit's .input:focus gives the page's date fields. */
@@ -3785,9 +3793,14 @@
      base red/green (and good/bad) pairs are status colours (D23). The line sits in a kit .kpi (its 2px gap is the spacing) at the
      kit's smallest step. */
   #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); font-size: var(--t-xs); margin-top: 0; }
+  /* Its figure takes the palette's up and down hues (--an-up, --an-down), semibold; the window it is against and a flat change stay muted. */
+  #page-host > #analytics-modal.as-page .an-dlead { font-weight: var(--w-semibold); }
+  #page-host > #analytics-modal.as-page .an-dup { color: var(--an-up); }
+  #page-host > #analytics-modal.as-page .an-ddown { color: var(--an-down); }
+  #page-host > #analytics-modal.as-page .an-dflat { color: var(--muted); }
 
   /* --- Analytics bodies: KPI row, cards, kit tables, Sessions (UI plan 5 Task 5; frame M3.2, digest-design §B5, §B8, §C8, §C9) --- */
-  /* The body is a container, so the Sessions split can answer the room it has (call 10): 1440 gives it 1086px (the sidebar's 290px
+  /* The body is a container, so the Sessions table and the two Overview cards can answer the room they have (call 10): 1440 gives it 1086px (the sidebar's 290px
      and the page's two 32px sides are gone), 1280 gives 926. */
   #page-host > #analytics-modal.as-page #analytics-body { container-name: an-body; container-type: inline-size; }
   /* The KPI row is the kit's (.kpi-row, .kpi, .kpi-value, .kpi-label); 16px to what follows (§B0 .m3-body's gap). */
@@ -3829,37 +3842,34 @@
   /* An id, a project or a model wraps instead of clipping (§B8 .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
   #page-host > #analytics-modal.as-page .an-table td.an-wrap { height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
 
-  /* Sessions (M3.2): the table and the cost bands side by side, 300px for the bands; the table's columns are fixed (88, 100, Project
-     the rest, 104, 76, 72, 72 = 512px of the 770px the table gets at 1440). */
-  #page-host > #analytics-modal.as-page .an-split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; min-height: 0; }
-  #page-host > #analytics-modal.as-page .an-split > .an-psec { margin-bottom: 0; }
+  /* Sessions (§3.4; the mockup's frame 4): one card, its table's columns fixed: Session 88, Last day 100, Workspace the rest, Where
+     132, Branch 200, Model 112, Prompts 76, API value 96 = 804px of the 1086px the table gets at 1440. A branch ellipsizes (its full
+     name is the cell's title). */
   #page-host > #analytics-modal.as-page .an-stbl { table-layout: fixed; }
   #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1) { width: 88px; }
   #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2) { width: 100px; }
-  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4) { width: 104px; }
-  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5) { width: 76px; }
-  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6) { width: 72px; }
-  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: 72px; }
-  /* The cost bands: label, bar, count (§B8 .m3-hbar). The bar is the kit's .meter, whose fill is the accent. */
-  #page-host > #analytics-modal.as-page .an-bands { display: flex; flex-direction: column; }
-  #page-host > #analytics-modal.as-page .an-band { display: grid; grid-template-columns: 56px minmax(0, 1fr) 48px; align-items: center; column-gap: var(--sp-3); height: 22px; }
-  #page-host > #analytics-modal.as-page .an-band-n { text-align: right; }
-  /* Below 1000px of body the split is one column: side by side the Project column shrinks under 172px, and to 98px at 1280, where a
-     long project name wraps to three lines (§G5). */
-  @container an-body (max-width: 999px) {
-    #page-host > #analytics-modal.as-page .an-split { grid-template-columns: minmax(0, 1fr); }
-  }
-  /* Under 672px (the fixed columns' 512px and 160px for Project) the columns size to their content, Project keeping a minimum, and the
-     card's own wrapper scrolls what is still too wide: the page never scrolls sideways. */
-  @container an-body (max-width: 671px) {
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4) { width: 132px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5) { width: 200px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6) { width: 112px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: 76px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(8) { width: 96px; }
+  #page-host > #analytics-modal.as-page .an-table td.an-ell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+  /* The Where tag is the kit's .chip; a box's is the blue --an-1 slot (the same hue as the box half of the workspace bars), a host's
+     the chip's own faint ring. */
+  #page-host > #analytics-modal.as-page .an-wbox { color: var(--an-1); box-shadow: inset 0 0 0 1px rgba(110, 168, 254, .45); }
+  /* A session culibox still holds opens when clicked: a pointer, the row's hover (every other row has neither, for the generic hover
+     below is taken back from the Sessions table's plain rows) and the kit's focus ring. */
+  #page-host > #analytics-modal.as-page .an-stbl tr:not(.an-live):hover { background: transparent; }
+  #page-host > #analytics-modal.as-page .an-stbl tr.an-live { cursor: pointer; }
+  #page-host > #analytics-modal.as-page .an-stbl tr.an-live:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  /* Under 1020px of body (the fixed columns' 804px and 200px for Workspace) the columns size to their content, Workspace keeping a
+     minimum, and the card's own wrapper scrolls what is still too wide: the page never scrolls sideways. */
+  @container an-body (max-width: 1019px) {
     #page-host > #analytics-modal.as-page .an-stbl { table-layout: auto; }
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1),
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2),
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4),
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5),
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6),
-    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: auto; }
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(n) { width: auto; }
     #page-host > #analytics-modal.as-page .an-stbl :is(th, td):nth-child(3) { min-width: 160px; }
+  }
+  @container an-body (max-width: 671px) {
     #page-host > #analytics-modal.as-page .an-pgrid { grid-template-columns: minmax(0, 1fr); }
   }
 
@@ -3886,6 +3896,12 @@
   #page-host > #analytics-modal.as-page .an-hrow { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; align-items: center; column-gap: var(--sp-3); height: 22px; }
   #page-host > #analytics-modal.as-page .an-hrow.an-wide { grid-template-columns: 184px minmax(0, 1fr) 64px; }
   #page-host > #analytics-modal.as-page .an-hv { text-align: right; }
+  /* A row with a share of the window (§3.1) has a fourth column, 44px, right-aligned. */
+  #page-host > #analytics-modal.as-page .an-hrow.an-pct { grid-template-columns: 150px minmax(0, 1fr) 64px 44px; }
+  #page-host > #analytics-modal.as-page .an-hrow.an-wide.an-pct { grid-template-columns: 184px minmax(0, 1fr) 64px 44px; }
+  #page-host > #analytics-modal.as-page .an-hp { text-align: right; }
+  /* What the two colours of the workspace bars are: the chart legend's items, under the rows. */
+  #page-host > #analytics-modal.as-page .an-wkey { margin-top: var(--sp-3); }
 
   /* Text app.css sets in raw px for the phone gets a kit step here (Plan 1 follow-up 1). */
   #page-host > #analytics-modal.as-page .an-empty { font-size: var(--t-md); line-height: var(--lh-md); }

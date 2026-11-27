@@ -113,14 +113,17 @@ function pricedModelIds(rows) {
   return (rows || []).filter((r) => r.cost > 0).map((r) => r.model);
 }
 
-// topSessionsByCost: /sessions rows → sessions aggregated across their day/model
-// rows, most expensive first, limited to `limit`.
+// topSessionsByCost: /sessions or /session-costs rows → sessions aggregated across their day/model rows, most expensive first,
+// limited to `limit`. A session also carries what its rows say of it: workspace, runtime, profile, branch and liveId ("" when
+// they say nothing).
 function topSessionsByCost(rows, limit) {
   const agg = new Map();
   for (const r of rows || []) {
     const k = (r.sessionId || "") + String.fromCharCode(31) + (r.project || "");
     let s = agg.get(k);
-    if (!s) { s = { sid: (r.sessionId || "").slice(0, 8), day: "", project: r.project || "", models: new Set(), tokens: 0, cost: 0, prompts: 0 }; agg.set(k, s); }
+    if (!s) { s = { sid: (r.sessionId || "").slice(0, 8), day: "", project: r.project || "", workspace: "", runtime: "", profile: "", branch: "", liveId: "", models: new Set(), tokens: 0, cost: 0, prompts: 0 }; agg.set(k, s); }
+    // From session_dim and the culibox index: the same for every row of one session, so the first one that has it.
+    for (const f of ["workspace", "runtime", "profile", "branch", "liveId"]) if (!s[f] && r[f]) s[f] = r[f];
     s.day = s.day > r.day ? s.day : r.day;
     s.models.add(r.model);
     s.tokens += (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
@@ -207,18 +210,17 @@ function anCountText(n) {
   return n < 10000 ? n.toLocaleString("en-US") : fmtCompact(n);
 }
 
-// anSessionKpis: the three tiles of the Sessions view (digest-design §A3), from the loaded window's sessionCount, topSessions
-// and byProject (both cost-descending). The two "Costliest" tiles carry a project in the label and a COST in the value: the top
-// session's project and cost, the top project's name and cost. With none, a dash and the plain label (and a project with no
-// name leaves no dangling " · ").
+// anSessionKpis: the three tiles of the Sessions view (§3.4), from the loaded window's sessionCount, topSessions (cost-descending)
+// and median. "Costliest session" carries the top session's workspace in its label and its COST in the value; with no session a
+// dash and the plain label (and a workspace with no name leaves no dangling " · ").
 function anSessionKpis(d) {
-  const named = (label, name) => (name ? label + " · " + name : label);
+  const L = AN_COPY.sessions.kpis;
   const top = (d.topSessions || [])[0];
-  const proj = (d.byProject || [])[0];
+  const ws = top && (top.workspace || projShort(top.project));
   return [
-    { value: anCountText(d.sessionCount), label: "Sessions in this window" },
-    { value: top ? usd(top.cost) : "—", label: named("Costliest session", top && projShort(top.project)) },
-    { value: proj ? usd(proj.cost) : "—", label: named("Costliest project", proj && projShort(proj.project)) },
+    { value: anCountText(d.sessionCount), label: L[0] },
+    { value: top ? usd(top.cost) : "—", label: ws ? L[1] + " · " + ws : L[1] },
+    { value: d.median == null ? "—" : usd(d.median), label: L[2] },
   ];
 }
 
@@ -327,10 +329,83 @@ function anProjectRow(p) {
 }
 
 // anSessionRow: a top session (topSessionsByCost) as text. `mixed` marks the several-model case, whose model is the word "mixed".
+// The page's cells: the workspace (the folder's name when the session has none), `where` ("host", "box · prd", "box · unnamed",
+// "unknown" with no runtime) with `box` for the box tag, the branch ("" when unknown) and `clickable`: true when culibox still
+// lists a session whose Claude ids include this one (`liveId`), the only row that opens anything.
 function anSessionRow(s) {
   return {
     sid: s.sid, day: s.day, project: projShort(s.project), model: shortModel(s.model), mixed: s.model === "mixed",
     tokens: fmtCompact(s.tokens), prompts: String(s.prompts), cost: usd(s.cost),
+    workspace: s.workspace || projShort(s.project), where: anWhereText(s.runtime, s.profile), box: s.runtime === "box",
+    branch: s.branch || "", liveId: s.liveId || "", clickable: !!s.liveId,
+  };
+}
+
+// anWhereText: a session's Where tag as words: "host", "box · {profile}", "box · unnamed" for a box with no profile, "unknown" for
+// a session with no runtime recorded (legacy usage).
+function anWhereText(runtime, profile) {
+  if (runtime === "host") return "host";
+  if (runtime === "box") return "box · " + (profile || "unnamed");
+  return "unknown";
+}
+
+// anTabKey: a view's key. The old `projects` and `tools` open Workspaces and Cost drivers, so a saved or phone-strip tab still
+// opens; a key that is none of the five is Overview.
+const AN_TAB_KEYS = ["overview", "workspaces", "drivers", "sessions", "models"];
+function anTabKey(k) {
+  if (k === "projects") return "workspaces";
+  if (k === "tools") return "drivers";
+  return AN_TAB_KEYS.includes(k) ? k : "overview";
+}
+
+// anWhereLabel: one Where option as the select prints it: its label, then its window's API value ("Box · prd · $2.1k"). The API's
+// value is `costUsd`.
+function anWhereLabel(o) {
+  return o.label + " · " + usd(o.costUsd != null ? o.costUsd : o.cost);
+}
+
+// anWhereOptions: the select's entries [{key, text}] from the API's options. A chosen key the window no longer lists (a profile
+// with no usage in a narrower range) stays as an entry of its own, at $0.00, so the select never says "All" over a filtered view.
+function anWhereOptions(opts, current) {
+  const out = (opts || []).map((o) => ({ key: o.key, text: anWhereLabel(o) }));
+  const key = current || "";
+  if (!out.length) out.push({ key: "", text: AN_COPY.head.whereAll });
+  if (!out.some((o) => o.key === key)) {
+    const name = key === "host" ? "Host" : key === "box" ? "Box · all profiles" : key === "unknown" ? "Unknown" : key === "box:" ? "Box · unnamed" : "Box · " + key.replace(/^box:/, "");
+    out.push({ key, text: anWhereLabel({ label: name, costUsd: 0 }) });
+  }
+  return out;
+}
+
+// anDeltaParts: a tile's change line split where its figure ends: {lead: "▲ 12%", rest: " vs the 30 days before"} (rest "" when
+// the line is only the figure). The lead takes the direction's tone, the rest stays muted.
+function anDeltaParts(text) {
+  const i = text.indexOf(" vs ");
+  return i < 0 ? { lead: text, rest: "" } : { lead: text.slice(0, i), rest: text.slice(i) };
+}
+
+// anPerPrompt: a model's API value per prompt: dollars, three decimals under a cent ("$0.004"), "—" with no prompts.
+function anPerPrompt(cost, prompts) {
+  if (!(prompts > 0)) return "—";
+  const v = cost / prompts;
+  return v > 0 && v < 0.01 ? "$" + v.toFixed(3) : usd(v);
+}
+
+// anModelTableRow: a model's row of the Models table (§3.5) as text. `medians` is anModelMedians' map. "other (unpriced)" has no
+// value to show: its value columns are dashes, its sessions and tokens are real.
+function anModelTableRow(x, fold, medians) {
+  const other = x.model === "other (unpriced)";
+  const ch = cacheHit(x);
+  const med = medians ? medians[x.model] : null;
+  return {
+    other,
+    cost: other ? "—" : usd(x.cost),
+    pct: other ? "—" : anPct(x.cost, fold.totalCost),
+    sessions: String(x.sessions),
+    median: other || med == null ? "—" : usd(med),
+    perPrompt: other ? "—" : anPerPrompt(x.cost, x.prompts),
+    cache: other || ch == null ? "—" : (ch * 100).toFixed(1) + "%",
+    tokens: fmtCompact(x.tokens),
   };
 }
 
@@ -401,7 +476,7 @@ function anWorkspaceRows(resp) {
     return {
       name: w.name, path: w.unmatched ? AN_COPY.workspaces.unmatchedPath : w.workspace, unmatched: !!w.unmatched,
       ...fig(w),
-      hostPct, boxPct: split > 0 ? 100 - hostPct : 0,
+      hostPct, boxPct: split > 0 ? 100 - hostPct : 0, hostCost: host, boxCost: box,
       mix: modelTotal > 0 ? models.map(([model, v]) => ({ model, share: v / modelTotal })) : [],
       children: (w.children || []).map((c) => ({ runtime: c.runtime, profile: c.profile, via: c.via, label: c.label, path: c.path, ...fig(c) })),
     };
@@ -504,6 +579,7 @@ if (typeof module !== "undefined" && module.exports) {
     anCountText, anSessionKpis,
     median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
     anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+    anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
     anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };
 }
@@ -540,14 +616,15 @@ async function openAnalytics() {
 
 function syncTabButtons() {
   for (const b of document.querySelectorAll("#an-tabs button")) {
-    b.classList.toggle("act", b.dataset.antab === AN.tab);
+    b.classList.toggle("act", anTabKey(b.dataset.antab) === AN.tab);
   }
 }
 
-// anSetTab: choose a view. The phone's tab strip (.act) and the page's view switch (aria-pressed) both follow AN.tab; the
-// window's data is already loaded, so it only re-renders (no refetch).
+// anSetTab: choose a view (any key anTabKey knows: the phone's strip still says projects and tools). The phone's tab strip (.act)
+// and the page's view switch (aria-pressed) both follow AN.tab; the window's data is already loaded, so it only re-renders (no
+// refetch).
 function anSetTab(tab) {
-  AN.tab = tab;
+  AN.tab = anTabKey(tab);
   syncTabButtons();
   anSyncPageControls();
   anRender();
@@ -680,7 +757,8 @@ function anRender() {
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
-  const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
+  // Workspaces and Cost drivers draw through the builders the old Projects and Tools views had until their own views replace them.
+  const R = { overview: anOverview, workspaces: anProjects, drivers: anTools, sessions: anSessions, models: anModels };
   (R[AN.tab] || anOverview)(body);
   // Time-series charts read left→right oldest→newest; open scrolled to the most
   // recent day so a window with a leading empty gap doesn't render blank.
@@ -756,6 +834,14 @@ function anApplyCustom(f, t) {
   return r;
 }
 
+// anPickWhere: filter every view to one Where key and reload. The select is the control in use and is never rebuilt, so it keeps
+// focus; `sel` is given focus again in case a load took it.
+function anPickWhere(key, sel) {
+  AN.where = key;
+  anLoad();
+  if (sel) sel.focus();
+}
+
 // anToggleCompare: compare this window with the equal-length one before it.
 function anToggleCompare() {
   AN.compare = !AN.compare;
@@ -816,7 +902,29 @@ function anSyncPageControls() {
     row.hidden = !open;
   }
   const desc = dlg.querySelector("#an-pdesc");
-  if (desc) desc.textContent = "Token usage from Claude Code transcripts, priced at API list rates" + (AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
+  if (desc) {
+    const line = AN_COPY.head.line;
+    desc.textContent = AN.from && AN.to ? line.replace("{from}", AN.from).replace("{to}", AN.to) : line.slice(0, line.indexOf(" · {from}"));
+  }
+  anPaintWhere();
+}
+
+// anWhereSig: what the Where select's options say now, so they are rebuilt only when it changes.
+let anWhereSig = "";
+
+// anPaintWhere: the page's Where select: its options (anWhereOptions, as text) and the chosen key. The select itself is static
+// markup and is never replaced, so it keeps focus while a change reloads the window; only its options are swapped, and only when
+// they differ.
+function anPaintWhere() {
+  const sel = document.getElementById("an-where");
+  if (!sel) return;
+  const opts = anWhereOptions(AN.whereOpts, AN.where);
+  const sig = JSON.stringify(opts);
+  if (sig !== anWhereSig) {
+    anWhereSig = sig;
+    sel.replaceChildren(...opts.map((o) => { const op = el("option", null, o.text); op.value = o.key; return op; }));
+  }
+  sel.value = AN.where;
 }
 
 // anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
@@ -832,6 +940,8 @@ function anWirePage() {
     else anPickRange(b.dataset.range);
   });
   on("#an-compare", anToggleCompare);
+  const where = dlg.querySelector("#an-where");
+  if (where) where.onchange = () => anPickWhere(where.value, where);
   on("#an-papply", () => {
     const dates = dlg.querySelectorAll(".an-pcustom .an-date");
     if (dates.length < 2) return;
@@ -876,19 +986,15 @@ function anOverview(root) {
   root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
 }
 
-// anOverviewPage: M3.1 (digest-design §A2, §B5-§B7): the KPI row; the cost chart's card, its head holding the title, its caption and
-// the legend, with the footnote a plain line under it; then cost by model and cost by project as two cards. The phone's anOverview
-// above is its own code; both read the same figures (anModelFold, anProjectBars, anLegendItems).
+// anOverviewPage: M3.1 (§3.1; the mockup's frame 1): the four tiles (anOverviewKpis: API value, Sessions, Median per session, Cache
+// hit; each carries its change vs the window before only while Compare is on); the cost chart's card, its head holding the title,
+// its caption and the legend; then cost by model and cost by workspace as two cards; the footnote last, a plain line. Compare shows
+// nothing else. The phone's anOverview above is its own code.
 function anOverviewPage(root) {
-  const d = AN.data, t = d.costByDay.totals;
-  // The page's tiles: the kit's KPI row, the frame's labels and thousands separators on the counts.
-  root.appendChild(anKpiRow([
-    { value: usd(t.cost), label: "API value", title: AN_API_VALUE_TITLE },
-    { value: fmtCompact(t.tokens), label: "Tokens" },
-    { value: anCountText(d.sessionCount), label: "Sessions" },
-    { value: anCountText(t.prompts), label: "Prompts" },
-    { value: usd(d.sessionCount ? t.cost / d.sessionCount : 0), label: "Avg per session" },
-  ]));
+  const d = AN.data;
+  const tiles = anOverviewKpis(d, AN.compare ? d.cmp : null);
+  tiles[0].title = AN_API_VALUE_TITLE;
+  root.appendChild(anKpiRow(tiles));
 
   const sec = el("div", "an-psec");
   const card = el("div", "an-card");
@@ -898,7 +1004,7 @@ function anOverviewPage(root) {
   const body = anCardBody(card);
   body.classList.add("an-chartbody");
   body.appendChild(anStackedTime(d.costByDay, d.from, d.to));
-  sec.append(card, anFootnote(AN_COPY.overview.note));
+  sec.appendChild(card);
   root.appendChild(sec);
 
   const grid = el("div", "an-pgrid");
@@ -908,17 +1014,38 @@ function anOverviewPage(root) {
   for (const x of fold.rows) {
     // The "other (unpriced)" row is a label, not a model id: sans and muted, with an empty track ($0 draws no fill).
     const unpriced = x.model === "other (unpriced)";
-    anHrow(mrows, shortModel(x.model), !unpriced, x.cost, fold.maxCost, [{ v: x.cost, c: anModelColor(d.models, x.model) }], false);
+    anHrow(mrows, shortModel(x.model), !unpriced, x.cost, fold.maxCost, [{ v: x.cost, c: anModelColor(d.models, x.model) }], false, anPct(x.cost, fold.totalCost));
   }
   anCardBody(mc).appendChild(mrows);
 
-  const pb = anProjectBars(d.byProject, d.models);
-  const pc = anCard(AN_COPY.overview.byProject, AN_COPY.overview.byProjectHint, "h2");
-  const prows = el("div", "an-hrows");
-  for (const b of pb.bars.slice(0, 10)) anHrow(prows, b.name, true, b.cost, pb.max, b.segs, true);
-  anCardBody(pc).appendChild(prows);
-  grid.append(mc, pc);
+  // Cost by workspace: the top 8, each bar split into its host and box cost (the --an-6 and --an-1 slots), as a share of the window.
+  const total = d.costByDay.totals.cost || 1;
+  const top = [...d.workspaces].sort((x, y) => y.cost - x.cost).slice(0, 8);
+  const maxWs = Math.max(1, ...top.map((w) => w.cost));
+  const wc = anCard(AN_COPY.overview.byWorkspace, AN_COPY.overview.byWorkspaceHint, "h2");
+  const wrows = el("div", "an-hrows");
+  for (const w of top) {
+    const segs = [{ v: w.hostCost, c: "var(--an-6)", t: "host " + usd(w.hostCost) }, { v: w.boxCost, c: "var(--an-1)", t: "box " + usd(w.boxCost) }];
+    anHrow(wrows, w.name, true, w.cost, maxWs, segs, true, anPct(w.cost, total));
+  }
+  const wbody = anCardBody(wc);
+  wbody.appendChild(wrows);
+  wbody.appendChild(anWhereKey());
+  grid.append(mc, wc);
   root.appendChild(grid);
+  root.appendChild(anFootnote(AN_COPY.overview.note));
+}
+
+// anWhereKey: what the workspace bars' two colours are: the same swatch and mono label as the chart's legend.
+function anWhereKey() {
+  const key = el("div", "an-plegend an-wkey");
+  for (const [name, color] of [["host", "var(--an-6)"], ["box", "var(--an-1)"]]) {
+    const s = el("span"), sw = el("i", "an-sw");
+    sw.style.background = color;
+    s.append(sw, el("span", "mono t-xs fg", name));
+    key.appendChild(s);
+  }
+  return key;
 }
 
 // ---- Models -----------------------------------------------------------------
@@ -1004,27 +1131,28 @@ function anTools(root) {
 // beside it; the page's head names the window, so the word goes.
 function anPageHint(hint) { return hint.replace(/ · window$/, ""); }
 
-// anModelsPage: the per-model table in a card, then the two share cards under "Why $ ≠ token count".
+// anModelsPage: §3.5 (the mockup's frame 5): the one table in a card, then the footnote. Its eight columns are AN_COPY.models.columns;
+// the Sessions header says in a tooltip that a session which used several models counts once in each.
 function anModelsPage(root) {
   const d = AN.data;
   const fold = anModelFold(d.byModel);
-  const sec = anPSection(AN_COPY.models.title, anPageHint(AN_COPY.models.hint));
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(...AN_TABLES.models));
+  tbl.appendChild(anColHead(AN_COPY.models.columns, 1, { 3: AN_COPY.models.sessionsTitle }));
   for (const x of fold.rows) {
     const tr = el("tr");
     // A model id is machine text (mono); the "other (unpriced)" row is a label, so sans and muted.
+    const c = anModelTableRow(x, fold, d.modelMedians);
     const nm = el("td");
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
-    nm.append(sw, el("span", x.model === "other (unpriced)" ? "muted" : "mono t-sm", shortModel(x.model)));
-    const c = anModelCells(x, fold);
-    tr.append(nm, anTd(c.cost, "num w-500"), anTd(c.pct, "num"), anTd(c.tokens, "num"), anTd(c.prompts, "num"),
-      anTd(c.outPerPrompt, "num"), anTd(c.cache, "num"));
+    nm.append(sw, el("span", c.other ? "muted" : "mono t-sm", shortModel(x.model)));
+    tr.append(nm, anTd(c.cost, "num w-500"), anTd(c.pct, "num"), anTd(c.sessions, "num"), anTd(c.median, "num"), anTd(c.perPrompt, "num"),
+      anTd(c.cache, "num"), anTd(c.tokens, "num sub"));
     tbl.appendChild(tr);
   }
+  const sec = el("section", "an-psec");
   const card = anCard();
   card.appendChild(anTableWrap(tbl));
-  sec.appendChild(card);
+  sec.append(card, anFootnote(AN_COPY.models.note));
   root.appendChild(sec);
 }
 
@@ -1055,29 +1183,56 @@ function anProjectsPage(root) {
   root.appendChild(s2);
 }
 
-// anSessionsPage: M3.2 (digest-design §B8). Three KPI tiles, then the top-sessions table in a card.
+// anSessionsPage: §3.4 (the mockup's frame 4). Three KPI tiles, then the top sessions in a card whose head says a row opens its session.
+// A row culibox still holds (liveId) is a button-like row; any other is plain: no role, no focus stop, no hover or cursor.
 function anSessionsPage(root) {
   const d = AN.data;
   root.appendChild(anKpiRow(anSessionKpis(d)));
 
-  const left = anPSection(AN_COPY.sessions.title, "Spot the runaway session. Counts include subagent and synthetic transcripts.");
   const tbl = el("table", "an-table an-stbl");
-  tbl.appendChild(anHead(...AN_TABLES.sessions));
+  tbl.appendChild(anColHead(AN_COPY.sessions.columns, 6));
   for (const s of d.topSessions) {
     const r = anSessionRow(s);
     const tr = el("tr");
-    // Session, Project and a single Model are ids (mono); "mixed" and the day are muted sans. Only Project wraps (§B8 .m3-wrap):
-    // Session and Model are words that keep their width.
-    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), anIdTd(r.project, "an-wrap"),
-      r.mixed ? anTd(r.model, "sub") : anIdTd(r.model),
-      anTd(r.tokens, "num"), anTd(r.prompts, "num"), anTd(r.cost, "num w-500"));
+    // Session, Workspace, Branch and a single Model are ids (mono); "mixed" and the day are muted sans. Only Workspace wraps (§B8
+    // .m3-wrap); Branch ellipsizes and carries its full name in title.
+    const where = el("td");
+    where.appendChild(el("span", r.box ? "chip chip-box an-wbox" : r.where === "host" ? "chip chip-host" : "chip", r.where));
+    const branch = el("td", r.branch ? "an-ell" : "an-ell sub");
+    if (r.branch) { branch.appendChild(el("span", "mono t-sm", r.branch)); branch.setAttribute("title", r.branch); }
+    else branch.textContent = "—";
+    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), anIdTd(r.workspace, "an-wrap"), where, branch,
+      r.mixed ? anTd(r.model, "sub") : anIdTd(r.model), anTd(r.prompts, "num"), anTd(r.cost, "num w-500"));
+    if (r.clickable) anLiveRow(tr, r.liveId);
     tbl.appendChild(tr);
   }
-  const card = anCard();
+  const sec = el("section", "an-psec");
+  const card = anCard(AN_COPY.sessions.title, AN_COPY.sessions.hint, "h2");
   card.appendChild(anTableWrap(tbl));
-  left.appendChild(card);
+  sec.appendChild(card);
+  root.appendChild(sec);
+}
 
-  root.appendChild(left);
+// anLiveRow: make a session's table row do what clicking that session's sidebar row does (anOpenLive). A button-like row: role,
+// a focus stop, Enter and Space.
+function anLiveRow(tr, liveId) {
+  tr.classList.add("an-live");
+  tr.setAttribute("role", "button");
+  tr.setAttribute("tabindex", "0");
+  tr.onclick = () => anOpenLive(liveId);
+  tr.onkeydown = (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    anOpenLive(liveId);
+  };
+}
+
+// anOpenLive: the sidebar row's own action: openTerminal(id, name) (a page that holds the panes closes first). The name comes from the
+// live list, which is also what says the session is still there: a session the list no longer holds opens nothing.
+function anOpenLive(id) {
+  if (typeof openTerminal !== "function" || typeof lastSessions === "undefined") return;
+  const live = (lastSessions || []).find((x) => x && x.id === id);
+  if (live) openTerminal(live.id, live.name);
 }
 
 // anToolsPage: as the phone's, until the four cards are drawn.
@@ -1108,11 +1263,20 @@ function anKpiRow(tiles) {
     const label = el("span", "kpi-label", t.label);
     label.setAttribute("title", t.title || t.label);
     tile.append(el("span", "kpi-value", t.value), label);
-    // A tile may carry a delta line ({txt, cls}), under the label.
-    if (t.delta) tile.appendChild(el("div", "an-kdelta " + t.delta.cls, t.delta.txt));
+    // A tile may carry a change line ({text, dir} from kpiDelta), under the label.
+    if (t.delta) tile.appendChild(anDeltaLine(t.delta));
     row.appendChild(tile);
   }
   return row;
+}
+// anDeltaLine: a tile's change line: the figure ("▲ 12%") in the tone of its direction (an-dup, an-ddown, an-dflat: palette hues and
+// muted, never red or green: the arrow carries the direction), then the window it is against as plain muted text.
+function anDeltaLine(delta) {
+  const parts = anDeltaParts(delta.text);
+  const line = el("div", "an-kdelta");
+  line.appendChild(el("span", "an-dlead an-d" + (delta.dir === "up" || delta.dir === "down" ? delta.dir : "flat"), parts.lead));
+  if (parts.rest) line.appendChild(document.createTextNode(parts.rest));
+  return line;
 }
 // anPSection: a section of the page: the kit's h2.section-title and, on its baseline, a muted caption (M3.2's title row).
 function anPSection(title, caption) {
@@ -1152,6 +1316,17 @@ function anHead(cols, firstNum) {
   const page = anIsPage();
   const tr = el("tr");
   cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, page ? c.charAt(0).toUpperCase() + c.slice(1) : c)));
+  return tr;
+}
+// anColHead (the page): the header row of a table whose labels AN_COPY already writes in full. Columns from firstNum on hold numbers
+// (th.num, like their cells). `titles` maps a column's index to its tooltip.
+function anColHead(cols, firstNum, titles) {
+  const tr = el("tr");
+  cols.forEach((c, i) => {
+    const th = el("th", i >= firstNum ? "num" : null, c);
+    if (titles && titles[i]) th.setAttribute("title", titles[i]);
+    tr.appendChild(th);
+  });
   return tr;
 }
 // anTableWrap keeps a wide table scrollable on its own on narrow viewports, so
@@ -1197,8 +1372,9 @@ function anHbar(parent, name, v, max, color, fmtVal) {
 // and the total as dollars. A segment is {v, c, t?}: its cost, its colour, its tooltip; a fill's width and offset are shares of
 // `max`, so the second segment starts where the first ends, and a segment with no cost draws no fill. `mono` is a machine id (a
 // model or a project); the other label is words, so sans and muted along with its value. `wide` is the project card's 184px label.
-function anHrow(parent, name, mono, total, max, segs, wide) {
-  const row = el("div", wide ? "an-hrow an-wide" : "an-hrow");
+// `pct` (text) adds the row's share of the window as a fourth, muted column.
+function anHrow(parent, name, mono, total, max, segs, wide, pct) {
+  const row = el("div", (wide ? "an-hrow an-wide" : "an-hrow") + (pct ? " an-pct" : ""));
   const nm = el("span", (mono ? "mono t-sm" : "t-sm muted") + " ellipsis", name);
   nm.title = name;
   const meter = el("span", "meter");
@@ -1212,6 +1388,7 @@ function anHrow(parent, name, mono, total, max, segs, wide) {
     from += s.v;
   }
   row.append(nm, meter, el("span", "t-sm tnum an-hv" + (mono ? "" : " muted"), usd(total)));
+  if (pct) row.appendChild(el("span", "t-sm tnum muted an-hp", pct));
   parent.appendChild(row);
 }
 function anHbarSegs(parent, name, total, max, segs, fmtVal) {

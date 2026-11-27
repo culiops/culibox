@@ -10,6 +10,7 @@ const {
   anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
+  anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -230,32 +231,31 @@ const sessionData = (rows) => ({
   byProject: projectsOf(rows),
 });
 
-test("anSessionKpis: sessions in the window, the costliest session by its project, the costliest project by its cost", () => {
-  const d = sessionData(SESS_ROWS);
+test("anSessionKpis: sessions in the window, the costliest session by its workspace, the median per session", () => {
+  const d = { ...sessionData(SESS_ROWS), median: 1.5 };
   assert.equal(d.sessionCount, 3);
   assert.deepEqual(anSessionKpis(d).map((t) => ({ value: t.value, label: t.label })), [
     { value: "3", label: "Sessions in this window" },
     { value: "$121", label: "Costliest session · acme-api" },
-    { value: "$160", label: "Costliest project · acme-web-frontend" },
+    { value: "$1.50", label: "Median per session" },
   ]);
-  // The values are today's formatters on today's data: usd of the top session's cost, usd of the top project's COST.
-  assert.equal(usd(d.topSessions[0].cost), "$121");
-  assert.equal(usd(d.byProject[0].cost), "$160");
+  // A session that carries its own workspace names that, not the folder.
+  const ws = anSessionKpis({ ...d, topSessions: [{ project: "-x-y", workspace: "culiops-agent-box", cost: 86.1 }] });
+  assert.equal(ws[1].label, "Costliest session · culiops-agent-box");
   // A window of 1,420 sessions reads 1,420, not 1k.
   assert.equal(anSessionKpis({ ...d, sessionCount: 1420 })[0].value, "1,420");
   assert.equal(anSessionKpis({ ...d, sessionCount: 12500 })[0].value, fmtCompact(12500));
 });
 
-test("anSessionKpis: no sessions or projects gives a dash and the plain label", () => {
-  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], byProject: [] });
+test("anSessionKpis: no sessions gives a dash and the plain label; a nameless session leaves no dangling separator", () => {
+  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], median: null });
   assert.deepEqual(tiles.map((t) => ({ value: t.value, label: t.label })), [
     { value: "0", label: "Sessions in this window" },
     { value: "—", label: "Costliest session" },
-    { value: "—", label: "Costliest project" },
+    { value: "—", label: "Median per session" },
   ]);
-  // A session or project with no name (a row with an empty project) does not leave a dangling " · " in the label.
-  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], byProject: [{ project: "", cost: 3 }] });
-  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Costliest project"]);
+  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], median: 3 });
+  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Median per session"]);
   assert.deepEqual(nameless.map((t) => t.value), ["1", "$3.00", "$3.00"]);
 });
 
@@ -302,7 +302,10 @@ test("anProjectBars and anProjectRow: the stacked bars' segments (dearest model 
 
 test("anSessionRow: one session's cells as text; mixed is flagged, a single model is short", () => {
   const top = topSessionsByCost(SESS_ROWS, 18);
-  assert.deepEqual({ ...anSessionRow(top[0]) }, { sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121" });
+  assert.deepEqual({ ...anSessionRow(top[0]) }, {
+    sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121",
+    workspace: "acme-api", where: "unknown", box: false, branch: "", liveId: "", clickable: false,
+  });
   const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
   assert.equal(single.model, "opus-5-5");
   assert.equal(single.mixed, false);
@@ -681,4 +684,92 @@ test("AN_COPY: the workspaces table has seven columns, Host · Box being one; th
   assert.deepEqual(AN_COPY.workspaces.columns, ["Workspace", "API value", "Sessions", "Host · Box", "Model mix", "Median / session", "Cache hit"]);
   assert.equal(AN_COPY.workspaces.columns.length, 7);
   assert.equal(AN_COPY.models.sessionsTitle, "A session that used several models counts once in each.");
+});
+
+// ---- Analytics v3, the page: Where, the views, sessions that open (Task 10) ----
+
+test("anSessionRow: a row with a liveId is clickable, a row without one is not", () => {
+  const base = { sid: "7f3a91c2", day: "2026-11-26", project: "-home-dev-x", model: "claude-opus-5-5", tokens: 10, cost: 1, prompts: 2 };
+  assert.equal(anSessionRow({ ...base, liveId: "s-123" }).clickable, true);
+  assert.equal(anSessionRow({ ...base, liveId: "s-123" }).liveId, "s-123");
+  assert.equal(anSessionRow({ ...base, liveId: "" }).clickable, false);
+  assert.equal(anSessionRow(base).clickable, false);
+  assert.equal(anSessionRow({ ...base, liveId: undefined }).clickable, false);
+});
+
+test("topSessionsByCost: a session carries its workspace, runtime, profile, branch and liveId from the rows that have them", () => {
+  const rows = [
+    { sessionId: "S1xxxxxxxx", project: "p", day: "2026-11-01", model: "a", costUsd: 2, prompts: 1, workspace: "", runtime: "", branch: "" },
+    { sessionId: "S1xxxxxxxx", project: "p", day: "2026-11-02", model: "a", costUsd: 3, prompts: 1, workspace: "ws", runtime: "box", profile: "prd", branch: "feat/x", liveId: "live-1" },
+    { sessionId: "S2xxxxxxxx", project: "p", day: "2026-11-02", model: "a", costUsd: 1, prompts: 1 },
+  ];
+  const [a, b] = topSessionsByCost(rows, 10);
+  assert.deepEqual([a.workspace, a.runtime, a.profile, a.branch, a.liveId], ["ws", "box", "prd", "feat/x", "live-1"]);
+  assert.deepEqual([b.workspace, b.runtime, b.profile, b.branch, b.liveId], ["", "", "", "", ""]);
+});
+
+test("anWhereText: host, box with its profile, box with none, a session with no runtime", () => {
+  assert.equal(anWhereText("host", ""), "host");
+  assert.equal(anWhereText("box", "prd"), "box · prd");
+  assert.equal(anWhereText("box", ""), "box · unnamed");
+  assert.equal(anWhereText("", ""), "unknown");
+  assert.equal(anSessionRow({ sid: "a", project: "p", model: "m", runtime: "box", profile: "dev" }).box, true);
+  assert.equal(anSessionRow({ sid: "a", project: "p", model: "m", runtime: "host" }).box, false);
+});
+
+test("anWhereLabel: the option's label, then its window's API value", () => {
+  assert.equal(anWhereLabel({ label: "Box · prd", cost: 2100 }), "Box · prd · $2.1k");
+  assert.equal(anWhereLabel({ label: "Box · prd", costUsd: 2100 }), "Box · prd · $2.1k", "the API's own field name");
+  assert.equal(anWhereLabel({ label: "All", costUsd: 0 }), "All · $0.00");
+});
+
+test("anWhereOptions: one entry per API option; a chosen key the window no longer lists stays selectable at $0.00", () => {
+  const opts = [{ key: "", label: "All", costUsd: 4300 }, { key: "host", label: "Host", costUsd: 1300 }, { key: "box:prd", label: "Box · prd", costUsd: 2100 }];
+  assert.deepEqual(anWhereOptions(opts, ""), [{ key: "", text: "All · $4.3k" }, { key: "host", text: "Host · $1.3k" }, { key: "box:prd", text: "Box · prd · $2.1k" }]);
+  assert.equal(anWhereOptions(opts, "box:prd").length, 3);
+  const gone = anWhereOptions(opts, "box:old");
+  assert.deepEqual(gone[3], { key: "box:old", text: "Box · old · $0.00" });
+  assert.deepEqual(anWhereOptions([], ""), [{ key: "", text: "All" }], "before the first load there is still All");
+  assert.deepEqual(anWhereOptions(undefined, "host").map((o) => o.key), ["", "host"]);
+});
+
+test("anTabKey: the five views, and the old projects and tools keys still open Workspaces and Cost drivers", () => {
+  for (const k of ["overview", "workspaces", "drivers", "sessions", "models"]) assert.equal(anTabKey(k), k);
+  assert.equal(anTabKey("projects"), "workspaces");
+  assert.equal(anTabKey("tools"), "drivers");
+  assert.equal(anTabKey("nonsense"), "overview");
+  assert.equal(anTabKey(undefined), "overview");
+  assert.equal(anTabKey("__proto__"), "overview");
+});
+
+test("anDeltaParts: the figure and the window it is against split apart", () => {
+  assert.deepEqual(anDeltaParts("▲ 12% vs the 30 days before"), { lead: "▲ 12%", rest: " vs the 30 days before" });
+  assert.deepEqual(anDeltaParts("▼ 0.4 pt"), { lead: "▼ 0.4 pt", rest: "" });
+});
+
+test("anPerPrompt: dollars per prompt, three decimals under a cent, a dash with no prompts", () => {
+  assert.equal(anPerPrompt(42, 100), "$0.42");
+  assert.equal(anPerPrompt(0.4, 100), "$0.004");
+  assert.equal(anPerPrompt(5, 0), "—");
+});
+
+test("anModelTableRow: a model's cells; other (unpriced) has dashes for every value and keeps its sessions and tokens", () => {
+  const rows = collapseZeroCost(normModels([
+    { model: "claude-opus-5-5", input: 40, output: 10, cacheRead: 950, cacheCreation: 10, prompts: 100, sessions: 12, costUsd: 30 },
+    { model: "claude-fable-5-1", input: 100, output: 5, cacheRead: 0, cacheCreation: 0, prompts: 2, sessions: 6, costUsd: 0 },
+  ]));
+  const fold = anModelFold(rows);
+  const med = { "claude-opus-5-5": 2.31 };
+  const opus = anModelTableRow(rows[0], fold, med);
+  assert.deepEqual({ ...opus }, { other: false, cost: "$30.00", pct: "100%", sessions: "12", median: "$2.31", perPrompt: "$0.30", cache: "95.0%", tokens: "1k" });
+  const other = anModelTableRow(rows[1], fold, med);
+  assert.deepEqual({ ...other }, { other: true, cost: "—", pct: "—", sessions: "6", median: "—", perPrompt: "—", cache: "—", tokens: "105" });
+  // a priced model with no median entry or no cache read shows dashes, not NaN
+  const lone = anModelTableRow({ model: "m", cost: 1, sessions: 1, prompts: 0, tokens: 0, input: 0, cacheRead: 0, cacheCreation: 0 }, fold, {});
+  assert.deepEqual([lone.median, lone.perPrompt, lone.cache], ["—", "—", "—"]);
+});
+
+test("anWorkspaceRows keeps the host and box costs the Overview's split bars draw", () => {
+  const a = anWorkspaceRows(WS_RESP)[0];
+  assert.deepEqual([a.hostCost, a.boxCost], [31, 69]);
 });
