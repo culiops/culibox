@@ -47,6 +47,17 @@ func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 	rules = append(rules, withName(onboardingRule(), p("accounts/*/claude/.claude.json")))
 	rules = append(rules, db("audit.db", "SQLite: rows are compared (auditDBRows)")...)
 	rules = append(rules, db("analytics.db", "SQLite: compared through the analytics API")...)
+	rules = append(rules, Rule{
+		Pattern:  p("analytics.db.pre-v3.bak"),
+		Why:      "analytics schema v3 migration's one-time backup of the v2 database",
+		AllowNew: true,
+		CheckNew: func(a *Entry) error {
+			if a.Type != "file" {
+				return fmt.Errorf("analytics.db.pre-v3.bak is %q, want a regular file", a.Type)
+			}
+			return nil
+		},
+	})
 	if rewrite != nil {
 		rules = append(rules, withName(settingsRule(rewrite), p("accounts/*/claude/settings.json")))
 	}
