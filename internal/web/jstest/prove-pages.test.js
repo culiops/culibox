@@ -2167,6 +2167,39 @@ test("a late failure of an earlier load does not paint an error over the newer l
   assert.strictEqual(run("AN.data.costByDay.totals.cost"), 5);
 });
 
+// m5: the newest load failing drops the window it was to replace, so a later draw (a tab switch) cannot show the figures of the
+// previous Where or range under the new controls: it shows the failure again, until a load succeeds.
+test("a failed load leaves no figures behind: a tab switch after it shows the failure, not the previous filter's window", async () => {
+  for (const onPage of [true, false]) {
+    const env = analyticsEnv();
+    env.page(onPage);
+    const { run, el, ctx } = env;
+    run("anFitTimeChart = () => {};");
+    run('AN.from = "2026-10-09"; AN.to = "2026-11-07";');
+    const ok = (path) => {
+      const q = /from=([\d-]+)&to=([\d-]+)/.exec(path);
+      return Promise.resolve(path.startsWith("/api/analytics/summary") ? { from: q[1], to: q[2], byDayModel: [{ day: "2026-10-10", model: "claude-opus-5-5", costUsd: 777 }] } : {});
+    };
+    ctx.api = ok;
+    await run("anLoad()");
+    const body = () => el("analytics-body").textContent;
+    assert.ok(body().includes("$777"), "the first window is drawn");
+    run('AN.where = "host";');
+    ctx.api = () => Promise.reject(new Error("down"));
+    await run("anLoad()");
+    assert.strictEqual(run("AN.data"), null, "the previous window is dropped");
+    assert.ok(body().endsWith("Could not load analytics."));
+    for (const tab of ["workspaces", "models", "overview"]) {
+      run(`anSetTab(${JSON.stringify(tab)});`);
+      assert.ok(!body().includes("$777"), tab + ": no figure of the previous filter");
+      assert.ok(body().endsWith("Could not load analytics."), tab + ": the failure, not 'No usage recorded'");
+    }
+    ctx.api = ok;
+    await run("anLoad()");
+    assert.ok(body().includes("$777") && !/Could not load/.test(body()), "a load that succeeds draws again");
+  }
+});
+
 test("with Compare on, a stale load's previous-window answer does not land on the newer data", async () => {
   const env = analyticsEnv();
   env.page(true);
@@ -2782,7 +2815,7 @@ test("the legend sits in the card head; the footnote is a plain muted line under
   assert.strictEqual(bare.elements[1].elements[0].elements[0].elements[3].elements.length, 0, "no legend items when no model is priced");
 });
 
-test("the phone keeps its boxed disclaimer, its legend under the chart and its section headings", () => {
+test("the phone's Overview ends in the page's final note as its plain muted line; its legend under the chart and its section headings stay", () => {
   const env = analyticsEnv();
   env.page(false);
   overviewWindow(env);
@@ -2790,8 +2823,13 @@ test("the phone keeps its boxed disclaimer, its legend under the chart and its s
   const all = [];
   const walk = (n) => { all.push(n); n.elements.forEach(walk); };
   walk(root);
-  assert.strictEqual(all.filter((n) => n.cls.includes("an-cmpnote")).length, 1);
-  assert.match(all.find((n) => n.cls.includes("an-cmpnote")).innerHTML, /^Descriptive only\. Cross-model differences reflect the <b>task<\/b>/);
+  const note = root.elements[root.elements.length - 1];
+  assert.strictEqual(note.tag + "." + note.className, "p.an-hint", "the note helper the other phone tabs use (anPhoneNote)");
+  assert.strictEqual(note.textContent, "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.", "AN_COPY.overview.note, the page's words");
+  assert.ok(note.children.length === 1 && !note.innerHTML, "plain text, nothing set as HTML");
+  assert.ok(!all.some((n) => n.cls.includes("an-cmpnote")), "no boxed amber disclaimer");
+  assert.ok(!/an-cmpnote/.test(APP_CSS + DESK_CSS), "and no rule left for it");
+  assert.ok(!/innerHTML\s*=/.test(stripJsComments(read("analytics.js"))), "analytics.js sets no HTML anywhere");
   assert.ok(root.textContent.includes("Where the money goes") && root.textContent.includes("Cost by workspace (top 8)") && !root.textContent.includes("Cost by project"));
   assert.ok(all.some((n) => n.cls.includes("an-legend")) && !all.some((n) => /an-plegend|an-foot|an-hrow|an-pgrid|an-card/.test(n.className)), "none of the page's nodes");
 });
@@ -3288,8 +3326,9 @@ test("phone Cost drivers: four sections in the bar style, the page's figures, mu
   // MCP: the server, its two tools indented, then outside.
   assert.deepStrictEqual(allNodes(secs[3]).filter((n) => n.cls.includes("an-hbar")).map((r) => [r.elements[0].textContent, r.cls.includes("an-sub")]),
     [["docs", false], ["search", true], ["fetch", true], ["outside any MCP tool", false]]);
-  // 80 of 100 covered: one muted line before the sections, then the footnote.
-  assert.strictEqual(phone.root.elements[0].textContent, "Based on 80% of this window's API value: sessions whose transcripts are still on disk.");
+  // 80 of 100 covered: the tiles, one muted line before the sections, then the footnote.
+  assert.strictEqual(phone.root.elements[0].className, "an-kpis");
+  assert.strictEqual(phone.root.elements[1].textContent, "Based on 80% of this window's API value: sessions whose transcripts are still on disk.");
   assert.ok(phone.root.textContent.endsWith("count as \"outside\"."), "the footnote is the page's");
   assert.ok(!/NaN|undefined|Infinity/.test(phone.root.textContent + JSON.stringify(allNodes(phone.root).map((n) => n.style))));
 });
@@ -3337,6 +3376,37 @@ test("phone Models: the page's table, cell for cell", () => {
   assert.strictEqual(tbl.elements[0].elements[3].attrs.title, "A session that used several models counts once in each.");
   assert.ok(phone.root.textContent.endsWith("their tokens are counted, their value is not."));
   assert.ok(!allNodes(phone.root).some((n) => /an-card|an-psec/.test(n.className)));
+});
+
+// Spec §3.6: the phone shows the page's figures. Workspaces, Cost drivers and Sessions open with the page's three tiles, value and
+// label for value and label, in the phone's own tile and 2×2 grid (the Overview's), dollar figures in its cost value.
+test("phone Workspaces, Cost drivers and Sessions open with the page's tiles, in the phone's tile grid", () => {
+  const cases = [
+    ["anWorkspaces", "anWorkspacesPage", {}, ["v", "v", "v cost"],
+      [["2", "Workspaces in this window"], ["31% · 69%", "Host · Box, share of API value"], ["$100", "Costliest workspace · acme"]]],
+    ["anDrivers", "anDriversPage", { drivers: DRIVERS }, ["v", "v cost", "v cost"],
+      [["38%", "Of API value ran in subagents"], ["$12.00", "Costliest plugin · superpowers"], ["$9.00", "Costliest MCP server · docs"]]],
+    ["anSessions", "anSessions", {}, ["v", "v cost", "v cost"],
+      [["4", "Sessions in this window"], ["$121", "Costliest session · acme-api"], ["$80.07", "Median per session"]]],
+  ];
+  for (const [fn, pageFn, over, valueCls, want] of cases) {
+    const phone = phoneView(fn, over), page = pageView(pageFn, over);
+    const row = page.root.elements[0], grid = phone.root.elements[0];
+    assert.strictEqual(row.className, "kpi-row", fn + ": the page's tiles come first");
+    assert.strictEqual(grid.className, "an-kpis", fn + ": the phone's too, in its own grid");
+    const phoneTiles = grid.elements.map((t) => [t.elements[0].textContent, t.elements[1].textContent]);
+    assert.deepStrictEqual(phoneTiles, tilesOf(row).map((t) => [t.value, t.label]), fn + ": the page's values and labels");
+    assert.deepStrictEqual(grid.elements.map((t) => [t.className, t.elements.map((c) => c.className)]), valueCls.map((v) => ["an-kpi", [v, "l"]]), fn + ": the phone's tile");
+    if (want) assert.deepStrictEqual(phoneTiles, want, fn);
+    assert.ok(!/NaN|undefined|Infinity/.test(grid.textContent), fn);
+  }
+  // Sessions: the same three as the page, from the same preparation.
+  const { env, root } = phoneView("anSessions");
+  assert.deepStrictEqual(root.elements[0].elements.map((t) => [t.elements[0].textContent, t.elements[1].textContent]),
+    JSON.parse(env.run("JSON.stringify(anSessionKpis(AN.data).map((t) => [t.value, t.label]))")));
+  // No driver data: the one sentence, no tiles (the page draws none either).
+  const none = phoneView("anDrivers");
+  assert.ok(!allNodes(none.root).some((n) => /an-kpi/.test(n.className)));
 });
 
 test("phone Where: a select on its own line under the range chips, the page's options, and a change filters like the page's", async () => {

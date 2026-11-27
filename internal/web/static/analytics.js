@@ -660,8 +660,9 @@ if (typeof module !== "undefined" && module.exports) {
 // ---- rendering (browser only) -----------------------------------------------
 
 // where: the Where select's key ("" is All: host, box, "box:{profile}"; the API ignores a key it does not know). whereOpts: the
-// select's options for the window, [{key, label, costUsd}].
-const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, customOpen: false, data: null, where: "", whereOpts: [] };
+// select's options for the window, [{key, label, costUsd}]. failed: the newest load failed (data is null until one succeeds).
+const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, customOpen: false, data: null, where: "", whereOpts: [], failed: false };
+const AN_LOAD_FAILED = "Could not load analytics.";
 
 const RANGES = { "7d": 6, "30d": 29, "90d": 89, all: null };
 
@@ -763,10 +764,13 @@ async function anLoad() {
       api(`/api/analytics/where?${win}`),
     ]);
   } catch (_) {
-    if (seq === anLoadSeq) body.replaceChildren(anEmpty("Could not load analytics."));
+    // The newest load failed: the window it was to replace is dropped with it, so no later draw (a tab switch) shows the figures
+    // of a Where or range the controls no longer say; that draw shows the failure again.
+    if (seq === anLoadSeq) { AN.data = null; AN.failed = true; body.replaceChildren(anEmpty(AN_LOAD_FAILED)); }
     return;
   }
   if (seq !== anLoadSeq) return; // a newer load has been asked for: this answer is for a filter that is no longer chosen
+  AN.failed = false;
   const byDayModel = (summary && summary.byDayModel) || [];
   const sessRows = (sessions && sessions.sessions) || [];
   AN.whereOpts = (where && where.options) || [];
@@ -839,7 +843,7 @@ function anRender() {
   else body.appendChild(anControls());
   const d = AN.data;
   if (!d || !d.costByDay.days.length) {
-    body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
+    body.appendChild(anEmpty(!d && AN.failed ? AN_LOAD_FAILED : "No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
   // The five views are the phone's builders; on the page each hands over to its an...Page builder (anIsPage), both reading AN.data.
@@ -1076,7 +1080,7 @@ function anOverview(root) {
   const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
   root.appendChild(sec2);
 
-  root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
+  root.appendChild(anPhoneNote(AN_COPY.overview.note));
 }
 
 // anOverviewPage: M3.1 (§3.1; the mockup's frame 1): the four tiles (anOverviewKpis: API value, Sessions, Median per session, Cache
@@ -1161,11 +1165,12 @@ function anModels(root) {
 }
 
 // ---- Workspaces -------------------------------------------------------------
-// The bars (the page's top-of-Overview split, host / box) and the table: the page's columns less Model mix (a mini bar), a row a
-// plain line (no breakdown to open).
+// The page's three tiles, the bars (the page's top-of-Overview split, host / box) and the table: the page's columns less Model mix
+// (a mini bar), a row a plain line (no breakdown to open).
 function anWorkspaces(root) {
   if (anIsPage()) return anWorkspacesPage(root);
   const d = AN.data;
+  root.appendChild(anPhoneKpis(anWorkspaceTiles(d.workspaces), [2]));
   const sec = anSection(AN_COPY.workspaces.title);
   const box = el("div", "an-box");
   anWorkspaceBarRows(box, d.workspaces, AN_PHONE_WORKSPACE_BARS);
@@ -1193,10 +1198,12 @@ function anWorkspaces(root) {
 }
 
 // ---- Sessions ---------------------------------------------------------------
-// The page's eight columns and cells. A row opens nothing here: the phone has no live-session action to share with it.
+// The page's three tiles, then its eight columns and cells. A row opens nothing here: the phone has no live-session action to share
+// with it.
 function anSessions(root) {
   if (anIsPage()) return anSessionsPage(root);
   const d = AN.data;
+  root.appendChild(anPhoneKpis(anSessionKpis(d), [1, 2]));
   const sec = anSection(AN_COPY.sessions.title, "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
   tbl.appendChild(anColHead(AN_COPY.sessions.columns, 6));
@@ -1215,8 +1222,8 @@ function anSessions(root) {
 }
 
 // ---- Cost drivers -----------------------------------------------------------
-// Four sections in the bar style, each row name · bar · API value · % of the covered value; the muted last row has no bar. With
-// nothing covered the sentence alone.
+// The page's three tiles, then four sections in the bar style, each row name · bar · API value · % of the covered value; the muted
+// last row has no bar. With nothing covered the sentence alone, no tiles (as the page).
 function anDrivers(root) {
   if (anIsPage()) return anDriversPage(root);
   const dr = AN.data.drivers;
@@ -1226,6 +1233,7 @@ function anDrivers(root) {
     root.appendChild(sec);
     return;
   }
+  root.appendChild(anPhoneKpis(AN.data.driverTiles, [1, 2]));
   const cov = anCoverageText(dr.coverage);
   if (cov) root.appendChild(el("p", "an-hint", cov));
   for (const card of dr.cards) {
@@ -1264,6 +1272,15 @@ function anWorkspaceBarRows(box, rows, limit) {
 
 // anPhoneNote: the footnote under a phone view: one plain muted line (the phone's .an-hint).
 function anPhoneNote(text) { return el("p", "an-hint", text); }
+
+// anPhoneKpis: the tiles the page draws atop a view ({value, label} from anWorkspaceTiles, anDriverTiles, anSessionKpis), in the
+// phone's own tile (anKpi) and 2×2 grid, as the phone's Overview draws its four. The tiles at the indexes in `costAt` are dollar
+// figures and wear the Overview's cost value.
+function anPhoneKpis(tiles, costAt) {
+  const kpis = el("div", "an-kpis");
+  tiles.forEach((t, i) => kpis.appendChild(anKpi(costAt.includes(i) ? "cost" : "", t.value, t.label, t.delta)));
+  return kpis;
+}
 
 // ---- the desktop page's views (Models, Sessions, Workspaces, Cost drivers) ------------------------------------------------------
 // The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
@@ -1552,7 +1569,6 @@ function anCard(title, caption, level) {
   return card;
 }
 function anCardBody(card) { const b = el("div", "an-card-body"); card.appendChild(b); return b; }
-function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
 // anFootnote (the page): the note under a card as one plain muted line (§A2: no box, no border, no italics). Plain text only.
 function anFootnote(text) { return el("p", "an-foot t-sm muted", text); }
 // anColHead: the header row of a table whose labels AN_COPY writes in full (both skins; the phone's CSS sets them in capitals).

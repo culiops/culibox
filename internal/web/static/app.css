@@ -1239,7 +1239,6 @@
     .an-hbar.an-hpct.an-mut .nm { grid-column: 1 / 3; }
     .an-hbar.an-hpct.an-mut .track { display: none; }
     .an-hbar.an-sub .nm { padding-left: 12px; }
-    .an-cmpnote { font-size: 10.5px; color: var(--muted); border-left: 2px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); margin: 14px 0 0; border-radius: var(--radius); }
     .an-svgwrap { overflow-x: auto; }
     .an-tablewrap { overflow-x: auto; }
     .an-tablewrap .an-table { min-width: 480px; }
