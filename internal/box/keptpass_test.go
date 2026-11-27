@@ -1158,7 +1158,12 @@ func TestPassAgainCaseInsensitiveVolume(t *testing.T) {
 	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{
 		{Path: ".culiops", KeptAt: time.Now(), Status: keptStatusKept}}})
 	keptWrite(t, keptStoreHomeDir(m), ".culiops/f", "x")
-	keptWrite(t, home, ".Culiops/new", "aws_secret_access_key = abc") // merged in under another spelling
+	keptWrite(t, home, ".Culiops/ok", "x") // clean when the home is screened
+	// Written after the home's screen and before the move, so only the
+	// re-screen of the store can see it: merged in under another spelling.
+	keptHook(t, &keptPassLockHook, func(string) {
+		keptWrite(t, home, ".Culiops/new", "aws_secret_access_key = abc")
+	})
 	o := keptPassOpts{screened: map[string]bool{keptTestKey: true}}
 	if _, err := m.keepPassWith(context.Background(), keptTestBox, o); err != nil {
 		t.Fatal(err)
