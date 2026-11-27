@@ -206,6 +206,13 @@ func keptMountRel(mt Mount) string { return strings.TrimPrefix(mt.Box, boxHome+"
 // keep pass could take what this box writes for another store, or keep a
 // folder holding one of its mounts.
 func (m *Manager) prepareKept(name, key string, owner keptOwner, ws Mount, extraRO []Mount) ([]Mount, error) {
+	// The home is in use again: a count of reclaim passes it was kept for
+	// (keptRetries) starts over.
+	defer func() {
+		if err := removeKeptRetries(m.opts.StateRoot, name); err != nil {
+			log.Printf("box: %s: its count of reclaim passes kept for a slow folder stays: %v", name, err)
+		}
+	}()
 	if key == "" {
 		if err := removeKeptBoxRecord(m.opts.StateRoot, name); err != nil {
 			return nil, fmt.Errorf("%w: box %s: removing its kept-folder record: %v", ErrBoxUnavailable, name, err)

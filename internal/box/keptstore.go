@@ -28,7 +28,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -530,41 +529,55 @@ func readKeptBoxRecord(stateRoot, box string) (keptBoxRecord, bool) {
 	return r, true
 }
 
-// readKeptRetries is how many reclaim passes in a row kept box's home for a
-// folder too slow to check: .kept/.retries/<box>, reached without a link. 0
-// when there is none, or when it is not a small plain file holding a count (on
-// macOS the VM can write it: the worst a forged one does is let a slow folder
-// go sooner or later than 24 passes).
-func readKeptRetries(stateRoot, box string) int {
+// keptRetries is .kept/.retries/<box>: Count is how many reclaim passes in a
+// row kept box's home because a folder could not be screened in time, and
+// Slow the folders whose screens ran out of their own time cap in those
+// passes, which a pass at the cap lets go without screening them again.
+type keptRetries struct {
+	Count int      `json:"count"`
+	Slow  []string `json:"slow,omitempty"`
+}
+
+// readKeptRetries reads box's count, reached without a link. The zero value
+// when there is none, or when it is not a small plain file holding one; Slow
+// keeps only names validKeptRel allows. On macOS the VM can write it: the
+// worst a forged one does is let a slow folder go sooner or later than
+// keptReclaimRetries passes.
+func readKeptRetries(stateRoot, box string) keptRetries {
 	if !isBoxName(box) {
-		return 0
+		return keptRetries{}
 	}
 	root, err := os.OpenRoot(filepath.Join(stateRoot, stateDirName))
 	if err != nil {
-		return 0
+		return keptRetries{}
 	}
 	defer root.Close()
 	d, _, err := keptOpenPath(root, keptDirName+"/"+keptRetriesDirName)
 	if err != nil {
-		return 0
+		return keptRetries{}
 	}
 	defer d.Close()
-	b, err := keptReadFileAt(d, box, 32)
+	b, err := keptReadFileAt(d, box, keptRecordMax)
 	if err != nil {
-		return 0
+		return keptRetries{}
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || n < 0 {
-		return 0
+	var r keptRetries
+	if json.Unmarshal(b, &r) != nil || r.Count < 0 {
+		return keptRetries{}
 	}
-	return n
+	r.Slow = slices.DeleteFunc(r.Slow, func(rel string) bool { return !validKeptRel(rel) })
+	return r
 }
 
-// writeKeptRetries writes box's count n, atomically and 0600, creating
+// writeKeptRetries writes box's count r, atomically and 0600, creating
 // .kept/.retries (0700) on the way without following a link.
-func writeKeptRetries(stateRoot, box string, n int) error {
+func writeKeptRetries(stateRoot, box string, r keptRetries) error {
 	if !isBoxName(box) {
 		return fmt.Errorf("box: %q is not a box name", box)
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
 	}
 	state := filepath.Join(stateRoot, stateDirName)
 	root, err := os.OpenRoot(state)
@@ -577,5 +590,5 @@ func writeKeptRetries(stateRoot, box string, n int) error {
 		return fmt.Errorf("box: %s: kept-folder retry counts: %w", box, err)
 	}
 	defer d.Close()
-	return keptWriteAtomic(d, box, []byte(strconv.Itoa(n)+"\n"))
+	return keptWriteAtomic(d, box, append(b, '\n'))
 }

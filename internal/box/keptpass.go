@@ -319,10 +319,8 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 	if err != nil {
 		return 0, err
 	}
-	p := &keptPass{m: m, box: box, key: rec.Key, opts: o, home: home, store: store, shome: shome, now: time.Now(), st: keptCopy(before)}
-	if o.reclaim {
-		p.retries = readKeptRetries(m.opts.StateRoot, box)
-	}
+	p := &keptPass{m: m, box: box, key: rec.Key, opts: o, home: home, store: store, shome: shome,
+		start: start, now: time.Now(), st: keptCopy(before), retry: readKeptRetries(m.opts.StateRoot, box)}
 	keptAttribute(&p.st, m.opts.Instance, rec)
 	if err := p.plan(rec.Mounts); err != nil {
 		return 0, err
@@ -338,9 +336,7 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 	}
 	p.screenStore(ctx)
 	p.finish(before)
-	if o.reclaim {
-		p.countRetry()
-	}
+	p.countRetry()
 	if len(p.errs) > 0 {
 		return len(p.moved), p.errs
 	}
@@ -439,8 +435,9 @@ type keptPass struct {
 	m                  *Manager
 	box, key           string // the box and its store's key
 	opts               keptPassOpts
-	home, store, shome *os.Root // the box home, the store, the store's home/
-	now                time.Time
+	home, store, shome *os.Root  // the box home, the store, the store's home/
+	start              time.Time // when the pass began, before its wait for the store's lock
+	now                time.Time // when it began to read the store
 	st                 KeptState // the state being built, saved by finish
 
 	adopt []string            // store folders state.json does not list
@@ -461,10 +458,14 @@ type keptPass struct {
 	// screenedAll: screenStore screened every entry, in time. finish marks the
 	// store in opts.screened once that is saved.
 	screenedAll bool
-	// retries is how many reclaim passes in a row kept this home for a folder
-	// too slow to check, before this one; slow is set when this one did.
-	retries int
-	slow    bool
+	// retry is the home's count before this pass (keptRetries). slowNow are
+	// the folders whose screens ran out of their own time cap in this pass;
+	// shortOfTime is set when a home folder stays in the home for lack of
+	// time, and letGo when a folder was not kept for it at the cap.
+	retry       keptRetries
+	slowNow     []string
+	shortOfTime bool
+	letGo       bool
 }
 
 func (p *keptPass) row(rel, reason, box string) {
@@ -538,34 +539,70 @@ func (p *keptPass) mountRows(rows []KeptRefusalRow) {
 	}
 }
 
-// notChecked records the home folders left unscreened: they stay in the home.
+// notChecked records the home folders left unscreened or unmoved for lack of
+// time: they stay in the home.
 func (p *keptPass) notChecked(cs []keptCandidate) {
 	for _, c := range cs {
 		p.fail(c.Rel, errKeptOutOfTime)
+	}
+	if len(cs) > 0 {
+		p.shortOfTime = true
+	}
+}
+
+// atCap reports whether this is a reclaim pass of a home kept for lack of time
+// keptReclaimRetries passes in a row already (ruling R11).
+func (p *keptPass) atCap() bool {
+	return p.opts.reclaim && p.retry.Count >= keptReclaimRetries
+}
+
+// outOfTime is the home folders cs the pass has no time left to screen: left
+// in the home (notChecked), or at the cap not kept, too slow to check.
+func (p *keptPass) outOfTime(cs []keptCandidate) {
+	if !p.atCap() {
+		p.notChecked(cs)
+		return
+	}
+	for _, c := range cs {
+		p.row(c.Rel, keptReasonTooSlow, p.box)
+		p.letGo = true
 	}
 }
 
 // screenHome screens the home's candidates, until the deadline. A refusal is a
 // not-kept row; a folder that is not the directory discovery saw is not moved.
+// At the cap (atCap) a folder too slow at an earlier pass is not screened
+// again, and whatever the pass has no time for is not kept (outOfTime): the
+// home then goes.
 func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 	ctx, cancel := context.WithDeadline(ctx, until)
 	defer cancel()
+	capped := p.atCap()
 	for i, c := range p.todo {
+		if capped && slices.Contains(p.retry.Slow, c.Rel) {
+			p.row(c.Rel, keptReasonTooSlow, p.box)
+			p.letGo = true
+			continue
+		}
 		if ctx.Err() != nil {
-			p.notChecked(p.todo[i:])
+			p.outOfTime(p.todo[i:])
 			return
 		}
 		r := screenKept(ctx, p.home, c.Rel)
 		switch {
 		case ctx.Err() != nil:
-			p.notChecked(p.todo[i:]) // cut short: its result is no verdict
+			p.outOfTime(p.todo[i:]) // cut short: its result is no verdict
 			return
-		case r.Timeout && p.opts.reclaim && p.retries < keptReclaimRetries:
+		case r.Timeout && p.opts.reclaim && !capped:
 			// Slow, not refused: the home stays for the next reclaim (R8),
 			// until keptReclaimRetries passes did (R11): then it is not kept.
 			p.row(c.Rel, r.Reason, p.box)
 			p.fail(c.Rel, errKeptOutOfTime)
-			p.slow = true
+			p.slowNow = append(p.slowNow, c.Rel)
+			p.shortOfTime = true
+		case r.Timeout && capped:
+			p.row(c.Rel, r.Reason, p.box)
+			p.letGo = true
 		case r.Reason != "":
 			p.row(c.Rel, r.Reason, p.box)
 		case r.Dev != c.Dev || r.Ino != c.Ino:
@@ -598,10 +635,11 @@ func (p *keptPass) move(ctx context.Context) {
 	defer m.opMu.Unlock()
 	// Unused since the pass began: a box created and gone again while the
 	// home was screened touched its marker, and its home may hold what that
-	// box wrote after the screen. keptPassUseSlack forgives the touch of the
+	// box wrote after the screen. It counts from the pass's start, before the
+	// wait for the store's lock. keptPassUseSlack forgives the touch of the
 	// release that stopped the box (ReleaseBox touches the marker while its
 	// zero-TTL stop, and so this pass, may already run).
-	if _, ok := m.stillUnused(ctx, p.box, max(0, time.Since(p.now)-keptPassUseSlack)); !ok {
+	if _, ok := m.stillUnused(ctx, p.box, max(0, time.Since(p.start)-keptPassUseSlack)); !ok {
 		for _, c := range p.ready {
 			p.fail(c.Rel, errKeptBusy)
 		}
@@ -812,19 +850,41 @@ func (p *keptPass) screenFresh(ctx context.Context, rel string, ids map[[2]uint6
 	return true
 }
 
-// countRetry records whether this reclaim pass kept the home for a folder too
-// slow to check: one more in a row, or none. A count that cannot be written is
-// logged; the home then gets one more pass than keptReclaimRetries says.
+// countRetry keeps the home's count (keptRetries). A reclaim pass that left a
+// home folder in the home for lack of time, or let one go for it at the cap,
+// counts one more and adds the folders too slow this time to Slow: the count
+// never starts again while time is what keeps the home. Any other reclaim
+// pass ends the count. A stop or boot pass ends it once the folders that held
+// the home are kept: none is left in the home unmoved and nothing ran out of
+// time. ensure ends it too, when it writes the box's record (prepareKept). A
+// count that cannot be written is logged; the home then gets one more pass
+// than keptReclaimRetries says.
 func (p *keptPass) countRetry() {
 	var err error
-	if p.slow {
-		err = writeKeptRetries(p.m.opts.StateRoot, p.box, p.retries+1)
-	} else {
+	switch {
+	case p.opts.reclaim && (p.shortOfTime || p.letGo):
+		next := keptRetries{Count: p.retry.Count + 1}
+		for _, rel := range slices.Concat(p.retry.Slow, p.slowNow) {
+			if !slices.Contains(next.Slow, rel) && !slices.Contains(p.moved, rel) {
+				next.Slow = append(next.Slow, rel)
+			}
+		}
+		err = writeKeptRetries(p.m.opts.StateRoot, p.box, next)
+	case p.opts.reclaim:
+		err = removeKeptRetries(p.m.opts.StateRoot, p.box)
+	case p.retry.Count == 0 || p.shortOfTime:
+	case !slices.ContainsFunc(p.retry.Slow, p.leftInHome):
 		err = removeKeptRetries(p.m.opts.StateRoot, p.box)
 	}
 	if err != nil {
 		log.Printf("box: %s: counting the reclaim passes its home was kept for a slow folder: %v", p.box, err)
 	}
+}
+
+// leftInHome reports whether the home folder rel was a candidate of this pass
+// that it did not move.
+func (p *keptPass) leftInHome(rel string) bool {
+	return !slices.Contains(p.moved, rel) && slices.ContainsFunc(p.todo, func(c keptCandidate) bool { return c.Rel == rel })
 }
 
 // finish saves the state when the pass changed it, then audits and logs what

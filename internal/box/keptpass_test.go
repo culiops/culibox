@@ -927,18 +927,14 @@ func TestReclaimScreenEntryCapDoesNotHoldHome(t *testing.T) {
 // folder: -1 when there is no count.
 func keptRetriesOf(t *testing.T, m *Manager, box string) int {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptRetriesDirName, box))
+	_, err := os.Lstat(filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptRetriesDirName, box))
 	if os.IsNotExist(err) {
 		return -1
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		t.Fatalf("retries of %s: %q", box, b)
-	}
-	return n
+	return readKeptRetries(m.opts.StateRoot, box).Count
 }
 
 // keptSlowScreen makes every screen of .culiops run out of its time cap.
@@ -1246,5 +1242,119 @@ func TestPassHeldSaveFailsLogsError(t *testing.T) {
 	}
 	if saves != 3 || !strings.Contains(logs.String(), "ERROR") || !strings.Contains(logs.String(), "1 folder(s) was not saved") {
 		t.Fatalf("saves %d, log %q; want the final save tried twice and an error line", saves, logs.String())
+	}
+}
+
+// The cap holds however the pass runs out of time: three slow folders, of
+// which the pass's own home budget reaches one or two. At the cap the ones too
+// slow before are not screened again, every folder the pass cannot screen in
+// time is not kept, and the home goes at pass 25 with a row for each.
+func TestReclaimSlowFoldersCapNotEscaped(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	slow := []string{".s1", ".s2", ".s3"}
+	for _, rel := range slow {
+		keptWrite(t, home, rel+"/a", "a")
+		keptWrite(t, home, rel+"/b", "b")
+	}
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	setCap(t, &keptScreenTimeout, time.Millisecond)
+	setCap(t, &keptPassBudget, 120*time.Millisecond) // the home's screens get 60 ms
+	keptHook(t, &keptOpenHook, func(p string) {
+		if strings.HasPrefix(p, ".s") && strings.Contains(p, "/") {
+			time.Sleep(30 * time.Millisecond)
+		}
+	})
+	for pass := 1; pass <= keptReclaimRetries; pass++ {
+		done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+		if err != nil || len(done) != 1 || !done[0].Kept {
+			t.Fatalf("pass %d: done = %+v %v, want the home kept", pass, done, err)
+		}
+		if n := keptRetriesOf(t, m, keptTestBox); n != pass {
+			t.Fatalf("pass %d: count %d", pass, n)
+		}
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || done[0].Kept {
+		t.Fatalf("pass 25: done = %+v %v, want the home reclaimed", done, err)
+	}
+	st := keptLoad(t, m)
+	for _, rel := range slow {
+		if r, ok := keptRow(st, rel); !ok || r.Reason != "too slow to check" {
+			t.Errorf("%s: row %+v %v, want too slow to check", rel, r, ok)
+		}
+	}
+}
+
+// The count starts again when the folders that held the home are kept, by any
+// pass, and when the box's record is written again (its home reused).
+func TestReclaimRetriesResetOnKeepAndReuse(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptWrite(t, home, ".culiops/y", "y")
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	twoSlowPasses := func() {
+		t.Helper()
+		keptOpenHook = func(p string) {
+			if strings.HasPrefix(p, ".culiops/") {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		keptScreenTimeout = time.Millisecond
+		for range 2 {
+			if _, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n := keptRetriesOf(t, m, keptTestBox); n != 2 {
+			t.Fatalf("count %d, want 2", n)
+		}
+		keptOpenHook, keptScreenTimeout = nil, 10*time.Second
+	}
+	t.Cleanup(func() { keptOpenHook, keptScreenTimeout = nil, 10*time.Second })
+	twoSlowPasses()
+	// A stop pass keeps the folder: nothing holds the home for lack of time.
+	if n, err := m.keepPass(context.Background(), keptTestBox); n != 1 || err != nil {
+		t.Fatalf("stop pass: kept %d, %v", n, err)
+	}
+	if n := keptRetriesOf(t, m, keptTestBox); n != -1 {
+		t.Fatalf("count %d after the folder was kept, want none", n)
+	}
+	// Reused: a create writes the box's record again.
+	keptWrite(t, home, ".culiops/z1", "z")
+	keptWrite(t, home, ".culiops/z2", "z") // the time cap is checked between entries
+	twoSlowPasses()
+	if _, err := m.prepareKept(keptTestBox, keptTestKey, keptOwner{Profile: "p"}, Mount{Host: "/w", Box: "/w"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := keptRetriesOf(t, m, keptTestBox); n != -1 {
+		t.Fatalf("count %d after the box was created again, want none", n)
+	}
+}
+
+// The move's re-check counts from the pass's start, before its wait for the
+// store's lock: a box used and gone during that wait is seen.
+func TestPassUseSlackFromPassStart(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptAgeHome(t, m, keptTestBox, time.Hour)
+	setCap(t, &keptPassUseSlack, 200*time.Millisecond)
+	mu := m.keptStoreLock(keptTestKey)
+	mu.Lock()
+	type res struct {
+		n   int
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		n, err := m.keepPass(context.Background(), keptTestBox)
+		ch <- res{n, err}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	m.touchMarker(keptTestBox) // a box used and released while the pass waits
+	time.Sleep(200 * time.Millisecond)
+	mu.Unlock()
+	r := <-ch
+	if r.n != 0 || !errors.Is(r.err, errKeptBusy) {
+		t.Fatalf("kept %d, %v; want nothing moved, busy", r.n, r.err)
 	}
 }
