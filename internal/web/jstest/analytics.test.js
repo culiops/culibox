@@ -6,7 +6,7 @@ const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
   topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, modelColor, collapseZeroCost, pricedModelIds,
-  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
+  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort, anWsName,
   anModelFold, anPct, anSessionRow,
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
@@ -303,11 +303,23 @@ test("anSessionRow: one session's cells as text; mixed is flagged, a single mode
   const top = topSessionsByCost(SESS_ROWS, 18);
   assert.deepEqual({ ...anSessionRow(top[0]) }, {
     sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121",
-    workspace: "acme-api", where: "unknown", box: false, branch: "", liveId: "", clickable: false,
+    workspace: "acme-api", workspacePath: "", where: "unknown", box: false, branch: "", liveId: "", clickable: false,
   });
   const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
   assert.equal(single.model, "opus-5-5");
   assert.equal(single.mixed, false);
+});
+
+test("anWsName: a session's workspace shows as its folder's name, and the Costliest session tile names it the same way", () => {
+  assert.equal(anWsName("/home/u/box-clones/culiops-agent-box-prd"), "culiops-agent-box-prd");
+  assert.equal(anWsName("/home/u/work/"), "work");
+  assert.equal(anWsName("home-claude-old-proj"), "home-claude-old-proj"); // an unmatched row keeps its folder slug
+  assert.equal(anWsName(""), "");
+  const row = anSessionRow({ sid: "a1c3e507", day: "2026-11-12", project: "-x-y", workspace: "/home/u/work/acme-ledger", cost: 5, model: "claude-opus-5-5", runtime: "host" });
+  assert.equal(row.workspace, "acme-ledger");
+  assert.equal(row.workspacePath, "/home/u/work/acme-ledger");
+  const k = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "-x-y", workspace: "/home/u/work/acme-ledger", cost: 5 }], median: 5 });
+  assert.equal(k[1].label, "Costliest session · acme-ledger");
 });
 
 // ---- the cost chart's y labels and the legend (UI plan 5 Task 6; digest-design §A2, §B6) ----

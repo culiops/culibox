@@ -201,6 +201,13 @@ function projShort(p) {
   if (!p) return "";
   return p.replace(/^-home-[^-]+-/, "").replace(/^-/, "");
 }
+// anWsName: a workspace's name for a cell or a label: the last element of its folder path (the server's workspaceName), or the text
+// itself when it has no "/" (an unmatched row's folder slug). The full path stays in the cell's title.
+function anWsName(ws) {
+  const t = String(ws || "").replace(/\/+$/, "");
+  const i = t.lastIndexOf("/");
+  return i >= 0 && i < t.length - 1 ? t.slice(i + 1) : t;
+}
 
 // ---- the desktop page's KPI figures -------------------------------------------------------------------------------
 
@@ -216,7 +223,7 @@ function anCountText(n) {
 function anSessionKpis(d) {
   const L = AN_COPY.sessions.kpis;
   const top = (d.topSessions || [])[0];
-  const ws = top && (top.workspace || projShort(top.project));
+  const ws = top && anWsName(top.workspace || projShort(top.project));
   return [
     { value: anCountText(d.sessionCount), label: L[0] },
     { value: top ? usd(top.cost) : "—", label: ws ? L[1] + " · " + ws : L[1] },
@@ -302,7 +309,7 @@ function anSessionRow(s) {
   return {
     sid: s.sid, day: s.day, project: projShort(s.project), model: shortModel(s.model), mixed: s.model === "mixed",
     tokens: fmtCompact(s.tokens), prompts: String(s.prompts), cost: usd(s.cost),
-    workspace: s.workspace || projShort(s.project), where: anWhereText(s.runtime, s.profile), box: s.runtime === "box",
+    workspace: anWsName(s.workspace || projShort(s.project)), workspacePath: s.workspace || "", where: anWhereText(s.runtime, s.profile), box: s.runtime === "box",
     branch: s.branch || "", liveId: s.liveId || "", clickable: !!s.liveId,
   };
 }
@@ -639,7 +646,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, AN_API_VALUE_TITLE, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     topSessionsByCost, distinctSessions,
-    prevWindow, pctDelta, modelColor, shortModel, projShort,
+    prevWindow, pctDelta, modelColor, shortModel, projShort, anWsName,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
     median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
@@ -1306,7 +1313,9 @@ function anSessionsPage(root) {
     const branch = el("td", r.branch ? "an-ell" : "an-ell sub");
     if (r.branch) { branch.appendChild(el("span", "mono t-sm", r.branch)); branch.setAttribute("title", r.branch); }
     else branch.textContent = "—";
-    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), anIdTd(r.workspace, "an-wrap"), where, branch,
+    const wsTd = anIdTd(r.workspace, "an-wrap");
+    if (r.workspacePath) wsTd.setAttribute("title", r.workspacePath);
+    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), wsTd, where, branch,
       r.mixed ? anTd(r.model, "sub") : anIdTd(r.model), anTd(r.prompts, "num"), anTd(r.cost, "num w-500"));
     if (r.clickable) anLiveRow(tr, r.liveId);
     tbl.appendChild(tr);
