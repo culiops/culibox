@@ -20,12 +20,12 @@ type keptAuditLog struct {
 	err  error // returned by every call
 }
 
-type keptAuditRow struct{ action, name, detail string }
+type keptAuditRow struct{ action, name, detail, actor string }
 
-func (a *keptAuditLog) record(action, name, detail string) error {
+func (a *keptAuditLog) record(actor, action, name, detail string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.rows = append(a.rows, keptAuditRow{action, name, detail})
+	a.rows = append(a.rows, keptAuditRow{action, name, detail, actor})
 	return a.err
 }
 
@@ -158,7 +158,7 @@ func TestPassKeepsAndRecords(t *testing.T) {
 		t.Fatalf("profile = %q, want it kept as p", st.Profile)
 	}
 	rows := audit.of(keptAuditKept)
-	want := keptAuditRow{keptAuditKept, "p", "paths=.config/culiops,.culiops box=" + keptTestBox}
+	want := keptAuditRow{keptAuditKept, "p", "paths=.config/culiops,.culiops box=" + keptTestBox, keptActorCuliBox}
 	if len(rows) != 1 || rows[0] != want {
 		t.Fatalf("audit = %+v, want one %+v", audit.rows, want)
 	}
@@ -313,7 +313,7 @@ func TestPassRescreenHolds(t *testing.T) {
 		t.Fatalf("entry = %+v, want held for .culiops/id_rsa, kept_at unchanged", e)
 	}
 	rows := audit.of(keptAuditHeld)
-	want := keptAuditRow{keptAuditHeld, "p", "path=.culiops reason=looks like credentials: .culiops/id_rsa"}
+	want := keptAuditRow{keptAuditHeld, "p", "path=.culiops reason=looks like credentials: .culiops/id_rsa", keptActorCuliBox}
 	if len(rows) != 1 || rows[0] != want {
 		t.Fatalf("held audit = %+v, want one %+v", rows, want)
 	}

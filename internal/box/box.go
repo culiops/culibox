@@ -307,10 +307,13 @@ type Options struct {
 	// stop, the removal of an idle box in a spawn's way, and the sweep's
 	// removal; nil = no notice.
 	OnStop func(name, workspace string)
-	// Audit records one row of what the keep pass did (keptpass.go): action
-	// box_kept or box_kept_held, name the store's profile, detail as the pass
-	// writes it. A failure is logged and never stops the pass; nil = no rows.
-	Audit func(action, name, detail string) error
+	// Audit records one row about a kept store: what the keep pass did
+	// (keptpass.go, action box_kept or box_kept_held, actor "culibox") or a
+	// forget (keptview.go, action box_kept_forget, actor the person who asked,
+	// as the web layer names it). name is the store's profile, detail as the
+	// caller writes it. A failure is logged and never stops what it records;
+	// nil = no rows.
+	Audit func(actor, action, name, detail string) error
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
 	// not the one virtiofs shows the box). ensure calls it, once, for the

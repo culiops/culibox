@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
-	"github.com/culiops/culibox/internal/boxread"
 	"github.com/culiops/culibox/internal/config"
 )
 
@@ -24,6 +24,8 @@ import (
 type keptDocker struct {
 	mu      sync.Mutex
 	running map[string]bool
+	stopped []string
+	stopErr error // every Stop fails with it, the box left running
 }
 
 func (d *keptDocker) Run(context.Context, []string) (string, error)    { return "", nil }
@@ -38,8 +40,17 @@ func (d *keptDocker) Inspect(_ context.Context, name string) (box.State, error) 
 }
 func (d *keptDocker) ListBoxes(context.Context, string) ([]box.BoxInfo, error) { return nil, nil }
 func (d *keptDocker) ListByLabel(context.Context, string) ([]string, error)    { return nil, nil }
-func (d *keptDocker) Stop(context.Context, string) error                       { return nil }
-func (d *keptDocker) HasRuntime(context.Context, string) (bool, error)         { return false, nil }
+func (d *keptDocker) Stop(_ context.Context, name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopErr != nil {
+		return d.stopErr
+	}
+	d.stopped = append(d.stopped, name)
+	delete(d.running, name)
+	return nil
+}
+func (d *keptDocker) HasRuntime(context.Context, string) (bool, error) { return false, nil }
 func (d *keptDocker) InspectMounts(ctx context.Context, name string) (box.State, []string, box.BoxLabels, error) {
 	st, err := d.Inspect(ctx, name)
 	return st, nil, box.BoxLabels{}, err
@@ -56,20 +67,44 @@ const keptAPIBox = "ab-box-0123456789ab"
 // the server, the store's key, its directory, and the docker fake.
 type keptAPIFixture struct {
 	s      *Server
+	m      *box.Manager
 	key    string
 	store  string
 	docker *keptDocker
 	root   string
+	audit  *keptAudit
+}
+
+// keptAudit is what the box manager hands its audit hook.
+type keptAudit struct {
+	mu   sync.Mutex
+	rows [][4]string // actor, action, name, detail
+}
+
+func (a *keptAudit) record(actor, action, name, detail string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rows = append(a.rows, [4]string{actor, action, name, detail})
+	return nil
+}
+
+func (a *keptAudit) all() [][4]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([][4]string(nil), a.rows...)
 }
 
 func keptAPI(t *testing.T) keptAPIFixture {
 	t.Helper()
 	root := t.TempDir()
 	docker := &keptDocker{running: map[string]bool{}}
-	m, err := box.New(box.Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: "TEST", StateRoot: root, Client: docker})
+	audit := &keptAudit{}
+	m, err := box.New(box.Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: "TEST", StateRoot: root, Client: docker,
+		Audit: audit.record})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(m.WaitKeptPasses) // the keep pass of a box a forget removed
 	pm := NewProfileManager([]config.AgentConfig{{Name: "p", Bin: "claude"}, {Name: "q", Bin: "claude"}}, nil, "", nil,
 		newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
@@ -78,7 +113,7 @@ func keptAPI(t *testing.T) keptAPIFixture {
 	store := keptWriteStore(t, root, key, box.KeptState{Profile: "p", Workspace: "/w", Kept: []box.KeptEntry{
 		{Path: ".culiops", KeptAt: time.Now(), Bytes: 5, Files: 1, Status: "kept"}}})
 	keptFile(t, store, "home/.culiops/a.txt", "hello")
-	return keptAPIFixture{s: s, key: key, store: store, docker: docker, root: root}
+	return keptAPIFixture{s: s, m: m, key: key, store: store, docker: docker, root: root, audit: audit}
 }
 
 func keptWriteStore(t *testing.T, root, key string, st box.KeptState) string {
@@ -300,23 +335,92 @@ func TestKeptAPIForgetCSRF(t *testing.T) {
 	if _, err := os.Lstat(folder); !os.IsNotExist(err) {
 		t.Fatalf("the folder is still there after forget: %v", err)
 	}
+	want := [4]string{"web", "box_kept_forget", "p", "path=.culiops"}
+	if rows := f.audit.all(); len(rows) != 1 || rows[0] != want {
+		t.Fatalf("audit rows %v, want one %v: a forget is the person's, not CuliBox's", rows, want)
+	}
 }
 
-func TestKeptAPIForgetRunning409(t *testing.T) {
+// A bearer client's forget is audited as the bearer's.
+func TestKeptAPIForgetActorBearer(t *testing.T) {
 	f := keptAPI(t)
+	auth, plain := testServerWithAuth(t)
+	f.s.Session, f.s.Tokens = auth.Session, auth.Tokens
+	r := httptest.NewRequest("POST", "/api/profiles/p/kept/forget", strings.NewReader(`{"key":"`+f.key+`","path":".culiops"}`))
+	r.Header.Set("Authorization", "Bearer "+plain)
+	rec := httptest.NewRecorder()
+	f.s.Handler().ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bearer forget: %d %s", rec.Code, rec.Body)
+	}
+	if rows := f.audit.all(); len(rows) != 1 || rows[0][0] != "bearer" {
+		t.Fatalf("audit rows %v, want one by bearer", rows)
+	}
+}
+
+// keptAPIRecord writes the record of keptAPIBox, a box of store key.
+func keptAPIRecord(t *testing.T, f keptAPIFixture) {
+	t.Helper()
 	keptFile(t, filepath.Join(f.root, "boxstate", ".kept", ".boxes"), keptAPIBox, `{"key":"`+f.key+`"}`)
 	f.docker.mu.Lock()
 	f.docker.running[keptAPIBox] = true
 	f.docker.mu.Unlock()
+}
+
+// Only a live session refuses a forget, with a sentence the user can act on.
+func TestKeptAPIForgetSessions409(t *testing.T) {
+	f := keptAPI(t)
+	keptAPIRecord(t, f)
+	f.m.AdoptBox(keptAPIBox) // a live session in the store's box
 	rec := keptPost(f.s, "p", `{"key":"`+f.key+`","path":".culiops"}`)
-	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"stop this profile's boxed sessions first"}` {
-		t.Fatalf("forget while running: %d %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"end this profile's boxed sessions first"}` {
+		t.Fatalf("forget with a session: %d %s", rec.Code, rec.Body)
+	}
+	if _, err := os.Stat(filepath.Join(f.store, "home/.culiops/a.txt")); err != nil {
+		t.Fatalf("a refused forget removed the folder: %v", err)
 	}
 	for _, body := range []string{`{"key":"` + f.key + `","path":".config"}`, `{"key":"0123456789ab","path":".culiops"}`, `not json`,
 		`{"key":"` + f.key + `","path":".culiops","x":1}`} {
 		if rec := keptPost(f.s, "p", body); rec.Code != http.StatusNotFound && rec.Code != http.StatusBadRequest {
 			t.Errorf("forget %s: %d %s, want 404 or 400", body, rec.Code, rec.Body)
 		}
+	}
+}
+
+// A box with no session (it outlives its last one by the idle TTL) is removed
+// and the forget goes on.
+func TestKeptAPIForgetIdleBoxRemoved(t *testing.T) {
+	f := keptAPI(t)
+	keptAPIRecord(t, f)
+	rec := keptPost(f.s, "p", `{"key":"`+f.key+`","path":".culiops"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forget with an idle box: %d %s", rec.Code, rec.Body)
+	}
+	f.docker.mu.Lock()
+	stopped := append([]string(nil), f.docker.stopped...)
+	f.docker.mu.Unlock()
+	if len(stopped) != 1 || stopped[0] != keptAPIBox {
+		t.Fatalf("stopped %v, want the idle box %s", stopped, keptAPIBox)
+	}
+	if _, err := os.Lstat(filepath.Join(f.store, "home/.culiops")); !os.IsNotExist(err) {
+		t.Fatalf("the folder is still there: %v", err)
+	}
+}
+
+// An idle box that will not go: the user is told to try again.
+func TestKeptAPIForgetIdleBoxStopping409(t *testing.T) {
+	f := keptAPI(t)
+	keptAPIRecord(t, f)
+	f.docker.mu.Lock()
+	f.docker.stopErr = errors.New("docker rm: busy")
+	f.docker.mu.Unlock()
+	rec := keptPost(f.s, "p", `{"key":"`+f.key+`","path":".culiops"}`)
+	if rec.Code != http.StatusConflict ||
+		strings.TrimSpace(rec.Body.String()) != `{"error":"a box of this profile is still stopping; try again in a minute"}` {
+		t.Fatalf("forget when the idle box will not stop: %d %s", rec.Code, rec.Body)
+	}
+	if _, err := os.Stat(filepath.Join(f.store, "home/.culiops/a.txt")); err != nil {
+		t.Fatalf("a refused forget removed the folder: %v", err)
 	}
 }
 
@@ -345,27 +449,21 @@ func TestKeptAPIUnknownProfile404(t *testing.T) {
 	}
 }
 
-// GET /kept answers from state.json: a store that says 1 GiB is 1 GiB, and no
-// directory is listed.
+// GET /kept answers from state.json alone: a store whose state says 1 GiB is
+// 1 GiB, and its kept row stays even with the folder gone from disk, which a
+// walk or a stat of the folder would have shown. That no directory under the
+// store's home/ is opened or listed is pinned in the box package, where the
+// hooks are (TestKeptStoresNoWalk).
 func TestKeptAPIGetDoesNoWalk(t *testing.T) {
 	f := keptAPI(t)
 	keptWriteStore(t, f.root, f.key, box.KeptState{Profile: "p", Workspace: "/w", Kept: []box.KeptEntry{
 		{Path: ".culiops", KeptAt: time.Now(), Bytes: 1 << 30, Files: 1, Status: "kept"}}})
-	n := 0
-	old := keptReadDir
-	keptReadDir = func(r *os.Root, rel string, max int) ([]boxread.Entry, bool, bool) {
-		n++
-		return old(r, rel, max)
+	if err := os.RemoveAll(filepath.Join(f.store, "home", ".culiops")); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { keptReadDir = old })
 	rec := keptGet(f.s, "p", "", nil)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total_bytes":1073741824`) {
-		t.Fatalf("GET kept: %d %s, want total_bytes from the state", rec.Code, rec.Body)
-	}
-	if n != 0 {
-		t.Fatalf("GET kept listed %d directories, want 0", n)
-	}
-	if rec := keptGet(f.s, "p", "/list", url.Values{"key": {f.key}, "path": {".culiops"}}); rec.Code != http.StatusOK || n != 1 {
-		t.Fatalf("GET kept/list: %d, %d listings; want 200 and 1", rec.Code, n)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total_bytes":1073741824`) ||
+		!strings.Contains(rec.Body.String(), `"path":".culiops"`) {
+		t.Fatalf("GET kept: %d %s, want the row and total_bytes from the state", rec.Code, rec.Body)
 	}
 }

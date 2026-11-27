@@ -12,8 +12,9 @@ import (
 	"github.com/culiops/culibox/internal/config"
 )
 
-// The keep pass's audit rows reach the audit store as CuliBox's own, under the
-// store's profile; with no store installed the hook refuses instead of
+// The kept stores' audit rows reach the audit store under the store's profile
+// with the actor the box layer was given: "culibox" for the keep pass, the
+// person for a forget. With no store installed the hook refuses instead of
 // dropping the row silently.
 func TestBoxLayerOptionsAuditKeepRows(t *testing.T) {
 	l := &boxLayer{goos: "linux"}
@@ -21,16 +22,22 @@ func TestBoxLayerOptionsAuditKeepRows(t *testing.T) {
 	if o.Audit == nil {
 		t.Fatal("no Audit hook")
 	}
-	if err := o.Audit("box_kept", "p", "paths=.culiops box=ab-box-0123456789ab"); err == nil {
+	if err := o.Audit("culibox", "box_kept", "p", "paths=.culiops box=ab-box-0123456789ab"); err == nil {
 		t.Fatal("no error with no audit store installed")
 	}
 	var got []broker.CredEvent
 	l.setAudit(func(e broker.CredEvent) error { got = append(got, e); return nil })
-	if err := o.Audit("box_kept", "p", "paths=.culiops box=ab-box-0123456789ab"); err != nil {
+	if err := o.Audit("culibox", "box_kept", "p", "paths=.culiops box=ab-box-0123456789ab"); err != nil {
 		t.Fatal(err)
 	}
-	want := broker.CredEvent{Action: "box_kept", Kind: "box", Name: "p", Actor: "culibox", Detail: "paths=.culiops box=ab-box-0123456789ab"}
-	if len(got) != 1 || got[0] != want {
+	if err := o.Audit("web", "box_kept_forget", "p", "path=.culiops"); err != nil {
+		t.Fatal(err)
+	}
+	want := []broker.CredEvent{
+		{Action: "box_kept", Kind: "box", Name: "p", Actor: "culibox", Detail: "paths=.culiops box=ab-box-0123456789ab"},
+		{Action: "box_kept_forget", Kind: "box", Name: "p", Actor: "web", Detail: "path=.culiops"},
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("rows = %+v, want %+v", got, want)
 	}
 }

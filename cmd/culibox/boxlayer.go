@@ -298,14 +298,16 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 				(*f)(name, workspace)
 			}
 		},
-		// The keep pass's rows (box_kept, box_kept_held), like the clone merge's
-		// (cloneHooks.mergeAudit): CuliBox did it, for the store's profile.
-		Audit: func(action, name, detail string) error {
+		// The kept stores' rows, for the store's profile: the keep pass's
+		// (box_kept, box_kept_held) with the actor "culibox", like the clone
+		// merge's (cloneHooks.mergeAudit), and a forget's (box_kept_forget)
+		// with the person the web layer names.
+		Audit: func(actor, action, name, detail string) error {
 			f := l.audit.Load()
 			if f == nil {
 				return errors.New("no audit store")
 			}
-			return (*f)(broker.CredEvent{Action: action, Kind: "box", Name: name, Actor: "culibox", Detail: detail})
+			return (*f)(broker.CredEvent{Action: action, Kind: "box", Name: name, Actor: actor, Detail: detail})
 		},
 	}
 	if l.adoptable {

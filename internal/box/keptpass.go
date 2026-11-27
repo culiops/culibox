@@ -68,6 +68,9 @@ const (
 	keptAuditHeld = "box_kept_held" // detail: path=<p> reason=<r>
 )
 
+// keptActorCuliBox is the audit actor of what the keep pass does on its own.
+const keptActorCuliBox = "culibox"
+
 // keptReasonFull is the not-kept reason past keptMaxPaths.
 const keptReasonFull = "too many kept folders"
 
@@ -830,7 +833,7 @@ func (p *keptPass) audit(action, detail string) {
 				"its audit rows name the profile \"unknown\"", p.key)
 		}
 	}
-	if err := p.m.opts.Audit(action, name, detail); err != nil {
+	if err := p.m.opts.Audit(keptActorCuliBox, action, name, detail); err != nil {
 		log.Printf("box: %s: audit row %s not written: %v", p.box, action, err)
 	}
 }

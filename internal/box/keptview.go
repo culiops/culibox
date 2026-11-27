@@ -45,9 +45,16 @@ var (
 var keptViewListHook func(rel string)
 
 var (
-	// ErrKeptInUse: a box whose record names the store is running, or has a
-	// session, so its kept folders are mounted and cannot be forgotten now.
-	ErrKeptInUse = errors.New("box: a box of this kept store is running")
+	// ErrKeptInUse: a box of the store is in use, so its kept folders are
+	// mounted and cannot be forgotten now. A forget's refusal also wraps the
+	// reason, ErrKeptSessions or ErrKeptStopping. Nothing changed.
+	ErrKeptInUse = errors.New("box: a box of this kept store is in use")
+	// ErrKeptSessions: a box whose record names the store has a live
+	// session. Only the user can end it.
+	ErrKeptSessions = errors.New("box: a box of this kept store has a live session")
+	// ErrKeptStopping: a box of the store with no session (one that outlives
+	// its last session by the idle TTL) could not be removed now.
+	ErrKeptStopping = errors.New("box: a box of this kept store could not be stopped")
 	// ErrKeptRunUnknown: whether a box of the store runs could not be read
 	// (docker did not answer, a record could not be listed). Nothing changed.
 	ErrKeptRunUnknown = errors.New("box: could not tell whether a box of this kept store is running")
@@ -416,27 +423,33 @@ func lockWithin(ctx context.Context, mu *sync.Mutex) error {
 	}
 }
 
-// KeptForget forgets the kept folder rel of store key, on the user's word:
-// its home/<rel> and every older copy of it (clash/<box>/<rel>, and the
-// numbered <rel>~N) are removed, its entry and not-kept rows go, and rel is
-// added to the store's forgotten list, so no keep pass keeps it again. The
-// audit row box_kept_forget names the store's profile (keptStateAttribution),
-// else "unknown".
+// KeptForget forgets the kept folder rel of store key, on the word of actor
+// (the person, as the web layer names them: "web", "bearer"): its home/<rel>
+// and every older copy of it (clash/<box>/<rel>, and the numbered <rel>~N)
+// are removed, its entry and not-kept rows go, and rel is added to the
+// store's forgotten list, so no keep pass keeps it again. The audit row
+// box_kept_forget names actor and the store's profile
+// (keptStateAttribution), else "unknown".
 //
-// It takes the store's lock first and opMu after it, the keep pass's order,
-// and it is refused with ErrKeptInUse while any box whose record names the
-// store runs or has a session (its folders are mounted): the check and the
-// state's save happen under opMu, so no box is created between them, and a
-// box created after mounts nothing of rel (ensure reads state.json under
-// opMu). The removal runs after opMu is let go, under the store's lock only:
-// a large folder must not hold every spawn. When some of it cannot be
-// removed the error is ErrKeptNotRemoved: rel is forgotten all the same, and
-// a forget of rel again tries the rest while anything is left at home/<rel>.
+// It takes the store's lock first and opMu after it, the keep pass's order.
+// Under opMu, the boxes whose record names the store are cleared
+// (keptClearBoxes): one with a live session refuses the forget
+// (ErrKeptSessions), one that only outlives its last session is removed as a
+// spawn removes an idle box in its way (ErrKeptStopping when it will not go),
+// and then the state is saved. So no box mounts rel from then on: none of the
+// store's runs, and one created later reads the saved state (ensure reads
+// state.json under opMu). A removed box's keep pass runs in its own goroutine
+// (stopped) and waits for the store's lock, so it starts once this forget is
+// done and finds rel forgotten. The removal of the files runs after opMu is
+// let go, under the store's lock only: a large folder must not hold every
+// spawn. When some of it cannot be removed the error is ErrKeptNotRemoved:
+// rel is forgotten all the same, and a forget of rel again tries the rest
+// while anything is left at home/<rel>.
 //
 // fs.ErrNotExist when key or rel cannot name a kept folder, or the store has
 // neither an entry nor a folder for rel. ErrKeptRunUnknown when whether a box
 // runs could not be read. A state that cannot be read is never written over.
-func (m *Manager) KeptForget(ctx context.Context, key, rel string) error {
+func (m *Manager) KeptForget(ctx context.Context, key, rel, actor string) error {
 	if !ValidConversationsKey(key) || !validKeptRel(rel) {
 		return fs.ErrNotExist
 	}
@@ -464,18 +477,20 @@ func (m *Manager) KeptForget(ctx context.Context, key, rel string) error {
 		next.Forgotten = append(next.Forgotten, rel)
 	}
 
-	if err := m.lockOp(ctx); err != nil {
-		return err
-	}
-	err = m.keptNoneRunning(ctx, key)
-	if err == nil {
-		err = saveKeptState(store, next)
-	}
-	m.opMu.Unlock()
+	err = func() error {
+		if err := m.lockOp(ctx); err != nil {
+			return err
+		}
+		defer m.opMu.Unlock()
+		if err := m.keptClearBoxes(ctx, key); err != nil {
+			return err
+		}
+		return saveKeptState(store, next)
+	}()
 	if err != nil {
 		return err
 	}
-	m.keptForgetAudit(key, next, rel)
+	m.keptForgetAudit(key, next, rel, actor)
 	log.Printf("box: kept store %s: forgot %q on the user's word; it is not kept again", key, rel)
 	if err := keptRemoveCopies(ctx, store, rel); err != nil {
 		log.Printf("box: kept store %s: %q is forgotten, but some of its files stay in the store: %v", key, rel, err)
@@ -500,11 +515,16 @@ func keptPresent(store *os.Root, rel string) bool {
 	return err == nil
 }
 
-// keptNoneRunning returns ErrKeptInUse when a box whose record names store
-// key, or whose record cannot be read (it may), has a session or a running
-// container, and ErrKeptRunUnknown when that cannot be told. The caller holds
-// opMu.
-func (m *Manager) keptNoneRunning(ctx context.Context, key string) error {
+// keptClearBoxes makes sure no box of store key runs, for a forget. The
+// store's boxes are those whose record names key, and those whose record
+// cannot be read (they may be). If any has a live session it returns
+// ErrKeptSessions and touches nothing. Otherwise each one still running (it
+// outlives its last session by the idle TTL) is removed with removeIdle, as a
+// spawn removes an idle box in its way; one that will not go is
+// ErrKeptStopping. ErrKeptRunUnknown when the records or docker cannot say.
+// The caller holds opMu: no session starts in a box meanwhile (ensure holds
+// opMu when it counts one).
+func (m *Manager) keptClearBoxes(ctx context.Context, key string) error {
 	state, err := os.OpenRoot(filepath.Join(m.opts.StateRoot, stateDirName))
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrKeptRunUnknown, err)
@@ -522,6 +542,7 @@ func (m *Manager) keptNoneRunning(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("%w: the box records: %v", ErrKeptRunUnknown, err)
 	}
+	var boxes []string
 	for _, name := range names {
 		if !isBoxName(name) {
 			continue // a record's temp file
@@ -530,22 +551,30 @@ func (m *Manager) keptNoneRunning(ctx context.Context, key string) error {
 			continue
 		}
 		if !m.idle(name) {
-			return fmt.Errorf("%w: %s has a session", ErrKeptInUse, name)
+			return fmt.Errorf("%w: %w: %s", ErrKeptInUse, ErrKeptSessions, name)
 		}
+		boxes = append(boxes, name)
+	}
+	for _, name := range boxes {
 		st, err := m.opts.Client.Inspect(ctx, name)
 		if err != nil {
 			return fmt.Errorf("%w: %s: %v", ErrKeptRunUnknown, name, err)
 		}
-		if st == StateRunning {
-			return fmt.Errorf("%w: %s", ErrKeptInUse, name)
+		if st != StateRunning {
+			continue
 		}
+		if err := m.removeIdle(ctx, name); err != nil {
+			log.Printf("box: %s: not removed for a forget of a kept folder: %v", name, err)
+			return fmt.Errorf("%w: %w: %s: %v", ErrKeptInUse, ErrKeptStopping, name, err)
+		}
+		log.Printf("box: %s: removed, idle, so a kept folder of its profile can be forgotten", name)
 	}
 	return nil
 }
 
-// keptForgetAudit writes the forget's audit row. A failure is logged: the
-// forget has happened either way.
-func (m *Manager) keptForgetAudit(key string, st KeptState, rel string) {
+// keptForgetAudit writes the forget's audit row, as actor's. A failure is
+// logged: the forget has happened either way.
+func (m *Manager) keptForgetAudit(key string, st KeptState, rel, actor string) {
 	if m.opts.Audit == nil {
 		return
 	}
@@ -553,7 +582,10 @@ func (m *Manager) keptForgetAudit(key string, st KeptState, rel string) {
 	if !ok {
 		name = "unknown"
 	}
-	if err := m.opts.Audit(keptAuditForget, name, "path="+rel); err != nil {
+	if actor == "" {
+		actor = "unknown"
+	}
+	if err := m.opts.Audit(actor, keptAuditForget, name, "path="+rel); err != nil {
 		log.Printf("box: kept store %s: audit row %s not written: %v", key, keptAuditForget, err)
 	}
 }

@@ -258,41 +258,61 @@ func keptForgetSetup(t *testing.T) (*Manager, *fakeClient, *keptAuditLog, string
 	return m, f, audit, store
 }
 
-func TestKeptForgetRefusesRunning(t *testing.T) {
-	m, f, _, store := keptForgetSetup(t)
-	f.mu.Lock()
-	f.running[keptTestBox] = true
-	f.mu.Unlock()
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); !errors.Is(err, ErrKeptInUse) {
-		t.Fatalf("KeptForget with a running box of the store: %v, want ErrKeptInUse", err)
-	}
-	f.mu.Lock()
-	f.running[keptTestBox] = false
-	f.inspectErr = errors.New("docker is down")
-	f.mu.Unlock()
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); !errors.Is(err, ErrKeptRunUnknown) {
-		t.Fatalf("KeptForget when docker cannot say: %v, want ErrKeptRunUnknown", err)
-	}
-	f.mu.Lock()
-	f.inspectErr = nil
-	f.mu.Unlock()
-	m.mu.Lock()
-	m.active[keptTestBox] = 1
-	m.mu.Unlock()
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); !errors.Is(err, ErrKeptInUse) {
-		t.Fatalf("KeptForget with a session in a box of the store: %v, want ErrKeptInUse", err)
-	}
+// keptFolderThere fails the test when a refused forget touched the folder or
+// the forgotten list.
+func keptFolderThere(t *testing.T, m *Manager, store string) {
+	t.Helper()
 	if _, err := os.Stat(filepath.Join(store, "home/.culiops/a.txt")); err != nil {
 		t.Fatalf("a refused forget removed the folder: %v", err)
 	}
 	if st := keptLoad(t, m); len(st.Forgotten) != 0 {
 		t.Fatalf("a refused forget recorded %v as forgotten", st.Forgotten)
 	}
+}
+
+// Only a live session refuses a forget; the box it runs in is left alone.
+func TestKeptForgetRefusesSessions(t *testing.T) {
+	m, f, _, store := keptForgetSetup(t)
+	f.mu.Lock()
+	f.running[keptTestBox] = true
+	f.mu.Unlock()
+	m.mu.Lock()
+	m.active[keptTestBox] = 1
+	m.mu.Unlock()
+	err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web")
+	if !errors.Is(err, ErrKeptSessions) || !errors.Is(err, ErrKeptInUse) {
+		t.Fatalf("KeptForget with a session in a box of the store: %v, want ErrKeptSessions (and ErrKeptInUse)", err)
+	}
+	keptFolderThere(t, m, store)
+	f.mu.Lock()
+	stopped := slices.Clone(f.stopped)
+	f.mu.Unlock()
+	if len(stopped) != 0 {
+		t.Fatalf("a forget refused for a session stopped %v", stopped)
+	}
+
 	m.mu.Lock()
 	m.active[keptTestBox] = 0
 	m.mu.Unlock()
+	f.mu.Lock()
+	f.inspectErr = errors.New("docker is down")
+	f.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); !errors.Is(err, ErrKeptRunUnknown) {
+		t.Fatalf("KeptForget when docker cannot say: %v, want ErrKeptRunUnknown", err)
+	}
+	keptFolderThere(t, m, store)
+}
 
-	// A running box of another store does not block.
+// A box that only outlives its last session (the idle TTL) is removed, as a
+// spawn removes an idle box in its way, and the forget goes on. The box's
+// keep pass then runs after the forget, and does not keep the folder again.
+func TestKeptForgetRemovesIdleBox(t *testing.T) {
+	m, f, audit, store := keptForgetSetup(t)
+	keptWrite(t, m.stateDir(keptTestBox), ".culiops/in-home", "x")
+	f.mu.Lock()
+	f.running[keptTestBox] = true
+	f.mu.Unlock()
+	// A running box of another store is not this forget's.
 	otherBox := "ab-box-cccccccccccc"
 	if err := writeKeptBoxRecord(m.opts.StateRoot, otherBox, keptBoxRecord{Key: "0123456789ab"}); err != nil {
 		t.Fatal(err)
@@ -300,22 +320,86 @@ func TestKeptForgetRefusesRunning(t *testing.T) {
 	f.mu.Lock()
 	f.running[otherBox] = true
 	f.mu.Unlock()
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); err != nil {
-		t.Fatalf("KeptForget with only another store's box running: %v", err)
+
+	done := make(chan error, 1)
+	go func() { done <- m.KeptForget(context.Background(), keptTestKey, ".culiops", "web") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("KeptForget with an idle box of the store: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("KeptForget did not return: the removed box's stop waits on the store's lock")
+	}
+	f.mu.Lock()
+	stopped, otherRuns := slices.Clone(f.stopped), f.running[otherBox]
+	f.mu.Unlock()
+	if !slices.Equal(stopped, []string{keptTestBox}) || !otherRuns {
+		t.Fatalf("stopped %v (another store's box running: %v); want only %s removed", stopped, otherRuns, keptTestBox)
+	}
+	if _, err := os.Lstat(filepath.Join(store, "home/.culiops")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the folder is still in the store: %v", err)
+	}
+	passed := make(chan struct{})
+	go func() { m.WaitKeptPasses(); close(passed) }()
+	select {
+	case <-passed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the removed box's keep pass never finished")
+	}
+	if _, err := os.Lstat(filepath.Join(store, "home/.culiops")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the stopped box's keep pass kept the forgotten folder again: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.stateDir(keptTestBox), ".culiops/in-home")); err != nil {
+		t.Fatalf("the keep pass moved the forgotten folder out of the home: %v", err)
+	}
+	if rows := audit.of(keptAuditForget); len(rows) != 1 || rows[0].actor != "web" {
+		t.Fatalf("forget audit rows %+v, want one by web", rows)
 	}
 }
 
-// A record that cannot be read could be the store's: its box blocks while it runs.
-func TestKeptForgetUnreadableRecordBlocksWhileRunning(t *testing.T) {
-	m, f, _, _ := keptForgetSetup(t)
+// An idle box that will not go refuses the forget, with nothing changed.
+func TestKeptForgetIdleBoxWillNotStop(t *testing.T) {
+	m, f, _, store := keptForgetSetup(t)
+	f.mu.Lock()
+	f.running[keptTestBox] = true
+	f.stopFails = 1
+	f.mu.Unlock()
+	err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web")
+	if !errors.Is(err, ErrKeptStopping) || !errors.Is(err, ErrKeptInUse) {
+		t.Fatalf("KeptForget when the idle box will not stop: %v, want ErrKeptStopping (and ErrKeptInUse)", err)
+	}
+	keptFolderThere(t, m, store)
+}
+
+// A record that cannot be read could be the store's: its box counts as one.
+func TestKeptForgetUnreadableRecordCounts(t *testing.T) {
+	m, f, _, store := keptForgetSetup(t)
 	bad := "ab-box-dddddddddddd"
 	keptWrite(t, filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptBoxesDirName), bad, "{not json")
 	f.mu.Lock()
 	f.running[bad] = true
 	f.mu.Unlock()
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); !errors.Is(err, ErrKeptInUse) {
-		t.Fatalf("KeptForget with a running box whose record is unreadable: %v, want ErrKeptInUse", err)
+	m.mu.Lock()
+	m.active[bad] = 1
+	m.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); !errors.Is(err, ErrKeptSessions) {
+		t.Fatalf("KeptForget with a session in a box whose record is unreadable: %v, want ErrKeptSessions", err)
 	}
+	keptFolderThere(t, m, store)
+	m.mu.Lock()
+	m.active[bad] = 0
+	m.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); err != nil {
+		t.Fatalf("KeptForget with that box idle: %v", err)
+	}
+	f.mu.Lock()
+	stopped := slices.Clone(f.stopped)
+	f.mu.Unlock()
+	if !slices.Equal(stopped, []string{bad}) {
+		t.Fatalf("stopped %v, want the idle box %s removed", stopped, bad)
+	}
+	m.WaitKeptPasses()
 }
 
 func TestKeptForgetRemovesAndRemembers(t *testing.T) {
@@ -328,7 +412,7 @@ func TestKeptForgetRemovesAndRemembers(t *testing.T) {
 	if err := os.Chmod(filepath.Join(store, "home/.culiops/ro"), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); err != nil {
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); err != nil {
 		t.Fatalf("KeptForget: %v", err)
 	}
 	for _, p := range []string{"home/.culiops", "clash/" + keptTestBox + "/.culiops", "clash/" + keptTestBox + "/.culiops~2",
@@ -356,8 +440,8 @@ func TestKeptForgetRemovesAndRemembers(t *testing.T) {
 		t.Fatalf("Forgotten %v, want [.culiops]", st.Forgotten)
 	}
 	rows := audit.of(keptAuditForget)
-	if len(rows) != 1 || rows[0].name != "p" || rows[0].detail != "path=.culiops" {
-		t.Fatalf("audit rows %+v, want one box_kept_forget for p, path=.culiops", rows)
+	if len(rows) != 1 || rows[0].name != "p" || rows[0].detail != "path=.culiops" || rows[0].actor != "web" {
+		t.Fatalf("audit rows %+v, want one box_kept_forget by web for p, path=.culiops", rows)
 	}
 
 	// The next pass leaves the folder in the box home: it is never kept again.
@@ -375,7 +459,7 @@ func TestKeptForgetRemovesAndRemembers(t *testing.T) {
 	}
 
 	// Forgetting it again finds nothing.
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); !errors.Is(err, fs.ErrNotExist) {
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("second forget: %v, want fs.ErrNotExist", err)
 	}
 }
@@ -393,10 +477,10 @@ func TestKeptForgetNoFollow(t *testing.T) {
 		t.Fatal(err)
 	}
 	keptSymlink(t, outside, store, "home/.config") // a link where a level should be
-	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops"); err != nil {
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); err != nil {
 		t.Fatalf("KeptForget: %v", err)
 	}
-	if err := m.KeptForget(context.Background(), keptTestKey, ".config/foo"); !errors.Is(err, fs.ErrNotExist) {
+	if err := m.KeptForget(context.Background(), keptTestKey, ".config/foo", "web"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("KeptForget through a linked level: %v, want fs.ErrNotExist", err)
 	}
 	for _, p := range []string{"keep.txt", "foo/keep.txt", ".culiops/keep.txt"} {
@@ -414,7 +498,7 @@ func TestKeptForgetRefusesBadRel(t *testing.T) {
 	f.mu.Unlock()
 	for _, c := range []struct{ key, rel string }{{keptTestKey, "../x"}, {keptTestKey, ".config"}, {keptTestKey, ".ssh"},
 		{keptTestKey, "clash/" + keptTestBox + "/.culiops"}, {"../etc", ".culiops"}, {"", ".culiops"}} {
-		if err := m.KeptForget(context.Background(), c.key, c.rel); !errors.Is(err, fs.ErrNotExist) {
+		if err := m.KeptForget(context.Background(), c.key, c.rel, "web"); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("KeptForget(%q, %q): %v, want fs.ErrNotExist", c.key, c.rel, err)
 		}
 	}

@@ -27,7 +27,8 @@ type KeptService interface {
 	KeptStores(profile string) []box.KeptStoreView
 	KeptStore(profile, key string) (box.KeptStoreView, bool)
 	KeptOpenRoot(key, rel string) (*os.Root, error)
-	KeptForget(ctx context.Context, key, rel string) error
+	// KeptForget's actor is who asked, as spawnActor names them.
+	KeptForget(ctx context.Context, key, rel, actor string) error
 }
 
 const (
@@ -39,16 +40,13 @@ const (
 	keptForgetTimeout = 2 * time.Minute
 	keptForgetBodyMax = 4 << 10
 
-	msgKeptInUse      = "stop this profile's boxed sessions first"
+	msgKeptSessions   = "end this profile's boxed sessions first"
+	msgKeptStopping   = "a box of this profile is still stopping; try again in a minute"
 	msgKeptRunUnknown = "could not tell whether this profile's boxes are running; try again"
 	msgKeptBusy       = "the kept folders are busy; try again in a minute"
 	msgKeptNotRemoved = "the folder is forgotten and no box gets it again, but some of its files could not be removed (see the CuliBox log)"
 	msgKeptForgetFail = "could not forget the folder"
 )
-
-// keptReadDir lists one directory below a kept folder's root. A variable so a
-// test can count the listings.
-var keptReadDir = boxread.ReadDirIn
 
 // keptRoute splits a /api/profiles/ remainder of the form
 // <profile>/kept[/list|/file|/forget] into the profile and the suffix after
@@ -70,7 +68,7 @@ func keptRoute(p string) (profile, sub string, ok bool) {
 //	GET  /api/profiles/{name}/kept                         {stores: [KeptStoreView]}, from state.json only
 //	GET  /api/profiles/{name}/kept/list?key=&path=         one directory, no link followed
 //	GET  /api/profiles/{name}/kept/file?key=&path=[&download=1]  one regular file, read-only
-//	POST /api/profiles/{name}/kept/forget {key, path}      behind csrfGuard, audited box_kept_forget
+//	POST /api/profiles/{name}/kept/forget {key, path}      behind csrfGuard, audited box_kept_forget as spawnActor's
 //
 // path is <rel>[/<inner>] or clash/<box>/<rel>[/<inner>] (box.KeptSplitPath).
 // A key must be one of the profile's stores. Every refusal of a name or a
@@ -136,7 +134,7 @@ func (s *Server) handleKeptList(w http.ResponseWriter, r *http.Request, profile 
 		return
 	}
 	defer root.Close()
-	ents, more, ok := keptReadDir(root, inner, keptListMax)
+	ents, more, ok := boxread.ReadDirIn(root, inner, keptListMax)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -221,12 +219,14 @@ func (s *Server) handleKeptForget(w http.ResponseWriter, r *http.Request, profil
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), keptForgetTimeout)
 	defer cancel()
-	err = s.Kept.KeptForget(ctx, req.Key, req.Path)
+	err = s.Kept.KeptForget(ctx, req.Key, req.Path, spawnActor(r))
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]string{"forgotten": req.Path})
-	case errors.Is(err, box.ErrKeptInUse):
-		writeErr(w, http.StatusConflict, msgKeptInUse)
+	case errors.Is(err, box.ErrKeptStopping):
+		writeErr(w, http.StatusConflict, msgKeptStopping)
+	case errors.Is(err, box.ErrKeptInUse): // ErrKeptSessions, or any other use
+		writeErr(w, http.StatusConflict, msgKeptSessions)
 	case errors.Is(err, fs.ErrNotExist):
 		writeErr(w, http.StatusNotFound, "not found")
 	case errors.Is(err, box.ErrKeptRunUnknown):
