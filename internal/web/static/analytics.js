@@ -247,7 +247,7 @@ const AN_COPY = {
   workspaces: {
     title: "Workspaces",
     kpis: ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace"],
-    columns: ["Workspace", "API value", "Sessions", "Host", "Box", "Model mix", "Median / session", "Cache hit"],
+    columns: ["Workspace", "API value", "Sessions", "Host · Box", "Model mix", "Median / session", "Cache hit"],
     unmatched: "unmatched", unmatchedPath: "unmatched · folder no longer known",
     host: "host", box: "box · {profile}", clone: "clone · {dir}", worktrees: "worktrees ({N})",
     note: "A box clone counts toward the repo it was cloned from, and a Claude Code worktree toward its repo. Older usage whose folder can't be matched any more keeps its folder name and is marked unmatched.",
@@ -273,7 +273,7 @@ const AN_COPY = {
   models: {
     title: "Per-model breakdown", hint: "Cost, volume & efficiency · window",
     columns: ["Model", "API value", "% of value", "Sessions", "Median / session", "Per prompt", "Cache hit", "Tokens"],
-    sessionsTitle: "A session that used two models counts in both rows, so this column does not add up to the Sessions total.",
+    sessionsTitle: "A session that used several models counts once in each.",
     note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality. \"other (unpriced)\" are models with no published rate; their tokens are counted, their value is not.",
   },
   projects: { title: "Cost by project", hint: "Bar split shows the model mix inside each project · window", detail: "Detail" },
@@ -502,7 +502,7 @@ if (typeof module !== "undefined" && module.exports) {
     prevWindow, pctDelta, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
-    median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians,
+    median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
     anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
     anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };

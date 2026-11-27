@@ -9,7 +9,7 @@ const {
   daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
   anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
-  median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians,
+  median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -675,4 +675,10 @@ test("anModelMedians: rows of one session and model are one session's cost; a mo
   const m = anModelMedians(rows);
   assert.equal(m.opus, 3);
   assert.equal(m.constructor, 4);
+});
+
+test("AN_COPY: the workspaces table has seven columns, Host · Box being one; the Models Sessions tooltip is the plan's wording", () => {
+  assert.deepEqual(AN_COPY.workspaces.columns, ["Workspace", "API value", "Sessions", "Host · Box", "Model mix", "Median / session", "Cache hit"]);
+  assert.equal(AN_COPY.workspaces.columns.length, 7);
+  assert.equal(AN_COPY.models.sessionsTitle, "A session that used several models counts once in each.");
 });
