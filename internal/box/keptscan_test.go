@@ -1,0 +1,558 @@
+package box
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// keptHome is a fake box home: a temp dir and an os.Root on it.
+func keptHome(t *testing.T) (string, *os.Root) {
+	t.Helper()
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Close() })
+	return dir, root
+}
+
+func keptWrite(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func keptMkdir(t *testing.T, dir, rel string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(rel)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func keptSymlink(t *testing.T, target, dir, rel string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func candRels(cs []keptCandidate) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Rel)
+	}
+	return out
+}
+
+// watchOpens records every rel openDirIn and the screen open, for the test.
+func watchOpens(t *testing.T) func() []string {
+	t.Helper()
+	var seen []string
+	openDirHook = func(rel string) { seen = append(seen, rel) }
+	keptOpenHook = func(rel string) { seen = append(seen, rel) }
+	t.Cleanup(func() { openDirHook, keptOpenHook = nil, nil })
+	return func() []string { return seen }
+}
+
+func mustCandidates(t *testing.T, home *os.Root, mounts []string) ([]keptCandidate, []keptRefusal) {
+	t.Helper()
+	cs, rs, err := keptCandidates(home, mounts)
+	if err != nil {
+		t.Fatalf("keptCandidates: %v", err)
+	}
+	return cs, rs
+}
+
+func TestCandidatesLevels(t *testing.T) {
+	dir, home := keptHome(t)
+	keptWrite(t, dir, ".culiops/a", "a")
+	keptWrite(t, dir, ".config/culiops/b", "b")
+	keptWrite(t, dir, ".local/share/x/c", "c")
+	keptWrite(t, dir, ".local/state/y/d", "d")
+	keptWrite(t, dir, ".bashrc", "export X=1")
+	keptMkdir(t, dir, ".empty")
+	keptWrite(t, dir, "notes/e", "not a dot dir") // only ~/.<name>/ is a level
+	keptWrite(t, dir, ".local/bin/tool", "")      // .local/bin is not a level
+	if err := unix.Mkfifo(filepath.Join(dir, ".pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := watchOpens(t)
+
+	cs, rs := mustCandidates(t, home, nil)
+	want := []string{".config/culiops", ".culiops", ".local/share/x", ".local/state/y"}
+	if got := candRels(cs); !slices.Equal(got, want) {
+		t.Fatalf("candidates = %q, want %q", got, want)
+	}
+	if len(rs) != 0 {
+		t.Fatalf("refusals = %+v, want none", rs)
+	}
+	for _, c := range cs {
+		fi, err := os.Lstat(filepath.Join(dir, c.Rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := fi.Sys().(*syscall.Stat_t)
+		if c.Dev != uint64(st.Dev) || c.Ino != uint64(st.Ino) {
+			t.Fatalf("%s: dev/ino = %d/%d, want %d/%d", c.Rel, c.Dev, c.Ino, st.Dev, st.Ino)
+		}
+	}
+	if slices.Contains(opened(), ".pipe") {
+		t.Fatal("a FIFO at the top of the home was opened")
+	}
+}
+
+func TestCandidatesSkips(t *testing.T) {
+	dir, home := keptHome(t)
+	for _, rel := range []string{".cache", ".npm", "go", ".terraform.d", ".claude", ".agent-box",
+		".cargo", ".vscode-server", ".local/share/pnpm", ".local/share/virtualenvs"} {
+		keptWrite(t, dir, rel+"/f", "x")
+	}
+	keptWrite(t, dir, ".tagged/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n")
+	keptWrite(t, dir, ".tagged/blob", "x")
+	keptWrite(t, dir, ".config/tagged/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n")
+	keptWrite(t, dir, ".config/tagged/blob", "x")
+	// Letter case is ignored: on macOS .Claude is CuliBox's own .claude.
+	keptWrite(t, dir, ".Claude/f", "x")
+
+	cs, rs := mustCandidates(t, home, nil)
+	if len(cs) != 0 || len(rs) != 0 {
+		t.Fatalf("candidates = %q, refusals = %+v, want none of either", candRels(cs), rs)
+	}
+}
+
+func TestCandidatesCredentialNames(t *testing.T) {
+	dir, home := keptHome(t)
+	creds := []string{".aws", ".ssh", ".config/gh", ".mozilla", ".local/share/keyrings", ".config/gcloud"}
+	for _, rel := range creds {
+		keptWrite(t, dir, rel+"/f", "x")
+	}
+	keptWrite(t, dir, ".AWS2/f", "x") // not a credential name
+	cs, rs := mustCandidates(t, home, nil)
+	if got := candRels(cs); !slices.Equal(got, []string{".AWS2"}) {
+		t.Fatalf("candidates = %q, want only .AWS2", got)
+	}
+	got := map[string]string{}
+	for _, r := range rs {
+		got[r.Rel] = r.Reason
+	}
+	for _, rel := range creds {
+		if got[rel] != "credentials" {
+			t.Errorf("%s: reason %q, want credentials", rel, got[rel])
+		}
+	}
+	if len(rs) != len(creds) {
+		t.Fatalf("refusals = %+v, want one per credential dir", rs)
+	}
+}
+
+func TestCandidatesCredentialEmptyIsSilent(t *testing.T) {
+	dir, home := keptHome(t)
+	keptMkdir(t, dir, ".ssh") // made by ssh, nothing in it: no row each pass
+	cs, rs := mustCandidates(t, home, nil)
+	if len(cs) != 0 || len(rs) != 0 {
+		t.Fatalf("candidates = %q, refusals = %+v, want none", candRels(cs), rs)
+	}
+}
+
+func TestCandidatesRootSymlink(t *testing.T) {
+	dir, home := keptHome(t)
+	keptSymlink(t, "/etc", dir, ".foo")
+	keptSymlink(t, "/etc", dir, ".config/bar")
+	keptSymlink(t, "/etc", dir, ".aws") // a link with a credential name says credentials
+	keptWrite(t, dir, ".real/x", "x")
+	keptSymlink(t, ".real", dir, ".inroot") // a link that stays in the home is a link too
+	opened := watchOpens(t)
+
+	cs, rs := mustCandidates(t, home, nil)
+	if got := candRels(cs); !slices.Equal(got, []string{".real"}) {
+		t.Fatalf("candidates = %q, want only .real", got)
+	}
+	want := []keptRefusal{
+		{Rel: ".aws", Reason: "credentials"},
+		{Rel: ".config/bar", Reason: "is a link"},
+		{Rel: ".foo", Reason: "is a link"},
+		{Rel: ".inroot", Reason: "is a link"},
+	}
+	if !slices.Equal(rs, want) {
+		t.Fatalf("refusals = %+v, want %+v", rs, want)
+	}
+	for _, rel := range opened() {
+		if rel == ".foo" || rel == ".config/bar" || rel == ".aws" || rel == ".inroot" {
+			t.Fatalf("a link at a candidate root was opened: %q", rel)
+		}
+	}
+}
+
+func TestCandidatesLevelSymlink(t *testing.T) {
+	dir, home := keptHome(t)
+	keptSymlink(t, "/etc", dir, ".config")
+	keptWrite(t, dir, ".elsewhere/share/app/f", "x")
+	keptMkdir(t, dir, ".local")
+	keptSymlink(t, "../.elsewhere/share", dir, ".local/share")
+	opened := watchOpens(t)
+
+	cs, rs := mustCandidates(t, home, nil)
+	if got := candRels(cs); !slices.Equal(got, []string{".elsewhere"}) {
+		t.Fatalf("candidates = %q, want only .elsewhere", got)
+	}
+	want := []keptRefusal{{Rel: ".config", Reason: "is a link"}, {Rel: ".local/share", Reason: "is a link"}}
+	if !slices.Equal(rs, want) {
+		t.Fatalf("refusals = %+v, want %+v", rs, want)
+	}
+	for _, rel := range opened() {
+		if strings.HasPrefix(rel, ".config") || strings.HasPrefix(rel, ".local/share") {
+			t.Fatalf("a linked level was opened: %q", rel)
+		}
+	}
+}
+
+func TestCandidatesHoldsCuliBoxMount(t *testing.T) {
+	dir, home := keptHome(t)
+	keptWrite(t, dir, ".culiops/operator.md", "") // the mountpoint stub
+	keptWrite(t, dir, ".culiops/notes.md", "mine")
+	keptWrite(t, dir, ".config/app/inc/x.md", "")
+	keptWrite(t, dir, ".config/app/y", "y")
+	keptWrite(t, dir, ".mounted/z", "the mountpoint itself is CuliBox's own")
+	keptWrite(t, dir, ".config/under/z", "z")
+
+	mounts := []string{
+		".culiops/operator.md",
+		boxHome + "/.config/app/inc/x.md", // an in-box path is read as its home-relative one
+		".mounted",
+		"/opt/agent-bundle", // outside the home: ignored
+	}
+	cs, rs := mustCandidates(t, home, mounts)
+	if got := candRels(cs); !slices.Equal(got, []string{".config/under"}) {
+		t.Fatalf("candidates = %q, want only .config/under", got)
+	}
+	want := []keptRefusal{
+		{Rel: ".config/app", Reason: "holds a file CuliBox mounts from the host"},
+		{Rel: ".culiops", Reason: "holds a file CuliBox mounts from the host"},
+	}
+	if !slices.Equal(rs, want) {
+		t.Fatalf("refusals = %+v, want %+v", rs, want)
+	}
+
+	// A mount covering a level hides everything below it from the box.
+	cs, rs = mustCandidates(t, home, []string{".config"})
+	if got := candRels(cs); !slices.Equal(got, []string{".culiops", ".mounted"}) || len(rs) != 0 {
+		t.Fatalf("with .config mounted: candidates = %q, refusals = %+v", got, rs)
+	}
+}
+
+func TestCandidatesNameNotAllowed(t *testing.T) {
+	dir, home := keptHome(t)
+	bad := []string{".a,b", ".a:b", `.a"b`, ".a\tb", ".config/a,b"}
+	for _, rel := range bad {
+		keptWrite(t, dir, rel+"/f", "x")
+	}
+	cs, rs := mustCandidates(t, home, nil)
+	if len(cs) != 0 {
+		t.Fatalf("candidates = %q, want none", candRels(cs))
+	}
+	got := map[string]string{}
+	for _, r := range rs {
+		got[r.Rel] = r.Reason
+	}
+	for _, rel := range bad {
+		if got[rel] != "name not allowed" {
+			t.Errorf("%q: reason %q, want name not allowed", rel, got[rel])
+		}
+	}
+}
+
+func TestKeptNameOK(t *testing.T) {
+	for rel, want := range map[string]bool{
+		".culiops":            true,
+		".config/culiops":     true,
+		".local/share/x y":    true,
+		"":                    false,
+		".a,b":                false,
+		".a:b":                false,
+		`.a"b`:                false,
+		".a\nb":               false,
+		".a\x7fb":             false,
+		".a\u0085b":           false,
+		".a b":                false,
+		".config/a:b":         false,
+		".bad\xffutf8":        false,
+		".local/share/ok-1.2": true,
+	} {
+		if got := keptNameOK(rel); got != want {
+			t.Errorf("keptNameOK(%q) = %v, want %v", rel, got, want)
+		}
+	}
+}
+
+// TestOwnPathsCoverSeeded pins keptOwn to what CuliBox seeds in a home: a new
+// seeded directory that is not listed there would show up as a candidate.
+func TestOwnPathsCoverSeeded(t *testing.T) {
+	m := newTestManager(t)
+	const name = "ab-box-keptown"
+	src := t.TempDir()
+	keptWrite(t, src, "CLAUDE.md", "x")
+	keptMkdir(t, src, "skills")
+	keptMkdir(t, src, "plugin")
+	mounts := []Mount{
+		{Host: filepath.Join(src, "skills"), Box: boxHome + "/.claude/skills"},
+		{Host: filepath.Join(src, "CLAUDE.md"), Box: boxHome + "/.claude/CLAUDE.md"},
+		{Host: filepath.Join(src, "plugin"), Box: boxHome + "/.claude/plugins/p"},
+	}
+	if _, err := m.ensureStateDir(name, "/w", mounts); err != nil {
+		t.Fatal(err)
+	}
+	convDir, err := ensureConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", "/w", "", "prof"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ensureConversationsMount(name, convDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.preAcceptBypass(name); err != nil {
+		t.Fatal(err)
+	}
+	m.prepareHomePid(name, "sess-1")
+	if _, err := os.Lstat(filepath.Join(m.stateDir(name), HomePidDir)); err != nil {
+		t.Fatalf("the pid dir was not seeded: %v", err)
+	}
+
+	home, err := os.OpenRoot(m.stateDir(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer home.Close()
+	var cb []string
+	for _, mt := range mounts {
+		cb = append(cb, strings.TrimPrefix(mt.Box, boxHome+"/"))
+	}
+	cs, rs := mustCandidates(t, home, cb)
+	if len(cs) != 0 || len(rs) != 0 {
+		t.Fatalf("a seeded home gave candidates %q and refusals %+v: list the new path in keptOwn", candRels(cs), rs)
+	}
+}
+
+func screen(t *testing.T, root *os.Root, rel string) screenResult {
+	t.Helper()
+	return screenKept(context.Background(), root, rel)
+}
+
+func TestScreenNameRules(t *testing.T) {
+	for _, tc := range []struct {
+		file, content, reason string
+	}{
+		{"id_rsa", "not even a key", "looks like credentials: .culiops/id_rsa"},
+		{"sub/.env", "X=1", "looks like credentials: .culiops/sub/.env"},
+		{"credentials", "", "looks like credentials: .culiops/credentials"},
+		{"terraform.tfstate", "{}", "looks like credentials: .culiops/terraform.tfstate"},
+		{"config.json", `{"theme":"dark"}`, ""},
+		{"config.prod.json", `{"theme":"dark"}`, ""},
+		{"config.json", `{"token":"ghp_` + strings.Repeat("a", 36) + `"}`, "looks like credentials: .culiops/config.json"},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			dir, root := keptHome(t)
+			keptWrite(t, dir, ".culiops/"+tc.file, tc.content)
+			keptWrite(t, dir, ".culiops/notes.md", "plain notes")
+			if got := screen(t, root, ".culiops"); got.Reason != tc.reason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tc.reason)
+			}
+		})
+	}
+}
+
+func TestScreenContent(t *testing.T) {
+	cloudTrail := `{"Records":[{"eventVersion":"1.08","userIdentity":{"type":"AssumedRole",` +
+		`"principalId":"AROAXXXXXXXXXXXXXXXXX:alice","arn":"arn:aws:sts::123456789012:assumed-role/ops/alice",` +
+		`"accountId":"123456789012","accessKeyId":"ASIAQWERTYUIOPASDFGH","sessionContext":{"attributes":` +
+		`{"creationDate":"2026-11-27T01:02:03Z","mfaAuthenticated":"false"}}},"eventTime":"2026-11-27T01:02:04Z",` +
+		`"eventSource":"ec2.amazonaws.com","eventName":"DescribeInstances","awsRegion":"ap-southeast-1",` +
+		`"sourceIPAddress":"203.0.113.9","userAgent":"aws-cli/2.17","requestParameters":null,` +
+		`"responseElements":null,"requestID":"0b1c","eventID":"9f2e","readOnly":true}, ` +
+		`{"userIdentity":{"accessKeyId":"AKIAQWERTYUIOPASDFGH"}}]}`
+	for _, tc := range []struct {
+		name, content, reason string
+	}{
+		{"pem", "notes\n-----BEGIN RSA PRIVATE KEY-----\nMIIE\n", "looks like credentials: .culiops/data.txt"},
+		{"aws secret", "[default]\naws_secret_access_key = abc/def\n", "looks like credentials: .culiops/data.txt"},
+		{"jwt", "eyJhbGciOiJIUzI1NiJ9xx.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig", "looks like credentials: .culiops/data.txt"},
+		{"cloudtrail ids", cloudTrail, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, root := keptHome(t)
+			keptWrite(t, dir, ".culiops/data.txt", tc.content)
+			if got := screen(t, root, ".culiops"); got.Reason != tc.reason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tc.reason)
+			}
+		})
+	}
+}
+
+func TestScreenHeadOnly(t *testing.T) {
+	dir, root := keptHome(t)
+	content := strings.Repeat("x", keptScreenHead) + "\n-----BEGIN RSA PRIVATE KEY-----\n"
+	keptWrite(t, dir, ".culiops/big", content)
+	got := screen(t, root, ".culiops")
+	if got.Reason != "" {
+		t.Fatalf("reason = %q: only the first %d bytes are read", got.Reason, keptScreenHead)
+	}
+	if got.Bytes != int64(len(content)) {
+		t.Fatalf("bytes = %d, want the whole file's size", got.Bytes)
+	}
+}
+
+func TestScreenCounts(t *testing.T) {
+	dir, root := keptHome(t)
+	keptWrite(t, dir, ".config/culiops/a", "12345")
+	keptWrite(t, dir, ".config/culiops/sub/b", "123")
+	keptSymlink(t, "a", dir, ".config/culiops/l")
+	got := screen(t, root, ".config/culiops")
+	if got.Reason != "" || got.Files != 3 || got.Bytes != 8 {
+		t.Fatalf("got %+v, want a pass with 3 files (two plus a link) and 8 bytes", got)
+	}
+}
+
+func setCap[T any](t *testing.T, p *T, v T) {
+	t.Helper()
+	old := *p
+	*p = v
+	t.Cleanup(func() { *p = old })
+}
+
+func TestScreenCapEntries(t *testing.T) {
+	setCap(t, &keptScreenMaxEntries, 10)
+	dir, root := keptHome(t)
+	for i := range 10 {
+		keptWrite(t, dir, ".culiops/f"+strconv.Itoa(i), "x")
+	}
+	if got := screen(t, root, ".culiops"); got.Reason != "" {
+		t.Fatalf("10 files: reason = %q, want a pass", got.Reason)
+	}
+	keptWrite(t, dir, ".culiops/f10", "x")
+	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" {
+		t.Fatalf("11 files: reason = %q, want too many files to check", got.Reason)
+	}
+	// Directories count as entries too.
+	dir2, root2 := keptHome(t)
+	keptMkdir(t, dir2, ".culiops/1/2/3/4/5/6/7/8/9/10/11")
+	setCap(t, &keptScreenMaxDepth, 20)
+	if got := screen(t, root2, ".culiops"); got.Reason != "too many files to check" {
+		t.Fatalf("11 nested dirs: reason = %q, want too many files to check", got.Reason)
+	}
+}
+
+func TestScreenDepth(t *testing.T) {
+	dir, root := keptHome(t)
+	keptWrite(t, dir, ".culiops/1/2/3/4/5/6/7/f", "x") // f is at depth 8
+	if got := screen(t, root, ".culiops"); got.Reason != "" {
+		t.Fatalf("depth 8: reason = %q, want a pass", got.Reason)
+	}
+	keptWrite(t, dir, ".culiops/1/2/3/4/5/6/7/8/f", "x") // depth 9
+	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" {
+		t.Fatalf("depth 9: reason = %q, want too many files to check", got.Reason)
+	}
+}
+
+func TestScreenTimeout(t *testing.T) {
+	dir, root := keptHome(t)
+	keptWrite(t, dir, ".culiops/a", "x")
+	setCap(t, &keptScreenTimeout, time.Duration(0))
+	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" {
+		t.Fatalf("past the deadline: reason = %q, want too many files to check", got.Reason)
+	}
+	setCap(t, &keptScreenTimeout, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := screenKept(ctx, root, ".culiops"); got.Reason != "could not read" {
+		t.Fatalf("cancelled: reason = %q, want could not read", got.Reason)
+	}
+}
+
+func TestScreenInnerSymlinkKeptNotFollowed(t *testing.T) {
+	dir, root := keptHome(t)
+	outside := t.TempDir()
+	keptWrite(t, outside, "id_rsa", "-----BEGIN OPENSSH PRIVATE KEY-----\n")
+	keptWrite(t, dir, ".ssh/key", "-----BEGIN OPENSSH PRIVATE KEY-----\n")
+	keptWrite(t, dir, ".culiops/notes.md", "plain")
+	keptSymlink(t, "/etc/passwd", dir, ".culiops/passwd")
+	keptSymlink(t, filepath.Join(outside, "id_rsa"), dir, ".culiops/out")
+	keptSymlink(t, "../.ssh/key", dir, ".culiops/in") // stays in the root: os.Root would follow it
+	keptSymlink(t, "../.ssh", dir, ".culiops/sshdir") // a link to a directory is not walked
+	opened := watchOpens(t)
+
+	got := screen(t, root, ".culiops")
+	if got.Reason != "" {
+		t.Fatalf("reason = %q: an inner link is kept as it is, never followed", got.Reason)
+	}
+	if got.Files != 5 {
+		t.Fatalf("files = %d, want 5 (one file and four links)", got.Files)
+	}
+	for _, rel := range opened() {
+		if strings.HasPrefix(rel, ".culiops/") && rel != ".culiops/notes.md" {
+			t.Fatalf("the screen opened %q", rel)
+		}
+	}
+}
+
+func TestScreenFIFO(t *testing.T) {
+	dir, root := keptHome(t)
+	keptWrite(t, dir, ".culiops/a", "x")
+	if err := unix.Mkfifo(filepath.Join(dir, ".culiops", "pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := watchOpens(t)
+	done := make(chan screenResult, 1)
+	go func() { done <- screen(t, root, ".culiops") }()
+	select {
+	case got := <-done:
+		if got.Reason != "could not read" {
+			t.Fatalf("reason = %q, want could not read", got.Reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the screen blocked on a FIFO")
+	}
+	if slices.Contains(opened(), ".culiops/pipe") {
+		t.Fatal("the screen opened the FIFO")
+	}
+}
+
+func TestScreenRootNotPlain(t *testing.T) {
+	dir, root := keptHome(t)
+	keptWrite(t, dir, ".real/x", "x")
+	keptSymlink(t, ".real", dir, ".link")
+	keptSymlink(t, ".real", dir, ".configlink")
+	keptWrite(t, dir, ".file", "x")
+	for rel, want := range map[string]string{
+		".link":            "is a link",
+		".configlink/x":    "is a link", // a link on the way there
+		".file":            "could not read",
+		".missing":         "could not read",
+		"../x":             "could not read",
+		"/etc":             "could not read",
+		".":                "could not read",
+		".real":            "",
+		".real/../.real":   "could not read", // not clean
+		".config/../.real": "could not read",
+	} {
+		if got := screen(t, root, rel); got.Reason != want {
+			t.Errorf("screenKept(%q) = %q, want %q", rel, got.Reason, want)
+		}
+	}
+}
