@@ -99,8 +99,10 @@ func (s *Service) SetHome(home string) { s.home = filepath.Clean(home) }
 func (s *Service) SetResolveEnv(f func() ResolveEnv) { s.resolveEnv = f }
 
 // resolvePending files every session that has no workspace yet, or that none
-// explained, from the config as it is now. A session that has a workspace is a
-// snapshot and is not looked at again. It runs inside the pass, after the walk
+// explained, from the config as it is now. A resolved session is not filed
+// again, except one filed by its folder name (legacy) before its transcript
+// gave it a cwd: that one is filed once more, from the cwd. It runs inside the
+// pass, after the walk
 // has added this pass's sessions. A failure is logged and does not fail the pass:
 // the rows stay pending and the next pass retries them.
 func (s *Service) resolvePending() {
@@ -291,7 +293,9 @@ func DefaultRoots(home, dataDir string) []string {
 // spawn): the carried offsets also go into that pass's state cache, so when it
 // reaches the new path it reads on from them, not from 0. Accepted: a pass
 // that is loading its cache at the very moment of the carry misses it and
-// counts the moved file's totals again, once; its drivers still count once.
+// counts the moved file's totals again, once. Its drivers count once too if
+// the file is not yet backfilled; if it is already backfilled, its drivers
+// double along with the rollup totals.
 func (s *Service) CarryOffsets(from, to string) error {
 	_, err := s.store.RewritePathPrefix(from, to)
 	return err
