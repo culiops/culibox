@@ -292,7 +292,7 @@ func TestKeptNameOK(t *testing.T) {
 		".a\nb":               false,
 		".a\x7fb":             false,
 		".a\u0085b":           false,
-		".a b":                false,
+		".a\u2028b":           false,
 		".config/a:b":         false,
 		".bad\xffutf8":        false,
 		".local/share/ok-1.2": true,
@@ -483,6 +483,12 @@ func TestScreenTimeout(t *testing.T) {
 	if got := screenKept(ctx, root, ".culiops"); got.Reason != "could not read" {
 		t.Fatalf("cancelled: reason = %q, want could not read", got.Reason)
 	}
+	// The caller's own deadline is not the screen's cap.
+	past, cancel2 := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel2()
+	if got := screenKept(past, root, ".culiops"); got.Reason != "could not read" {
+		t.Fatalf("caller's deadline: reason = %q, want could not read", got.Reason)
+	}
 }
 
 func TestScreenInnerSymlinkKeptNotFollowed(t *testing.T) {
@@ -553,6 +559,123 @@ func TestScreenRootNotPlain(t *testing.T) {
 	} {
 		if got := screen(t, root, rel); got.Reason != want {
 			t.Errorf("screenKept(%q) = %q, want %q", rel, got.Reason, want)
+		}
+	}
+}
+
+func keptDevIno(t *testing.T, p string) (uint64, uint64) {
+	t.Helper()
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	return uint64(st.Dev), uint64(st.Ino)
+}
+
+// swapOnOpen runs swap once, right before the first open of a name for which
+// match holds, through either open hook.
+func swapOnOpen(t *testing.T, match func(rel string) bool, swap func()) *bool {
+	t.Helper()
+	done := new(bool)
+	hook := func(rel string) {
+		if !*done && match(rel) {
+			*done = true
+			swap()
+		}
+	}
+	openDirHook, keptOpenHook = hook, hook
+	t.Cleanup(func() { openDirHook, keptOpenHook = nil, nil })
+	return done
+}
+
+// A level swapped for a link to the home after it was listed must not make a
+// child name CuliBox's own folder: every child is read from the level's own
+// descriptor, and a level that no longer leads to what was listed yields no
+// candidate.
+func TestCandidatesSwappedLevelNotFollowed(t *testing.T) {
+	dir, home := keptHome(t)
+	keptWrite(t, dir, ".claude/settings.json", "{}")
+	keptWrite(t, dir, ".agent-box/pids/s.pid", "1")
+	keptWrite(t, dir, ".config/.claude/x", "the box's own folder of that name")
+	keptWrite(t, dir, ".config/.agent-box/x", "the box's own folder of that name")
+	var own [][2]uint64
+	for _, rel := range []string{".claude", ".agent-box"} {
+		d, i := keptDevIno(t, filepath.Join(dir, rel))
+		own = append(own, [2]uint64{d, i})
+	}
+	swapped := swapOnOpen(t, func(rel string) bool { return strings.HasPrefix(rel, ".config/") }, func() {
+		if err := os.Rename(filepath.Join(dir, ".config"), filepath.Join(dir, ".config-real")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(".", filepath.Join(dir, ".config")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	cs, rs := mustCandidates(t, home, nil)
+	if !*swapped {
+		t.Fatal("the swap never ran")
+	}
+	for _, c := range cs {
+		if slices.Contains(own, [2]uint64{c.Dev, c.Ino}) {
+			t.Fatalf("candidate %q is CuliBox's own folder (dev/ino %d/%d)", c.Rel, c.Dev, c.Ino)
+		}
+		if strings.HasPrefix(c.Rel, ".config/") {
+			t.Fatalf("candidate %q came from a level swapped while it was read", c.Rel)
+		}
+	}
+	if !slices.Contains(rs, keptRefusal{Rel: ".config", Reason: "is a link"}) {
+		t.Fatalf("refusals = %+v, want .config: is a link", rs)
+	}
+}
+
+// The screen resolves its folder by descriptor too: a parent swapped for a link
+// is never followed, and Dev/Ino say which folder was screened.
+func TestScreenSwappedParentNotFollowed(t *testing.T) {
+	for _, at := range []string{".config", ".config/app"} {
+		t.Run(at, func(t *testing.T) {
+			dir, root := keptHome(t)
+			keptWrite(t, dir, ".config/app/notes.md", "plain")
+			keptWrite(t, dir, "app/id_rsa", "-----BEGIN OPENSSH PRIVATE KEY-----\n")
+			realDev, realIno := keptDevIno(t, filepath.Join(dir, ".config/app"))
+			otherDev, otherIno := keptDevIno(t, filepath.Join(dir, "app"))
+			swapped := swapOnOpen(t, func(rel string) bool { return rel == at }, func() {
+				if err := os.Rename(filepath.Join(dir, ".config"), filepath.Join(dir, ".config-real")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(".", filepath.Join(dir, ".config")); err != nil {
+					t.Fatal(err)
+				}
+			})
+			got := screen(t, root, ".config/app")
+			if !*swapped {
+				t.Fatal("the swap never ran")
+			}
+			if got.Dev == otherDev && got.Ino == otherIno {
+				t.Fatalf("the screen read ~/app through the swapped link: %+v", got)
+			}
+			if got.Reason == "" && (got.Dev != realDev || got.Ino != realIno) {
+				t.Fatalf("a pass names dev/ino %d/%d, want the folder listed (%d/%d)", got.Dev, got.Ino, realDev, realIno)
+			}
+		})
+	}
+}
+
+// What the screen reports as screened is the candidate discovery found.
+func TestScreenDevInoMatchesCandidate(t *testing.T) {
+	dir, home := keptHome(t)
+	keptWrite(t, dir, ".culiops/a", "a")
+	keptWrite(t, dir, ".config/culiops/b", "b")
+	keptWrite(t, dir, ".local/share/x/c", "c")
+	cs, _ := mustCandidates(t, home, nil)
+	if len(cs) != 3 {
+		t.Fatalf("candidates = %q", candRels(cs))
+	}
+	for _, c := range cs {
+		got := screen(t, home, c.Rel)
+		if got.Reason != "" || got.Dev != c.Dev || got.Ino != c.Ino {
+			t.Fatalf("%s: screen %+v, candidate dev/ino %d/%d", c.Rel, got, c.Dev, c.Ino)
 		}
 	}
 }

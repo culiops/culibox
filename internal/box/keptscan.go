@@ -6,12 +6,13 @@ package box
 //
 // Everything in a home is written by the box as the daemon's own uid, so it is
 // hostile input: any name may be a symlink (out of the home or inside it), a
-// FIFO, a device or a socket. Nothing is followed. Every component is Lstat'ed,
-// a directory is opened with openDirIn and checked to be the one Lstat saw, and
-// below a candidate every entry is read with fstatat(AT_SYMLINK_NOFOLLOW) and
-// opened from its parent's descriptor with O_NOFOLLOW (os.Root would follow a
-// link that stays inside the root). Only regular files are ever read, and only
-// the first keptScreenHead bytes of each.
+// FIFO, a device or a socket. Nothing is followed, and nothing is resolved by
+// path: from the home's own descriptor down, every name is read with
+// fstatat(AT_SYMLINK_NOFOLLOW) on its parent's descriptor and opened from it with
+// O_NOFOLLOW, then checked to be the file fstatat saw. (os.Root follows a link
+// in a middle component when it stays inside the root, and one Lstat per
+// component leaves a gap between them for a swap.) Only regular files are ever
+// read, and only the first keptScreenHead bytes of each.
 
 import (
 	"context"
@@ -24,7 +25,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -80,12 +80,16 @@ const (
 	keptReasonName        = "name not allowed"
 )
 
-// keptOpenHook, when set (tests only), runs right before the screen opens an
-// entry below a candidate, with its root-relative path.
+// keptOpenHook, when set (tests only), runs right before every open of a name
+// below the root (a path component, a candidate, an entry the screen reads),
+// with its root-relative path.
 var keptOpenHook func(rel string)
 
 // keptCandidate is a home folder that may be kept: Rel is home-relative, and
-// Dev and Ino are what Lstat saw, for the re-check before a move.
+// Dev and Ino are those of the directory as it was opened, for the re-check
+// before a move. Whatever acts on Rel later resolves it by descriptor too
+// (keptOpenPath) and compares Dev and Ino: a path resolved through os.Root
+// can follow a link swapped into a middle component.
 type keptCandidate struct {
 	Rel      string
 	Dev, Ino uint64
@@ -125,15 +129,20 @@ func keptNameOK(rel string) bool {
 // Rel.
 func keptCandidates(home *os.Root, cbMounts []string) ([]keptCandidate, []keptRefusal, error) {
 	s := keptScan{home: home, mounts: keptMountRels(cbMounts)}
-	top, err := keptReadNames(home, ".", nil)
+	top, err := openDirIn(home, ".")
 	if err != nil {
 		return nil, nil, fmt.Errorf("box: listing the home for folders to keep: %w", err)
 	}
-	for _, n := range top {
+	defer top.Close()
+	names, err := keptReadNames(top)
+	if err != nil {
+		return nil, nil, fmt.Errorf("box: listing the home for folders to keep: %w", err)
+	}
+	for _, n := range names {
 		if !strings.HasPrefix(n, ".") || keptFoldIn(n, []string{".config", ".local"}) {
 			continue // only dot directories, and the levels are walked below
 		}
-		s.consider(n)
+		s.consider(top, n, n)
 	}
 	for _, lvl := range keptLevels {
 		s.level(lvl)
@@ -164,7 +173,7 @@ func (s *keptScan) level(lvl string) {
 	if keptMountCovers(lvl, s.mounts) {
 		return
 	}
-	fi, err := keptLstatDirs(s.home, lvl)
+	d, st, err := keptOpenPath(s.home, lvl)
 	switch {
 	case err == nil:
 	case errors.Is(err, errKeptLink):
@@ -176,7 +185,8 @@ func (s *keptScan) level(lvl string) {
 		s.refuse(lvl, keptReasonUnreadable)
 		return
 	}
-	names, err := keptReadNames(s.home, lvl, fi)
+	defer d.Close()
+	names, err := keptReadNames(d)
 	if err != nil {
 		reason := keptReasonUnreadable
 		if errors.Is(err, errKeptTooMany) {
@@ -185,26 +195,45 @@ func (s *keptScan) level(lvl string) {
 		s.refuse(lvl, reason)
 		return
 	}
+	nc, nr := len(s.cands), len(s.refs)
 	for _, n := range names {
-		s.consider(lvl + "/" + n)
+		s.consider(d, lvl+"/"+n, n)
+	}
+	// Every child was read from the level's own descriptor, so none of them is
+	// another folder. Their Rel still names the level by path: if that no longer
+	// leads to the directory listed (a link or another directory swapped in
+	// meanwhile), they name nothing a later step could find. Drop them.
+	again, ast, err := keptOpenPath(s.home, lvl)
+	if err == nil {
+		again.Close()
+	}
+	if err != nil || ast.Dev != st.Dev || ast.Ino != st.Ino {
+		s.cands, s.refs = s.cands[:nc], s.refs[:nr]
+		if errors.Is(err, errKeptLink) {
+			s.refuse(keptLinkRel(lvl, err), keptReasonLink)
+		} else {
+			s.refuse(lvl, keptReasonUnreadable)
+		}
 	}
 }
 
-// consider decides about one directory at a candidate level.
-func (s *keptScan) consider(rel string) {
+// consider decides about the entry name of the open directory parent, whose
+// home-relative path is rel: a candidate level.
+func (s *keptScan) consider(parent *os.File, rel, name string) {
 	if keptFoldIn(rel, keptOwn) || keptFoldIn(rel, keptCacheNames) {
 		return
 	}
-	fi, err := s.home.Lstat(rel)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		s.refuse(rel, keptReasonUnreadable)
+	pfd := int(parent.Fd())
+	var st unix.Stat_t
+	if err := unix.Fstatat(pfd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			s.refuse(rel, keptReasonUnreadable)
+		}
 		return
 	}
-	link := fi.Mode()&fs.ModeSymlink != 0
-	if !link && !fi.IsDir() {
+	typ := st.Mode & unix.S_IFMT
+	link := typ == unix.S_IFLNK
+	if !link && typ != unix.S_IFDIR {
 		return // only directories count
 	}
 	cred := keptFoldIn(rel, keptCredentialNames)
@@ -226,7 +255,7 @@ func (s *keptScan) consider(rel string) {
 		s.refuse(rel, keptReasonMount)
 		return
 	}
-	d, err := keptOpenSame(s.home, rel, fi)
+	d, err := keptOpenAt(pfd, rel, name, &st, unix.O_DIRECTORY)
 	if err != nil {
 		s.refuse(rel, keptReasonUnreadable)
 		return
@@ -243,26 +272,28 @@ func (s *keptScan) consider(rel string) {
 		s.refuse(rel, keptReasonCredentials)
 		return
 	}
-	var st unix.Stat_t
-	if unix.Fstatat(int(d.Fd()), "CACHEDIR.TAG", &st, unix.AT_SYMLINK_NOFOLLOW) == nil &&
-		st.Mode&unix.S_IFMT == unix.S_IFREG {
+	var tag unix.Stat_t
+	if unix.Fstatat(int(d.Fd()), "CACHEDIR.TAG", &tag, unix.AT_SYMLINK_NOFOLLOW) == nil &&
+		tag.Mode&unix.S_IFMT == unix.S_IFREG {
 		return
 	}
-	sys, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		s.refuse(rel, keptReasonUnreadable)
-		return
-	}
-	s.cands = append(s.cands, keptCandidate{Rel: rel, Dev: uint64(sys.Dev), Ino: uint64(sys.Ino)})
+	s.cands = append(s.cands, keptCandidate{Rel: rel, Dev: uint64(st.Dev), Ino: uint64(st.Ino)})
 }
 
 // screenResult is what screenKept found: the size and file count (regular
 // files and links) of a folder, and an empty Reason when it may be kept. On a
-// refusal the counts are only what was seen before it.
+// refusal the counts are only what was seen before it. Dev and Ino are those of
+// the folder screened (zero when it was never opened), so a move can check it
+// moves the folder that was screened.
 type screenResult struct {
 	Bytes, Files int64
+	Dev, Ino     uint64
 	Reason       string
 }
+
+// errKeptScreenTimeout is the cause of the screen's own deadline: a cap, unlike
+// a deadline or cancel of the caller's.
+var errKeptScreenTimeout = errors.New("the screen ran out of time")
 
 // screenKept screens the folder rel under root (a box home, or a store's home
 // folder) for what looks like a credential. It fails closed: a cap hit, a read
@@ -273,17 +304,17 @@ type screenResult struct {
 // screened instead), and the content rules of secretshape on the first
 // keptScreenHead bytes of every regular file.
 func screenKept(ctx context.Context, root *os.Root, rel string) screenResult {
-	ctx, cancel := context.WithTimeout(ctx, keptScreenTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, keptScreenTimeout, errKeptScreenTimeout)
 	defer cancel()
 	w := keptWalk{ctx: ctx, buf: make([]byte, keptScreenHead)}
-	if rel == "." || !filepath.IsLocal(rel) || filepath.Clean(rel) != rel || ctx.Err() != nil {
+	if rel == "." || !filepath.IsLocal(rel) || filepath.Clean(rel) != rel {
 		w.res.Reason = keptReasonUnreadable
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			w.res.Reason = keptReasonTooMany
-		}
 		return w.res
 	}
-	fi, err := keptLstatDirs(root, rel)
+	if w.expired() {
+		return w.res
+	}
+	d, st, err := keptOpenPath(root, rel)
 	if err != nil {
 		w.res.Reason = keptReasonUnreadable
 		if errors.Is(err, errKeptLink) {
@@ -291,11 +322,7 @@ func screenKept(ctx context.Context, root *os.Root, rel string) screenResult {
 		}
 		return w.res
 	}
-	d, err := keptOpenSame(root, rel, fi)
-	if err != nil {
-		w.res.Reason = keptReasonUnreadable
-		return w.res
-	}
+	w.res.Dev, w.res.Ino = uint64(st.Dev), uint64(st.Ino)
 	w.dir(d, rel, 0)
 	d.Close()
 	return w.res
@@ -312,6 +339,20 @@ func (w *keptWalk) stop(reason string) {
 	if w.res.Reason == "" {
 		w.res.Reason = reason
 	}
+}
+
+// expired stops the walk once its context is done: the screen's own deadline is
+// a cap (too many files to check), the caller's cancel or deadline is not.
+func (w *keptWalk) expired() bool {
+	if w.ctx.Err() == nil {
+		return false
+	}
+	if errors.Is(context.Cause(w.ctx), errKeptScreenTimeout) {
+		w.stop(keptReasonTooMany)
+	} else {
+		w.stop(keptReasonUnreadable)
+	}
+	return true
 }
 
 // dir screens the entries of the open directory d, found at rel (root-relative)
@@ -337,12 +378,7 @@ func (w *keptWalk) dir(d *os.File, rel string, depth int) {
 
 // entry screens the name n of the directory dfd at rel; n is at depth.
 func (w *keptWalk) entry(dfd int, rel, n string, depth int) {
-	if err := w.ctx.Err(); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			w.stop(keptReasonTooMany)
-		} else {
-			w.stop(keptReasonUnreadable)
-		}
+	if w.expired() {
 		return
 	}
 	if w.entries++; w.entries > keptScreenMaxEntries || depth > keptScreenMaxDepth {
@@ -432,7 +468,7 @@ func keptSecretName(name string) bool {
 // with no control or line-separator character, else quoted.
 func keptShow(p string) string {
 	if utf8.ValidString(p) && !strings.ContainsFunc(p, func(r rune) bool {
-		return unicode.IsControl(r) || r == ' ' || r == ' '
+		return unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
 	}) {
 		return p
 	}
@@ -451,7 +487,7 @@ type keptLinkError struct{ rel string }
 func (e *keptLinkError) Error() string { return e.rel + " is a link" }
 func (e *keptLinkError) Unwrap() error { return errKeptLink }
 
-// keptLinkRel is the component a keptLstatDirs link error names, else rel.
+// keptLinkRel is the component a keptOpenPath link error names, else rel.
 func keptLinkRel(rel string, err error) string {
 	var le *keptLinkError
 	if errors.As(err, &le) {
@@ -460,60 +496,46 @@ func keptLinkRel(rel string, err error) string {
 	return rel
 }
 
-// keptLstatDirs checks with Lstat that every component of rel under root is a
-// real directory, and returns the last one's info: a link anywhere is
-// errKeptLink (naming it), anything else errKeptNotDir, a missing one
-// fs.ErrNotExist.
-func keptLstatDirs(root *os.Root, rel string) (fs.FileInfo, error) {
-	var fi fs.FileInfo
+// keptOpenPath opens the directory rel (clean, local, not ".") under root one
+// component at a time, each read with fstatat(AT_SYMLINK_NOFOLLOW) on its
+// parent's descriptor and opened from it with keptOpenAt, so a link anywhere on
+// the way is never followed. A link is errKeptLink (naming the component),
+// anything but a directory errKeptNotDir, a missing component fs.ErrNotExist.
+// The stat returned is the open directory's own.
+func keptOpenPath(root *os.Root, rel string) (*os.File, *unix.Stat_t, error) {
+	d, err := openDirIn(root, ".")
+	if err != nil {
+		return nil, nil, err
+	}
+	var st unix.Stat_t
 	parts := strings.Split(rel, "/")
-	for i := range parts {
+	for i, c := range parts {
 		p := strings.Join(parts[:i+1], "/")
-		var err error
-		if fi, err = root.Lstat(p); err != nil {
-			return nil, err
+		if err := unix.Fstatat(int(d.Fd()), c, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			d.Close()
+			return nil, nil, &fs.PathError{Op: "lstat", Path: p, Err: err}
 		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			return nil, &keptLinkError{rel: p}
+		switch st.Mode & unix.S_IFMT {
+		case unix.S_IFDIR:
+		case unix.S_IFLNK:
+			d.Close()
+			return nil, nil, &keptLinkError{rel: p}
+		default:
+			d.Close()
+			return nil, nil, errKeptNotDir
 		}
-		if !fi.IsDir() {
-			return nil, errKeptNotDir
-		}
-	}
-	return fi, nil
-}
-
-// keptOpenSame opens the directory rel under root with openDirIn and checks it
-// is the one fi (its Lstat) describes: os.Root follows a link that stays inside
-// the root, so a swap since the Lstat fails here.
-func keptOpenSame(root *os.Root, rel string, fi fs.FileInfo) (*os.File, error) {
-	d, err := openDirIn(root, rel)
-	if err != nil {
-		return nil, err
-	}
-	got, err := d.Stat()
-	if err != nil || !os.SameFile(fi, got) {
+		next, err := keptOpenAt(int(d.Fd()), p, c, &st, unix.O_DIRECTORY)
 		d.Close()
-		return nil, &fs.PathError{Op: "open", Path: rel, Err: unix.ESTALE}
+		if err != nil {
+			return nil, nil, err
+		}
+		d = next
 	}
-	return d, nil
+	return d, &st, nil
 }
 
-// keptReadNames lists the directory rel under root, at most
-// keptScreenMaxEntries names: "." (fi nil), or a directory that fi, from
-// keptLstatDirs, describes.
-func keptReadNames(root *os.Root, rel string, fi fs.FileInfo) ([]string, error) {
-	var d *os.File
-	var err error
-	if fi == nil {
-		d, err = openDirIn(root, rel)
-	} else {
-		d, err = keptOpenSame(root, rel, fi)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer d.Close()
+// keptReadNames lists the open directory d, at most keptScreenMaxEntries names.
+func keptReadNames(d *os.File) ([]string, error) {
 	var out []string
 	for {
 		names, err := d.Readdirnames(readDirChunk)
