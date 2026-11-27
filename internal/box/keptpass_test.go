@@ -1358,3 +1358,26 @@ func TestPassUseSlackFromPassStart(t *testing.T) {
 		t.Fatalf("kept %d, %v; want nothing moved, busy", r.n, r.err)
 	}
 }
+
+// A wait for the background keep passes may run while a stop (on a timer, as
+// an exclusive box's is) starts one: the count must take that, as a test's
+// cleanup waits while such a stop can still be on its way.
+func TestKeptPassesWaitWhileStopping(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			m.stopped("ab-box-000000000001", "")
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			m.WaitKeptPasses()
+			return
+		default:
+			m.WaitKeptPasses()
+		}
+	}
+}

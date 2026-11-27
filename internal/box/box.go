@@ -481,7 +481,7 @@ type Manager struct {
 	// keptPasses counts the keep passes running in the background, started by
 	// stopped() and StartKeepStoppedHomes (WaitKeptPasses). Each is bounded:
 	// keptPassBudget, keptBootBudget.
-	keptPasses sync.WaitGroup
+	keptPasses keptRunning
 	// keptBadAttr holds the store keys whose state.json named a profile it
 	// does not belong to, once logged. Guarded by mu.
 	keptBadAttr map[string]bool

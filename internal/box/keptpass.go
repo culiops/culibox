@@ -199,6 +199,37 @@ func (m *Manager) StartKeepStoppedHomes(ctx context.Context) {
 // stopped() and StartKeepStoppedHomes started. For tests.
 func (m *Manager) WaitKeptPasses() { m.keptPasses.Wait() }
 
+// keptRunning counts the keep passes running in the background. Unlike a
+// sync.WaitGroup it may be added to while a Wait runs at zero: a stop on a
+// timer (an exclusive box's) can start a pass while a test's cleanup waits.
+// Wait returns once no pass runs. The zero value is ready.
+type keptRunning struct {
+	mu   sync.Mutex
+	idle *sync.Cond // made by the first Wait
+	n    int
+}
+
+func (r *keptRunning) Add(d int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.n += d; r.n == 0 && r.idle != nil {
+		r.idle.Broadcast()
+	}
+}
+
+func (r *keptRunning) Done() { r.Add(-1) }
+
+func (r *keptRunning) Wait() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.idle == nil {
+		r.idle = sync.NewCond(&r.mu)
+	}
+	for r.n > 0 {
+		r.idle.Wait()
+	}
+}
+
 // KeepStoppedHomes runs the keep pass on every box home that has a store
 // record and whose box does not run (keepPass checks both): at boot, after
 // Reconcile, for the homes of boxes stopped while the daemon was down. A
