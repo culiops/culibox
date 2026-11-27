@@ -3892,7 +3892,7 @@
   #page-host > #analytics-modal.as-page .an-wcell > :is(.an-exp, .an-wtext) { display: inline-block; vertical-align: top; }
   /* The Workspace column takes what the other six leave (width 100% with max-width 0 lets it shrink), so the table fits the page at 1280px
      and a long name or path ellipsizes (its title carries the whole) instead of pushing Median / session and Cache hit out of sight. */
-  #page-host > #analytics-modal.as-page .an-wtbl :is(th:first-child, td.an-wcell) { width: 100%; max-width: 0; }
+  #page-host > #analytics-modal.as-page .an-wtbl :is(th:first-child, td.an-wcell) { width: 100%; min-width: 220px; max-width: 0; }
   #page-host > #analytics-modal.as-page .an-wcell > .an-wtext { max-width: calc(100% - 26px); }
   #page-host > #analytics-modal.as-page .an-exp { width: 20px; height: 20px; margin: 0 2px 0 0; padding: 0; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font: inherit; line-height: 20px; text-align: center; }
   #page-host > #analytics-modal.as-page button.an-exp { cursor: pointer; }

@@ -2371,6 +2371,7 @@ test("the Workspaces table's first column shrinks to what the other six leave, a
   assert.ok(col, "the first column has a rule");
   assert.match(col[1], /width:\s*100%/);
   assert.match(col[1], /max-width:\s*0/);
+  assert.match(col[1], /min-width:\s*220px/); // below that the table scrolls inside its wrapper instead of crushing the name
   const child = /\.as-page \.an-wtbl tr\.an-child td\.an-wcell\s*\{([^}]*)\}/.exec(DESK_CSS);
   assert.ok(child, "a breakdown row's cell has a rule");
   assert.match(child[1], /overflow:\s*hidden/);
