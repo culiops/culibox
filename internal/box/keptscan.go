@@ -40,6 +40,13 @@ import (
 // ensure seeds.
 var keptOwn = []string{".claude", ".agent-box"}
 
+// keptImageOwn are the top-level home names the box image's entrypoint
+// creates at every start (tfenv state, the tflint plugin links and default
+// config). They are image state, not agent output: skipped silently like
+// keptOwn, no row, never kept. TestImageOwnPathsCoverEntrypoint pins this list
+// to the entrypoint.
+var keptImageOwn = []string{".tfenv", ".tflint.d", ".tflint.hcl"}
+
 // keptLevels are the parent directories whose children are candidates, beside
 // the home's own top-level dot directories. They are never candidates.
 var keptLevels = []string{".config", ".local/share", ".local/state"}
@@ -229,7 +236,7 @@ func (s *keptScan) level(lvl string) {
 // consider decides about the entry name of the open directory parent, whose
 // home-relative path is rel: a candidate level.
 func (s *keptScan) consider(parent *os.File, rel, name string) {
-	if keptFoldIn(rel, keptOwn) || keptFoldIn(rel, keptCacheNames) {
+	if keptFoldIn(rel, keptOwn) || keptFoldIn(rel, keptImageOwn) || keptFoldIn(rel, keptCacheNames) {
 		return
 	}
 	pfd := int(parent.Fd())

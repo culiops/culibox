@@ -306,13 +306,14 @@ func keptWriteAtomic(d *os.File, name string, data []byte) error {
 // back from state.json must before it is mounted or opened: clean and local,
 // at one of the four candidate levels (~/.<name>, ~/.config/<name>,
 // ~/.local/share/<name>, ~/.local/state/<name>, never a level itself), passing
-// keptNameOK, and none of the names discovery never keeps (CuliBox's own,
+// keptNameOK, and none of the names discovery never keeps (CuliBox's own, the
+// image's own,
 // caches and toolchains, credential stores).
 func validKeptRel(rel string) bool {
 	if rel == "." || !keptNameOK(rel) || !filepath.IsLocal(rel) || filepath.Clean(rel) != rel {
 		return false
 	}
-	if keptFoldIn(rel, keptOwn) || keptFoldIn(rel, keptCacheNames) || keptFoldIn(rel, keptCredentialNames) {
+	if keptFoldIn(rel, keptOwn) || keptFoldIn(rel, keptImageOwn) || keptFoldIn(rel, keptCacheNames) || keptFoldIn(rel, keptCredentialNames) {
 		return false
 	}
 	for _, lvl := range keptLevels {

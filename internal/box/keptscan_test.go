@@ -5,6 +5,7 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -709,5 +710,70 @@ func TestScreenDevInoMatchesCandidate(t *testing.T) {
 		if got.Reason != "" || got.Dev != c.Dev || got.Ino != c.Ino {
 			t.Fatalf("%s: screen %+v, candidate dev/ino %d/%d", c.Rel, got, c.Dev, c.Ino)
 		}
+	}
+}
+
+// TestImageOwnSkippedSilently: what the box image's entrypoint writes into the
+// home at every start is neither a candidate nor a refusal row.
+func TestImageOwnSkippedSilently(t *testing.T) {
+	dir := t.TempDir()
+	keptSymlink(t, "/usr/local/bin/terraform", dir, ".tfenv/versions/1.9.0/terraform")
+	keptSymlink(t, "/opt/tflint/x", dir, ".tflint.d/plugins/x")
+	keptSymlink(t, "/etc/agent-box/tflint.hcl", dir, ".tflint.hcl")
+	keptWrite(t, dir, ".culiops/x.md", "x")
+	home, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer home.Close()
+	cs, rs := mustCandidates(t, home, nil)
+	if got := candRels(cs); !slices.Equal(got, []string{".culiops"}) || len(rs) != 0 {
+		t.Fatalf("candidates %q refusals %+v, want only .culiops and no refusals", got, rs)
+	}
+	for _, n := range keptImageOwn {
+		if validKeptRel(n) {
+			t.Errorf("validKeptRel(%q) = true, a forged state entry could mount it", n)
+		}
+	}
+}
+
+// TestImageOwnPathsCoverEntrypoint pins keptImageOwn to the image: every top
+// level home name the entrypoint writes must be skipped by the keep pass.
+func TestImageOwnPathsCoverEntrypoint(t *testing.T) {
+	b, err := os.ReadFile("../../docker/culibox/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	df := string(b)
+	var ep string
+	for _, l := range strings.Split(df, "\n") {
+		if strings.HasPrefix(l, "RUN printf") && strings.Contains(l, "/usr/local/bin/agent-box-entrypoint") {
+			ep = l
+		}
+	}
+	if ep == "" {
+		t.Fatal("entrypoint printf line not found in the Dockerfile")
+	}
+	names := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\$HOME/(\.[A-Za-z0-9_.-]+)`).FindAllStringSubmatch(ep, -1) {
+		names[m[1]] = true
+	}
+	envRe := regexp.MustCompile(`(?m)^ENV ([A-Z_]+)=/home/agent/(\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)`)
+	nEnv := 0
+	for _, m := range envRe.FindAllStringSubmatch(df, -1) {
+		if strings.Contains(ep, m[1]) {
+			names[m[2]] = true
+			nEnv++
+		}
+	}
+	if !names[".tfenv"] || !names[".cache"] || nEnv < 2 {
+		t.Fatalf("scan found %v: the Dockerfile layout changed, fix this test", names)
+	}
+	files := map[string]bool{".zshrc": true} // regular files are never candidates
+	for n := range names {
+		if files[n] || keptFoldIn(n, keptOwn) || keptFoldIn(n, keptCacheNames) || keptFoldIn(n, keptImageOwn) {
+			continue
+		}
+		t.Errorf("the entrypoint writes ~/%s: add it to keptImageOwn", n)
 	}
 }
