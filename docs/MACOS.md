@@ -259,6 +259,10 @@ boxed sessions have already run in.
   refuses to share its own config, profiles and data directories and the
   known credential folders above.
 
+### Kept box folders
+
+Kept box folders (see [Features](FEATURES.md)) live under `boxstate/.kept/` and reach the box through the `boxstate` share. They need no extra setup and no VM folder entry. Because the VM can write `boxstate`, CuliBox reads every file there without following links and trusts a store's profile only when its state matches its folder name.
+
 ### Workspace roots outside the shared folders
 
 Settings › Workspace roots lists the folders the web UI's Files, git and search can open (see [Configuration](CONFIG.md#workspace-roots)). On a Mac, `/Volumes/<disk>/proj` is a common one, and it is outside the folders the box VM shares. Git status runs in a container inside the VM, so a root the VM cannot see has no git, on the host tier too, and a box cannot start there. When you start a session in such a folder, the line under Workspace in New session says so, and so does the root's row in Settings › Workspace roots, each with a **Share this folder…** button. The button opens Settings › VM folders with the folder filled in; adding it there is your call, and it reaches the VM only when you apply (a VM restart, which ends running boxes). The folder can still become a root without being shared; only git and boxes need the share.

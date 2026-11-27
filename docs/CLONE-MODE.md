@@ -40,6 +40,7 @@ A boxed session never runs in place in a git repo. If the folder is a git repo, 
 | `<clone_of>/.git` | read-only | The original's history, so `git fetch origin` inside the box works. The box cannot change it. |
 | each `clone_share` path | read-only | The original's file, shown at the same path inside the clone. |
 | the host's Claude memory for `clone_of`, if any | read-only | So the boxed agent starts with what you already told Claude about this repo. |
+| the profile's kept box folders, if any | read-write | `~/.<app>`, `~/.config/<app>` and similar folders earlier boxes of the profile wrote, kept per profile and mounted back (see [Features](FEATURES.md)). Held folders are not mounted. |
 
 Claude's memory notes for `clone_of` are readable by the box, which has internet egress. Keep secrets out of them, or set `bundle_source: "off"`, which also turns the memory mount off.
 

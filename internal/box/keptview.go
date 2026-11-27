@@ -746,3 +746,8 @@ func (m *Manager) TakeKeptNews(key string) []string {
 	}
 	return news
 }
+
+// KeptRoot is the folder holding every kept-folder store.
+func KeptRoot(stateRoot string) string {
+	return filepath.Join(stateRoot, stateDirName, keptDirName)
+}
