@@ -701,7 +701,7 @@ func keptRemoveOne(ctx context.Context, parent *os.Root, name string) error {
 // keptNewsWait is how long a spawn waits for a store's lock to tell what is
 // new: a forget holds it through a big removal, and a spawn must not stall
 // behind that.
-const keptNewsWait = 2 * time.Second
+var keptNewsWait = 2 * time.Second
 
 // TakeKeptNews returns the paths kept in store key that no spawn has told the
 // person about yet, and marks them told. It takes the store's lock like the

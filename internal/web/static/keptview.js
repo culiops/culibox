@@ -146,9 +146,10 @@ function keptDrawSection(model, hooks) {
       if (r.reason) line.append(keptMk("span", "pfv-kept-why", r.reason));
     }
     const acts = keptMk("span", "pfv-kept-acts");
+    const forgetBtn = keptBtn("Forget", "Forget " + keptHome(r.path), () => h.onForget && h.onForget(r, forgetBtn));
     acts.append(
       keptBtn("View", "View " + keptHome(r.path), () => h.onView && h.onView(r, row)),
-      keptBtn("Forget", "Forget " + keptHome(r.path), () => h.onForget && h.onForget(r)),
+      forgetBtn,
     );
     line.append(acts);
     row.append(line);
@@ -206,7 +207,7 @@ function keptPaint(host) {
   host.append(keptDrawSection(model, {
     onView: (r, rowEl) => keptToggleTree(name, r.key, [r.path], rowEl),
     onViewClash: (c, rowEl) => keptToggleTree(name, c.key, c.paths, rowEl),
-    onForget: (r) => keptForget(name, r),
+    onForget: (r, btn) => keptForget(name, r, btn),
   }));
 }
 
@@ -217,18 +218,23 @@ function keptRepaint() {
 
 // keptReload: fetch the profile's kept stores and redraw the section. A failure leaves what was
 // there (the section is secondary; the page must not say "load failed" for it).
+let keptSeq = 0;
 async function keptReload(name) {
   if (!name) return;
+  const seq = ++keptSeq;
   let d;
   try { d = await api("/api/profiles/" + encodeURIComponent(name) + "/kept"); } catch (_) { return; }
+  if (seq !== keptSeq) return; // a newer reload is the answer
   const stores = d && Array.isArray(d.stores) ? d.stores : [];
   keptState.name = name;
   keptState.stores = stores;
   keptRepaint();
 }
 
-async function keptForget(name, r) {
+async function keptForget(name, r, btn) {
   if (!(await askConfirm(keptForgetAsk(r.path)))) return;
+  const label = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Forgetting..."; }
   try {
     await api("/api/profiles/" + encodeURIComponent(name) + "/kept/forget", {
       method: "POST",
@@ -236,6 +242,7 @@ async function keptForget(name, r) {
       body: JSON.stringify({ key: r.key, path: r.path }),
     });
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
     showToast(e && e.message ? e.message : "Could not forget it", { error: true });
     return;
   }
@@ -261,22 +268,23 @@ function keptTreeItem(name, key, path, label, dir) {
   let sub = null;
   const b = keptBtn(label + "/", "Show " + label, async () => {
     if (sub) { sub.remove(); sub = null; return; }
-    sub = keptMk("ul", "pfv-kept-tree");
-    li.append(sub);
+    const mine = sub = keptMk("ul", "pfv-kept-tree");
+    li.append(mine);
     let d;
     try {
       d = await api("/api/profiles/" + encodeURIComponent(name) + "/kept/list?key=" + encodeURIComponent(key) + "&path=" + encodeURIComponent(path));
     } catch (e) {
-      sub.append(keptMk("li", "pfv-kept-item", e && e.message ? e.message : "Could not list it"));
+      if (sub === mine) mine.append(keptMk("li", "pfv-kept-item", e && e.message ? e.message : "Could not list it"));
       return;
     }
+    if (sub !== mine) return; // closed, or closed and opened again, while the reply was on its way
     for (const e of Array.isArray(d.entries) ? d.entries : []) {
       if (!e || typeof e.name !== "string") continue;
       const child = path + "/" + e.name;
-      if (e.link) sub.append(keptMk("li", "pfv-kept-item", e.name + " (link)"));
-      else sub.append(keptTreeItem(name, key, child, e.name, e.is_dir === true));
+      if (e.link) mine.append(keptMk("li", "pfv-kept-item", e.name + " (link)"));
+      else mine.append(keptTreeItem(name, key, child, e.name, e.is_dir === true));
     }
-    if (d.truncated) sub.append(keptMk("li", "pfv-kept-item", "More not shown"));
+    if (d.truncated) mine.append(keptMk("li", "pfv-kept-item", "More not shown"));
   });
   li.append(b);
   return li;

@@ -99,7 +99,8 @@ class El {
   set textContent(v) { this.children = []; this._text = String(v); }
   get textContent() { return this._text + this.children.map((c) => c.textContent).join(""); }
   set innerHTML(v) { throw new Error("innerHTML must not be used: " + v); }
-  append(...k) { for (const c of k) this.children.push(typeof c === "string" ? Object.assign(new El("#text"), { _text: c }) : c); }
+  append(...k) { for (const c of k) { const n = typeof c === "string" ? Object.assign(new El("#text"), { _text: c }) : c; n.parent = this; this.children.push(n); } }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); }
   setAttribute(k, v) { this.attrs[k] = v; }
   addEventListener(t, f) { this.handlers[t] = f; }
   walk(f) { f(this); for (const c of this.children) c.walk(f); }
@@ -132,4 +133,90 @@ test("the forget confirm says what goes", () => {
   assert.strictEqual(K.keptForgetAsk(".culiops").body, "Delete the kept copy of ~/.culiops? Boxes won't keep it again.");
   assert.strictEqual(K.keptForgetAsk(".culiops").confirmLabel, "Delete");
   assert.strictEqual(K.keptForgetAsk(".culiops").danger, true);
+});
+
+// --- the page's async parts: reload, forget, folder listing --------------------------------------
+
+// load runs keptview.js as the browser does: plain script, globals for what the page provides.
+function load(over) {
+  const g = Object.assign({ document: { createElement: (t) => new El(t), getElementById: () => null }, keptBoxId: F.keptBoxId, dockOpenFile() {} }, over);
+  const vm = require("node:vm");
+  const src = require("node:fs").readFileSync(require.resolve("../static/keptview.js"), "utf8");
+  const ctx = vm.createContext(g);
+  vm.runInContext(src + "\n;this.__k = { keptReload, keptForget, keptToggleTree, keptBtn, keptState };", ctx);
+  return ctx.__k;
+}
+const defer = () => { let res, rej; const p = new Promise((a, b) => { res = a; rej = b; }); return { p, res, rej }; };
+const tick = () => new Promise((r) => setImmediate(r));
+const apiStores = (name) => ({ stores: [store({ profile: name, kept: [entry(".a")] })] });
+
+test("keptReload: an older reply landing after a newer one does not win", async () => {
+  const a = defer(), b = defer();
+  const replies = { A: a, B: b };
+  const k = load({ api: (url) => replies[url.split("/")[3]].p });
+  const pa = k.keptReload("A"), pb = k.keptReload("B");
+  b.res({ stores: [store({ key: "bbbbbbbbbbbb" })] });
+  await pb;
+  a.res({ stores: [store({ key: "aaaaaaaaaaaa" })] });
+  await pa;
+  assert.strictEqual(k.keptState.name, "B");
+  assert.strictEqual(k.keptState.stores[0].key, "bbbbbbbbbbbb");
+});
+
+test("forget: confirm, POST {key, path}, then reload; the button shows Forgetting... meanwhile", async () => {
+  const calls = [], post = defer();
+  const k = load({
+    askConfirm: async () => true,
+    showToast() { throw new Error("no toast expected"); },
+    api: (url, opt) => { calls.push([url, opt && opt.method, opt && opt.body]); return opt ? post.p : Promise.resolve(apiStores("p")); },
+  });
+  const btn = k.keptBtn("Forget", "Forget ~/.a", () => {});
+  const done = k.keptForget("p", { key: "aaaaaaaaaaaa", path: ".a" }, btn);
+  await tick();
+  assert.strictEqual(btn.textContent, "Forgetting...");
+  assert.strictEqual(btn.disabled, true);
+  post.res({});
+  await done;
+  assert.deepStrictEqual(calls[0], ["/api/profiles/p/kept/forget", "POST", JSON.stringify({ key: "aaaaaaaaaaaa", path: ".a" })]);
+  assert.strictEqual(calls[1][0], "/api/profiles/p/kept");
+  assert.strictEqual(k.keptState.name, "p");
+});
+
+test("forget: a refusal shows the server's text as it is and brings the button back", async () => {
+  const toasts = [];
+  const k = load({
+    askConfirm: async () => true,
+    showToast: (m, o) => toasts.push([m, o]),
+    api: async (url, opt) => { if (opt) throw new Error("a session is using it"); throw new Error("no reload expected"); },
+  });
+  const btn = k.keptBtn("Forget", "Forget ~/.a", () => {});
+  await k.keptForget("p", { key: "aaaaaaaaaaaa", path: ".a" }, btn);
+  assert.strictEqual(JSON.stringify(toasts), JSON.stringify([["a session is using it", { error: true }]]));
+  assert.strictEqual(btn.textContent, "Forget");
+  assert.strictEqual(btn.disabled, false);
+});
+
+test("forget: a No on the confirm sends nothing", async () => {
+  const k = load({ askConfirm: async () => false, api() { throw new Error("no call expected"); } });
+  const btn = k.keptBtn("Forget", "x", () => {});
+  await k.keptForget("p", { key: "k", path: ".a" }, btn);
+  assert.strictEqual(btn.textContent, "Forget");
+});
+
+test("folder listing: quick clicks before the reply neither throw nor list twice", async () => {
+  const replies = [];
+  const k = load({ api: () => { const d = defer(); replies.push(d); return d.p; } });
+  const row = new El("div");
+  row.querySelector = () => null;
+  k.keptToggleTree("p", "aaaaaaaaaaaa", [".a"], row);
+  const li = row.children[0].children[0];
+  const btn = li.children[0];
+  btn.handlers.click(); btn.handlers.click(); btn.handlers.click();
+  const list = { entries: [{ name: "x.txt", is_dir: false }, { name: "y.txt", is_dir: false }] };
+  for (const d of replies) d.res(list);
+  await tick(); await tick();
+  const uls = li.children.filter((c) => c.tag === "ul");
+  const items = (u) => u.children.length;
+  assert.ok(uls.length <= 1, "at most one open listing");
+  assert.ok(uls.every((u) => items(u) === 2), "no duplicated entries");
 });

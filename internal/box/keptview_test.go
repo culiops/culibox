@@ -547,6 +547,9 @@ func TestTakeKeptNewsOnce(t *testing.T) {
 // It never waits for a forget that holds the store's lock: a spawn must not
 // stall behind a big removal. The news stays for the next spawn.
 func TestTakeKeptNewsDoesNotWaitOnStoreLock(t *testing.T) {
+	old := keptNewsWait
+	keptNewsWait = 50 * time.Millisecond
+	defer func() { keptNewsWait = old }()
 	m := newTestManager(t)
 	keptSeedStore(t, m.opts.StateRoot, keptTestKey, KeptState{Profile: "p", Workspace: "/w",
 		Kept: []KeptEntry{keptViewEntry(".culiops", 100)}})
@@ -555,7 +558,7 @@ func TestTakeKeptNewsDoesNotWaitOnStoreLock(t *testing.T) {
 	start := time.Now()
 	got := m.TakeKeptNews(keptTestKey)
 	mu.Unlock()
-	if len(got) != 0 || time.Since(start) > 5*time.Second {
+	if len(got) != 0 || time.Since(start) > time.Second {
 		t.Fatalf("got %v after %v with the lock held", got, time.Since(start))
 	}
 	if got := m.TakeKeptNews(keptTestKey); !slices.Equal(got, []string{".culiops"}) {

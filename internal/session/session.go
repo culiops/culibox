@@ -3019,6 +3019,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		cloneOf = cl.Of
 	}
 	wsRoot := m.workspaceRootFor(spec.Cwd, cloneOf, spec.ParentID)
+	// Outside m.mu: it waits on a store lock and reads the disk, and every Get/List needs m.mu.
+	keptNew := takeKeptNews(spawnBoxes, transcriptKey)
 	m.mu.Lock()
 	// Uniqueness is resolved in the SAME critical section that inserts
 	// m.sessions[id] below, so two concurrent spawns can never both win the
@@ -3063,7 +3065,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
 	sess.HostReturn = hostReturn
-	sess.KeptNew = takeKeptNews(spawnBoxes, transcriptKey)
+	sess.KeptNew = keptNew
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
 	sess.CloneOf = cloneOf

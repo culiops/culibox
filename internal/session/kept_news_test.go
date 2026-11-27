@@ -46,3 +46,31 @@ func TestBoxedSpawnCarriesKeptNew(t *testing.T) {
 		t.Fatalf("asked %v, kept_new %v: want neither without a store key", asked, s2.Info().KeptNew)
 	}
 }
+
+// The box layer is asked outside the manager's lock: a store lock wait or disk
+// read there must never freeze Get/List.
+func TestBoxedSpawnTakesKeptNewsOutsideManagerLock(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	boxes.conv = testConvFolder
+	var held, asked bool
+	boxes.keptNews = func(string) []string {
+		asked = true
+		if !m.mu.TryLock() {
+			held = true
+			return nil
+		}
+		m.mu.Unlock()
+		return []string{".culiops"}
+	}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if !asked || held {
+		t.Fatalf("asked=%v, manager lock held during TakeKeptNews=%v", asked, held)
+	}
+	if got := s.Info().KeptNew; !slices.Equal(got, []string{".culiops"}) {
+		t.Fatalf("KeptNew = %v", got)
+	}
+}

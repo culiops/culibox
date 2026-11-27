@@ -47,8 +47,9 @@ const MD_PURIFY = Object.freeze({
 });
 
 // The two same-origin routes a file's bytes come from: /api/fs/read, and the
-// per-session box route boxFileURL builds (fsops.js).
-const MS_BOX_ROUTE = /^\/api\/sessions\/[^/?#]+\/boxfile\?/;
+// per-session box route boxFileURL builds (fsops.js), and a kept folder's file route
+// (read-only, same origin, sandbox headers: a relative image in a kept .md lands there).
+const MS_BOX_ROUTE = /^\/api\/sessions\/[^/?#]+\/boxfile\?|^\/api\/profiles\/[^/?#]+\/kept\/file\?/;
 
 // The image types a data: URL may carry. Not svg (a script can ride in one), and
 // the payload is base64 only, so nothing else can ride in the URL either.
