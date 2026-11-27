@@ -13,6 +13,12 @@ import (
 // feature is enabled). Reads are plain GETs; the ingest trigger is a POST and so
 // inherits csrfGuard's same-origin check at the mux layer.
 
+// AgentSessionIndexer says which live culibox session holds an agent
+// conversation. *session.Manager satisfies it.
+type AgentSessionIndexer interface {
+	AgentSessionIndex() map[string]string
+}
+
 // isDay reports whether s looks like YYYY-MM-DD, so a query param cannot inject
 // arbitrary text into the date-range filter.
 func isDay(s string) bool {
@@ -123,21 +129,104 @@ func (s *Server) handleAnalyticsSessions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "sessions": rows})
 }
 
+// sessionCostRow is one session-costs row: the aggregate plus the culibox
+// session that still holds the conversation ("" when none does).
+type sessionCostRow struct {
+	analytics.SessionAggRow
+	LiveID string `json:"liveId"`
+}
+
 // handleAnalyticsSessionCosts → per-session cost aggregates (complete set, no
 // day-ordered cap) so the session count, histogram and top-by-cost are correct
-// on wide windows.
+// on wide windows. Each row carries liveId, the culibox session whose agent
+// conversations include the row's session id; modelCosts is the same window
+// split per (session, model).
 func (s *Server) handleAnalyticsSessionCosts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.SessionCosts(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
+	where := analytics.ParseWhere(r.URL.Query().Get("where"))
+	rows, err := s.Analytics.SessionCosts(from, to, where)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "sessions": rows})
+	mc, err := s.Analytics.SessionModelCosts(from, to, where)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	var live map[string]string
+	if s.AgentIndex != nil {
+		live = s.AgentIndex.AgentSessionIndex()
+	}
+	out := make([]sessionCostRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, sessionCostRow{SessionAggRow: row, LiveID: live[row.SessionID]})
+	}
+	if mc == nil {
+		mc = []analytics.SessionModelCost{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "sessions": out, "modelCosts": mc})
+}
+
+// handleAnalyticsWorkspaces → one row per workspace with its child rows, for the window.
+func (s *Server) handleAnalyticsWorkspaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	rows, err := s.Analytics.Workspaces(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if rows == nil {
+		rows = []analytics.WorkspaceRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "workspaces": rows})
+}
+
+// handleAnalyticsDrivers → cost per agent, skill, plugin and MCP server; the
+// DriversResp fields sit at the top level next to from/to.
+func (s *Server) handleAnalyticsDrivers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	d, err := s.Analytics.Drivers(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+		analytics.DriversResp
+	}{from, to, d})
+}
+
+// handleAnalyticsWhere → the where select's entries with their cost over the
+// window. It takes no where: it lists what a where can name.
+func (s *Server) handleAnalyticsWhere(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	opts, err := s.Analytics.WhereOptions(from, to)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if opts == nil {
+		opts = []analytics.WhereOption{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "options": opts})
 }
 
 // handleAnalyticsTools → skill/plugin/MCP attribution aggregates.

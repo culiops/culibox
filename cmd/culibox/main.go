@@ -1097,6 +1097,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			svc.SetResolveEnv(analyticsResolveEnv(pm.All, h.recorded, convKey, runtime.GOOS == "darwin"))
 			analyticsSvc = svc
 			srv.Analytics = svc
+			srv.AgentIndex = mgr
 			// Only a live service: a nil *Service must never reach the manager.
 			mgr.SetCostSource(svc)
 			if boxes != nil {
