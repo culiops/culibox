@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -400,6 +401,72 @@ func TestKeptForgetUnreadableRecordCounts(t *testing.T) {
 		t.Fatalf("stopped %v, want the idle box %s removed", stopped, bad)
 	}
 	m.WaitKeptPasses()
+}
+
+// Records of boxes long gone cost a forget nothing: one docker listing, and
+// no inspect for a box that is not in it.
+func TestKeptForgetStaleRecordsListOnce(t *testing.T) {
+	m, f, _, _ := keptForgetSetup(t)
+	for i := range 500 {
+		name := fmt.Sprintf("ab-box-%012x", 0xe00000000000+i)
+		if err := writeKeptBoxRecord(m.opts.StateRoot, name, keptBoxRecord{Key: keptTestKey}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	f.listCalls, f.inspectCalls = 0, 0
+	f.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); err != nil {
+		t.Fatalf("KeptForget: %v", err)
+	}
+	f.mu.Lock()
+	lists, inspects := f.listCalls, f.inspectCalls
+	f.mu.Unlock()
+	if lists > 1 || inspects != 0 {
+		t.Fatalf("a forget with 500 records of gone boxes listed %d times and inspected %d boxes, want <= 1 and 0", lists, inspects)
+	}
+
+	// A listing that fails is a run that cannot be told.
+	f.mu.Lock()
+	f.listErr = errors.New("docker is down")
+	f.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".config/other", "web"); !errors.Is(err, ErrKeptRunUnknown) {
+		t.Fatalf("KeptForget when the listing fails: %v, want ErrKeptRunUnknown", err)
+	}
+}
+
+// Every box of the store is inspected before any is removed: when one cannot
+// be read, the others are left as they are.
+func TestKeptForgetRunUnknownRemovesNothing(t *testing.T) {
+	m, f, _, store := keptForgetSetup(t)
+	const boxB = "ab-box-ffffffffffff"
+	if err := writeKeptBoxRecord(m.opts.StateRoot, boxB, keptBoxRecord{Key: keptTestKey}); err != nil {
+		t.Fatal(err)
+	}
+	// Whichever box is inspected first runs; the next inspect fails.
+	inspects := 0
+	f.mu.Lock()
+	f.running[keptTestBox], f.running[boxB] = true, true
+	f.inspectHook = func(string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		inspects++
+		f.inspectErr = nil
+		if inspects > 1 {
+			f.inspectErr = errors.New("docker did not answer")
+		}
+	}
+	f.mu.Unlock()
+	if err := m.KeptForget(context.Background(), keptTestKey, ".culiops", "web"); !errors.Is(err, ErrKeptRunUnknown) {
+		t.Fatalf("KeptForget when one box cannot be inspected: %v, want ErrKeptRunUnknown", err)
+	}
+	f.mu.Lock()
+	stopped, aRuns, bRuns := slices.Clone(f.stopped), f.running[keptTestBox], f.running[boxB]
+	f.mu.Unlock()
+	if len(stopped) != 0 || !aRuns || !bRuns {
+		t.Fatalf("stopped %v (running: %v, %v), want nothing removed", stopped, aRuns, bRuns)
+	}
+	keptFolderThere(t, m, store)
 }
 
 func TestKeptForgetRemovesAndRemembers(t *testing.T) {

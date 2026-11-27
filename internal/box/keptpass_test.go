@@ -612,6 +612,46 @@ func TestReclaimKeepsBeforeRemove(t *testing.T) {
 	}
 }
 
+// keptRecordThere reports whether box has a kept-folder record.
+func keptRecordThere(t *testing.T, m *Manager, box string) bool {
+	t.Helper()
+	_, err := os.Lstat(filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptBoxesDirName, box))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+// A home that goes takes its box's record with it, and a record whose home is
+// gone by any other means goes at the next reclaim: records never pile up.
+func TestReclaimRemovesBoxRecords(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	const stale, live = "ab-box-eeeeeeeeeeee", "ab-box-dddddddddddd"
+	for _, b := range []string{stale, live} {
+		if err := writeKeptBoxRecord(m.opts.StateRoot, b, keptBoxRecord{Key: keptTestKey}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keptMkdir(t, m.stateDir(live), ".")
+	m.touchMarker(live)
+	if _, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(home); !os.IsNotExist(err) {
+		t.Fatalf("home still there: %v", err)
+	}
+	if keptRecordThere(t, m, keptTestBox) {
+		t.Error("the reclaimed home's record is still there")
+	}
+	if keptRecordThere(t, m, stale) {
+		t.Error("a record whose home is gone is still there")
+	}
+	if !keptRecordThere(t, m, live) {
+		t.Error("the record of a home that is there was removed")
+	}
+}
+
 func TestReclaimCredentialDirDoesNotHoldHome(t *testing.T) {
 	m, _, home, _ := keptPassSetup(t)
 	keptWrite(t, home, ".aws/credentials", "[default]\n")

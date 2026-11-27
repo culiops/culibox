@@ -48,7 +48,8 @@ var keptViewListHook func(rel string)
 var (
 	// ErrKeptInUse: a box of the store is in use, so its kept folders are
 	// mounted and cannot be forgotten now. A forget's refusal also wraps the
-	// reason, ErrKeptSessions or ErrKeptStopping. Nothing changed.
+	// reason, ErrKeptSessions or ErrKeptStopping. The store is as it was (an
+	// idle box removed before ErrKeptStopping stays removed).
 	ErrKeptInUse = errors.New("box: a box of this kept store is in use")
 	// ErrKeptSessions: a box whose record names the store has a live
 	// session. Only the user can end it.
@@ -57,7 +58,8 @@ var (
 	// its last session by the idle TTL) could not be removed now.
 	ErrKeptStopping = errors.New("box: a box of this kept store could not be stopped")
 	// ErrKeptRunUnknown: whether a box of the store runs could not be read
-	// (docker did not answer, a record could not be listed). Nothing changed.
+	// (docker did not answer, a record could not be listed). Nothing changed:
+	// no box was removed and the store is as it was.
 	ErrKeptRunUnknown = errors.New("box: could not tell whether a box of this kept store is running")
 	// ErrKeptNotRemoved: the folder is forgotten (not kept, not mounted, not
 	// listed any more), but some of its files could not be removed from the
@@ -522,9 +524,14 @@ func keptPresent(store *os.Root, rel string) bool {
 // ErrKeptSessions and touches nothing. Otherwise each one still running (it
 // outlives its last session by the idle TTL) is removed with removeIdle, as a
 // spawn removes an idle box in its way; one that will not go is
-// ErrKeptStopping. ErrKeptRunUnknown when the records or docker cannot say.
-// The caller holds opMu: no session starts in a box meanwhile (ensure holds
-// opMu when it counts one).
+// ErrKeptStopping. ErrKeptRunUnknown when the records or docker cannot say,
+// with nothing removed: every box is inspected before any is.
+//
+// A record outlives its box (an elevatable profile makes a new box every
+// session), so docker is asked once which boxes exist, and only those are
+// inspected: a record whose box is not listed and has no session is skipped
+// without reading it. The caller holds opMu: no session starts in a box
+// meanwhile (ensure holds opMu when it counts one), and no box is created.
 func (m *Manager) keptClearBoxes(ctx context.Context, key string) error {
 	state, err := os.OpenRoot(filepath.Join(m.opts.StateRoot, stateDirName))
 	if err != nil {
@@ -543,10 +550,23 @@ func (m *Manager) keptClearBoxes(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("%w: the box records: %v", ErrKeptRunUnknown, err)
 	}
+	names = slices.DeleteFunc(names, func(n string) bool { return !isBoxName(n) }) // a record's temp file
+	if len(names) == 0 {
+		return nil
+	}
+	listed, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance)
+	if err != nil {
+		return fmt.Errorf("%w: listing the boxes: %v", ErrKeptRunUnknown, err)
+	}
+	exists := make(map[string]bool, len(listed))
+	for _, b := range listed {
+		exists[b.Name] = true
+	}
+	slices.Sort(names)
 	var boxes []string
 	for _, name := range names {
-		if !isBoxName(name) {
-			continue // a record's temp file
+		if !exists[name] && m.idle(name) {
+			continue // no container and no session: nothing of it can mount the store
 		}
 		if rec, ok := readKeptBoxRecord(m.opts.StateRoot, name); ok && rec.Key != key {
 			continue
@@ -556,14 +576,17 @@ func (m *Manager) keptClearBoxes(ctx context.Context, key string) error {
 		}
 		boxes = append(boxes, name)
 	}
+	var running []string
 	for _, name := range boxes {
 		st, err := m.opts.Client.Inspect(ctx, name)
 		if err != nil {
 			return fmt.Errorf("%w: %s: %v", ErrKeptRunUnknown, name, err)
 		}
-		if st != StateRunning {
-			continue
+		if st == StateRunning {
+			running = append(running, name)
 		}
+	}
+	for _, name := range running {
 		if err := m.removeIdle(ctx, name); err != nil {
 			log.Printf("box: %s: not removed for a forget of a kept folder: %v", name, err)
 			return fmt.Errorf("%w: %w: %s: %v", ErrKeptInUse, ErrKeptStopping, name, err)

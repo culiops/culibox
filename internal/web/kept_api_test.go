@@ -38,8 +38,18 @@ func (d *keptDocker) Inspect(_ context.Context, name string) (box.State, error) 
 	}
 	return box.StateMissing, nil
 }
-func (d *keptDocker) ListBoxes(context.Context, string) ([]box.BoxInfo, error) { return nil, nil }
-func (d *keptDocker) ListByLabel(context.Context, string) ([]string, error)    { return nil, nil }
+
+// ListBoxes lists the running boxes, as docker ps -a would.
+func (d *keptDocker) ListBoxes(context.Context, string) ([]box.BoxInfo, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []box.BoxInfo
+	for n := range d.running {
+		out = append(out, box.BoxInfo{Name: n, State: "running"})
+	}
+	return out, nil
+}
+func (d *keptDocker) ListByLabel(context.Context, string) ([]string, error) { return nil, nil }
 func (d *keptDocker) Stop(_ context.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

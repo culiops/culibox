@@ -51,6 +51,8 @@ type fakeClient struct {
 	// filter, as docker would for `--filter label=<key>`.
 	others  []BoxInfo
 	listErr error
+	// listCalls and inspectCalls count ListBoxes and Inspect.
+	listCalls, inspectCalls int
 
 	// mounts holds the bind destinations of each box, as `docker inspect`
 	// reports them: recorded from every --mount of a Run, or set by a test to
@@ -202,6 +204,7 @@ func (f *fakeClient) Inspect(_ context.Context, name string) (State, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inspectCalls++
 	switch {
 	case f.inspectErr != nil:
 		return StateMissing, f.inspectErr
@@ -216,6 +219,7 @@ func (f *fakeClient) Inspect(_ context.Context, name string) (State, error) {
 func (f *fakeClient) ListBoxes(_ context.Context, filter string) ([]BoxInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

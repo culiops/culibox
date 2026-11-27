@@ -210,6 +210,7 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		errs = append(errs, err)
 	}
 	errs = append(errs, m.pruneOrphanMarkers()...)
+	errs = append(errs, m.pruneOrphanKeptRecords(ctx)...)
 	return out, errors.Join(errs...)
 }
 
@@ -275,6 +276,11 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 		return nil, fmt.Errorf("box: reclaiming %s: %s", name, strings.Join(causes, "; "))
 	}
 	_ = os.Remove(m.markerPath(name))
+	// The box's kept-folder record goes with its home: nothing of the box is
+	// left to keep, and a record would only cost every later forget a look.
+	if err := removeKeptBoxRecord(m.opts.StateRoot, name); err != nil {
+		return &Reclaimed{Box: name, Age: age, Bytes: size}, fmt.Errorf("box: reclaimed %s, but its kept-folder record stays (the next pass removes it): %s", name, removalCause(err))
+	}
 	return &Reclaimed{Box: name, Age: age, Bytes: size}, nil
 }
 
