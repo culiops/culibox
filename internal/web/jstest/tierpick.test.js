@@ -459,6 +459,49 @@ test("picking in place at the clone dir moves the workspace to the repo", () => 
   assert.strictEqual(plainPg.calls.filter((c) => c[0] === "setSpawnCwd").length, 0);
 });
 
+test("picking clone again at the repo moves the workspace back to the clone dir", () => {
+  const sets = (pg) => pg.calls.filter((c) => c[0] === "setSpawnCwd");
+  const pg = tpPage();
+  pg.run('tierPick("host")');
+  assert.deepStrictEqual(sets(pg), [["setSpawnCwd", "/home/u/repo", ""]]);
+  pg.calls.length = 0;
+  pg.run('tierPick("clone")');
+  assert.deepStrictEqual(sets(pg).pop(), ["setSpawnCwd", "/home/u/clones/repo", ""]);
+  assert.strictEqual(sets(pg).length, 1);
+  assert.strictEqual(pg.calls.filter((c) => c[0] === "onSpawnCwdChanged").length, 1);
+  // an unrelated folder: nothing moves
+  const other = tpPage({ cwd: "/home/u/else" });
+  other.run('tierPick("clone")');
+  assert.strictEqual(sets(other).length, 0);
+  // a clone dir that is the repo: nothing to move, no loop
+  const same = tpPage({ profile: { name: "c", clone_of: "/home/u/repo", default_cwd: "/home/u/repo" }, cwd: "/home/u/repo" });
+  same.ctx.onSpawnCwdChanged = () => { same.calls.push(["onSpawnCwdChanged"]); same.run("renderTierPick()"); };
+  same.run('tierPick("clone")');
+  assert.strictEqual(sets(same).length, 0);
+  // the conversion case does not move
+  const conv = tpPage({ cwd: "/home/u/repo" });
+  conv.run("tierConvert = () => true");
+  conv.ctx.$ = (id) => (id === "spawn" ? { requestSubmit() {} } : id === "tierpick" ? conv.pick : id === "runtime-seg" ? conv.seg : null);
+  conv.run('tierPick("clone")');
+  assert.strictEqual(sets(conv).length, 0);
+});
+
+test("a render ending on clone does not move the workspace while typing; a click does", () => {
+  const sets = (pg) => pg.calls.filter((c) => c[0] === "setSpawnCwd");
+  const pg = tpPage({ cwd: "/home/u/repo" });
+  pg.doc.activeElement = pg.ws;
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.pick.dataset.value, "clone");
+  assert.strictEqual(sets(pg).length, 0, "focused field: no passive move");
+  pg.run('tierPick("clone")');
+  assert.deepStrictEqual(sets(pg), [["setSpawnCwd", "/home/u/clones/repo", ""]]);
+  // unfocused render: moves, and does not loop through the redraw
+  const un = tpPage({ cwd: "/home/u/repo" });
+  un.ctx.onSpawnCwdChanged = () => { un.calls.push(["onSpawnCwdChanged"]); un.run("renderTierPick()"); };
+  un.run("renderTierPick()");
+  assert.deepStrictEqual(sets(un), [["setSpawnCwd", "/home/u/clones/repo", ""]]);
+});
+
 test("a card pick mirrors the seg and a seg pick moves the cards", () => {
   const pg = tpPage();
   pg.run('tierPick("clone")');
