@@ -957,3 +957,19 @@ func TestRealDir(t *testing.T) {
 		t.Error("RealDir(/proc) = true for a mount point")
 	}
 }
+
+func TestVMKeepsRoot(t *testing.T) {
+	root := t.TempDir()
+	if VMKeepsRoot("darwin", root) {
+		t.Error("darwin without a vm folder: kept")
+	}
+	if err := os.Mkdir(filepath.Join(root, "vm"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !VMKeepsRoot("darwin", root) {
+		t.Error("darwin with a vm folder: not kept")
+	}
+	if VMKeepsRoot("linux", root) {
+		t.Error("linux with a vm folder: kept (no box VM on Linux)")
+	}
+}

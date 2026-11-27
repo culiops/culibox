@@ -13,6 +13,7 @@ import (
 
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/instancelock"
+	"github.com/culiops/culibox/internal/rootmove"
 	"github.com/culiops/culibox/internal/service"
 )
 
@@ -137,7 +138,13 @@ func runService(a cliArgs, cfg config.Config, home, envHome string, d serviceDep
 
 func serviceInstall(ctx context.Context, a cliArgs, cfg config.Config, home, envHome, dataDir, logPath string,
 	d serviceDeps, w io.Writer, fail func(string, ...any) int) int {
-	if _, legacy := config.DefaultRoots(home); dataDir == filepath.Clean(legacy) {
+	// The next serve start moves the old root, and the unit's log path would
+	// then name it through the link the move leaves. Refused only when serve
+	// would move it: never a root named by CULIBOX_HOME/AGENT_BOX_HOME
+	// (maybeMoveDataRoot), nor one a Mac's box VM keeps in place (rootmove
+	// precondition (f)). There it is the root to install for.
+	if _, legacy := config.DefaultRoots(home); envHome == "" && dataDir == filepath.Clean(legacy) &&
+		!rootmove.VMKeepsRoot(d.Plat.GOOS, dataDir) {
 		return fail("the data root is still %s; run culibox serve once (it moves the root to its new place), stop it, then install", dataDir)
 	}
 	if cfg.DataDir != "" && !filepath.IsAbs(cfg.DataDir) {

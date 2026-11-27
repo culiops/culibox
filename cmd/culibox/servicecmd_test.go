@@ -69,8 +69,19 @@ func (r *unitRunner) Run(_ context.Context, _ []string, bin string, args ...stri
 			return out, errors.New("exit status 1")
 		}
 	}
-	if strings.Contains(call, " restart ") && !r.stayDown {
+	if (strings.Contains(call, " restart ") || strings.HasPrefix(call, "launchctl bootstrap ")) && !r.stayDown {
 		r.active = true
+	}
+	if strings.HasPrefix(call, "launchctl bootout ") {
+		r.active = false
+	}
+	// launchd: "print <domain>/<label>" answers for the job, "print <domain>"
+	// (one slash) for the GUI domain, which is always there.
+	if strings.HasPrefix(call, "launchctl print ") && strings.Count(call, "/") == 2 {
+		if r.active {
+			return "state = running\npid = 99\n", nil
+		}
+		return "Could not find service \"dev.culiops.culibox\"\n", errors.New("exit status 113")
 	}
 	if strings.Contains(call, "is-active") {
 		if r.active {
@@ -196,6 +207,61 @@ func TestServiceInstallRefusals(t *testing.T) {
 			if !strings.Contains(call, "is-active") && !strings.Contains(call, "show-environment") {
 				t.Errorf("%s: supervisor changed: %q", c.name, call)
 			}
+		}
+	}
+}
+
+// A Mac whose box VM lives in the old root keeps that root for good (rootmove
+// rule (f)): serve never moves it, so install must not wait for a move.
+func TestServiceInstallLegacyRootKeptForVM(t *testing.T) {
+	f := newUnitFixture(t)
+	f.deps.Plat.GOOS = "darwin"
+	f.cfg.DataDir = filepath.Join(f.home, ".local", "share", "agent-box")
+	if err := os.MkdirAll(filepath.Join(f.cfg.DataDir, "vm"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, out := f.run(t, "install")
+	if strings.Contains(out, "culibox serve once") {
+		t.Fatalf("refused for the legacy root although the box VM keeps it: %s", out)
+	}
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	b, err := os.ReadFile(f.deps.Plat.UnitPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(f.cfg.DataDir, "service.log"); !strings.Contains(string(b), want) {
+		t.Errorf("plist lacks the log in the kept root %q:\n%s", want, b)
+	}
+}
+
+// A root named by CULIBOX_HOME (or AGENT_BOX_HOME) is never moved, even at the
+// old path: install must not wait for a move there either.
+func TestServiceInstallLegacyRootFromEnv(t *testing.T) {
+	f := newUnitFixture(t)
+	f.cfg.DataDir = filepath.Join(f.home, ".local", "share", "agent-box")
+	var out strings.Builder
+	code := runService(cliArgs{Cmd: "service", Sub: "install"}, f.cfg, f.home, f.cfg.DataDir, f.deps, &out)
+	if code != 0 || strings.Contains(out.String(), "culibox serve once") {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+// Without a box VM in it, the old root still moves at the next serve start, on
+// a Mac too: install keeps refusing until it has.
+func TestServiceInstallLegacyRootNoVMRefused(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		f := newUnitFixture(t)
+		f.deps.Plat.GOOS = goos
+		f.cfg.DataDir = filepath.Join(f.home, ".local", "share", "agent-box")
+		if goos == "linux" { // a vm folder means nothing on Linux
+			if err := os.MkdirAll(filepath.Join(f.cfg.DataDir, "vm"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if code, out := f.run(t, "install"); code != 1 || !strings.Contains(out, "culibox serve once") {
+			t.Errorf("%s: exit %d, output %q (want the legacy-root refusal)", goos, code, out)
 		}
 	}
 }
