@@ -98,7 +98,63 @@ func TestWorkspacesChildLabels(t *testing.T) {
 		t.Errorf("children = %v, want %v", got, want)
 	}
 	if rows[0].Children[0].Sessions != 3 {
-		t.Errorf("worktree sessions = %d, want 3", rows[0].Children[2].Sessions)
+		t.Errorf("worktree sessions = %d, want 3", rows[0].Children[0].Sessions)
+	}
+}
+
+// One host child however the host sessions were reached (live or legacy folder),
+// and one child per box profile whether it cloned or worked in place; the box
+// child's path is the clone dir.
+func TestWorkspacesOneChildPerRuntimeProfile(t *testing.T) {
+	s := openTemp(t)
+	putSession(t, s, "H1", "p", "m", 1, &DimRowFixture{Runtime: "host", Workspace: "/r", Via: "host"})
+	putSession(t, s, "H2", "p", "m", 2, &DimRowFixture{Runtime: "host", Workspace: "/r", Via: "legacy"})
+	putSession(t, s, "C", "p", "m", 4, &DimRowFixture{Runtime: "box", Workspace: "/r", Profile: "prd", Via: "clone", ViaPath: "/boxes/prd/r"})
+	putSession(t, s, "I", "p", "m", 8, &DimRowFixture{Runtime: "box", Workspace: "/r", Profile: "prd", Via: "inplace"})
+	rows, err := s.Workspaces("2026-08-01", "2026-08-31", Where{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0].Children) != 2 {
+		t.Fatalf("want one row with 2 children: %+v", rows)
+	}
+	box, host := rows[0].Children[0], rows[0].Children[1]
+	if box.Label != "box · prd" || box.Path != "/boxes/prd/r" || box.Sessions != 2 || !approx(box.Cost, 12) {
+		t.Errorf("box child = %+v", box)
+	}
+	if host.Label != "host" || host.Path != "/r" || host.Sessions != 2 || !approx(host.Cost, 3) {
+		t.Errorf("host child = %+v", host)
+	}
+	// A box child with no clone row at all (in place only) points at the workspace.
+	s2 := openTemp(t)
+	putSession(t, s2, "I", "p", "m", 8, &DimRowFixture{Runtime: "box", Workspace: "/r", Profile: "prd", Via: "inplace"})
+	rows, _ = s2.Workspaces("2026-08-01", "2026-08-31", Where{})
+	if c := rows[0].Children; len(c) != 1 || c[0].Path != "/r" || c[0].Via != "inplace" {
+		t.Errorf("in-place child = %+v", c)
+	}
+}
+
+// Every worktree session of a workspace is one child, whatever its runtime.
+func TestWorkspacesOneWorktreesChild(t *testing.T) {
+	s := openTemp(t)
+	putSession(t, s, "HW", "p", "m", 1, &DimRowFixture{Runtime: "host", Workspace: "/r", Via: "worktree", ViaPath: "/r/.claude/worktrees/a"})
+	putSession(t, s, "BW", "p", "m", 3, &DimRowFixture{Runtime: "box", Workspace: "/r", Profile: "prd", Via: "worktree", ViaPath: "/r/.claude/worktrees/b"})
+	rows, err := s.Workspaces("2026-08-01", "2026-08-31", Where{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rows[0]
+	if len(r.Children) != 1 {
+		t.Fatalf("children = %+v, want one worktrees child", r.Children)
+	}
+	c := r.Children[0]
+	if c.Label != "worktrees (2)" || c.Via != "worktree" || c.Path != "/r/.claude/worktrees/*" ||
+		c.Sessions != 2 || !approx(c.Cost, 4) || c.Runtime != "box" || c.Profile != "prd" {
+		t.Errorf("child = %+v", c)
+	}
+	// Row-level host and box cost still follow each session's own runtime.
+	if !approx(r.HostCost, 1) || !approx(r.BoxCost, 3) {
+		t.Errorf("host %v box %v, want 1 and 3", r.HostCost, r.BoxCost)
 	}
 }
 

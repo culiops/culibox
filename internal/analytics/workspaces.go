@@ -70,16 +70,32 @@ func workspaceOf(project, workspace string, unmatched bool) (string, bool) {
 	return workspace, unmatched
 }
 
+// sessAcc is one session inside a child: its cost and the dim fields that
+// choose the child's own runtime, profile and via (those of its costliest one).
+type sessAcc struct {
+	cost                  float64
+	runtime, profile, via string
+}
+
+// childKey is what makes a child: all worktree sessions of a workspace are one
+// child, and every other session is filed by (runtime, profile).
+type childKey struct {
+	worktree         bool
+	runtime, profile string
+}
+
 type childAcc struct {
-	c        WorkspaceChild
-	sess     map[string]float64
-	viaPaths map[string]float64 // via_path -> cost
+	c    WorkspaceChild
+	sess map[string]*sessAcc
+	// paths: for the worktrees child every via_path seen (the count is its N);
+	// for any other child the via_path of each clone row, with its cost.
+	paths map[string]float64
 }
 
 type wsAcc struct {
 	row      WorkspaceRow
 	sess     map[string]float64
-	children map[[3]string]*childAcc
+	children map[childKey]*childAcc
 }
 
 // Workspaces folds the window's rollup rows into one row per workspace, each
@@ -122,7 +138,7 @@ GROUP BY r.session_id, r.project, r.model, d.runtime, d.profile, d.via, d.via_pa
 				row: WorkspaceRow{Workspace: ws, Name: name, Unmatched: um,
 					ByModel: map[string]float64{}, SessionCosts: []float64{}, Children: []WorkspaceChild{}},
 				sess:     map[string]float64{},
-				children: map[[3]string]*childAcc{},
+				children: map[childKey]*childAcc{},
 			}
 			byWS[ws] = a
 		}
@@ -140,24 +156,33 @@ GROUP BY r.session_id, r.project, r.model, d.runtime, d.profile, d.via, d.via_pa
 			a.row.BoxCost += cost
 		}
 
-		// A child is (runtime, profile, via): all worktree sessions of a runtime
-		// and profile are one child, and the other sessions split by how they
-		// were reached (clone, in place, host, ...).
-		ck := [3]string{runtime, profile, via}
+		// A child is (runtime, profile), except that every worktree session of
+		// the workspace is one child whatever its runtime and profile.
+		ck := childKey{runtime: runtime, profile: profile}
+		if via == "worktree" {
+			ck = childKey{worktree: true}
+		}
 		c := a.children[ck]
 		if c == nil {
 			c = &childAcc{
-				c:        WorkspaceChild{Runtime: runtime, Profile: profile, Via: via, SessionCosts: []float64{}},
-				sess:     map[string]float64{},
-				viaPaths: map[string]float64{},
+				c:     WorkspaceChild{SessionCosts: []float64{}},
+				sess:  map[string]*sessAcc{},
+				paths: map[string]float64{},
 			}
 			a.children[ck] = c
 		}
 		c.c.Cost += cost
 		c.c.CacheRead += cr
 		c.c.CacheDenom += denom
-		c.sess[sk] += cost
-		c.viaPaths[viaPath] += cost
+		si := c.sess[sk]
+		if si == nil {
+			si = &sessAcc{runtime: runtime, profile: profile, via: via}
+			c.sess[sk] = si
+		}
+		si.cost += cost
+		if ck.worktree || via == "clone" {
+			c.paths[viaPath] += cost
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -170,8 +195,8 @@ GROUP BY r.session_id, r.project, r.model, d.runtime, d.profile, d.via, d.via_pa
 			a.row.SessionCosts = append(a.row.SessionCosts, v)
 		}
 		sort.Float64s(a.row.SessionCosts)
-		for _, c := range a.children {
-			finishChild(c, a.row.Workspace)
+		for k, c := range a.children {
+			finishChild(c, a.row.Workspace, k.worktree)
 			a.row.Children = append(a.row.Children, c.c)
 		}
 		sort.Slice(a.row.Children, func(i, j int) bool {
@@ -192,20 +217,29 @@ GROUP BY r.session_id, r.project, r.model, d.runtime, d.profile, d.via, d.via_pa
 	return out, nil
 }
 
-// finishChild sets a child's label, path, session count and session costs once
-// all its rows are in. The path of a clone child is the clone dir of its
-// costliest session; every other child (host, in-place box, unknown) is the
-// workspace, and worktrees are the folder they live under.
-func finishChild(c *childAcc, workspace string) {
+// finishChild sets a child's runtime, profile, via, label, path, session count
+// and session costs once all its rows are in. Runtime, profile and via are those
+// of its costliest session (all one value for a child of a single kind). The path
+// of a box child is the clone dir of its costliest clone row, or the workspace
+// when it has none; host and unknown children are the workspace, and worktrees
+// the folder they live under.
+func finishChild(c *childAcc, workspace string, worktree bool) {
 	c.c.Sessions = int64(len(c.sess))
-	for _, v := range c.sess {
-		c.c.SessionCosts = append(c.c.SessionCosts, v)
+	bestKey := ""
+	var best *sessAcc
+	for k, v := range c.sess {
+		c.c.SessionCosts = append(c.c.SessionCosts, v.cost)
+		if best == nil || v.cost > best.cost || (v.cost == best.cost && k < bestKey) {
+			bestKey, best = k, v
+		}
 	}
 	sort.Float64s(c.c.SessionCosts)
+	c.c.Runtime, c.c.Profile, c.c.Via = best.runtime, best.profile, best.via
 	c.c.Path = workspace
 	switch {
-	case c.c.Via == "worktree":
-		c.c.Label = "worktrees (" + strconv.Itoa(len(c.viaPaths)) + ")"
+	case worktree:
+		c.c.Via = "worktree"
+		c.c.Label = "worktrees (" + strconv.Itoa(len(c.paths)) + ")"
 		c.c.Path = workspace + "/.claude/worktrees/*"
 	case c.c.Runtime == "host":
 		c.c.Label = "host"
@@ -215,16 +249,14 @@ func finishChild(c *childAcc, workspace string) {
 			p = "unnamed"
 		}
 		c.c.Label = "box · " + p
-		if c.c.Via == "clone" {
-			best, bestCost := "", -1.0
-			for p, v := range c.viaPaths {
-				if p != "" && (v > bestCost || (v == bestCost && p < best)) {
-					best, bestCost = p, v
-				}
+		bestPath, bestCost := "", -1.0
+		for p, v := range c.paths {
+			if p != "" && (v > bestCost || (v == bestCost && p < bestPath)) {
+				bestPath, bestCost = p, v
 			}
-			if best != "" {
-				c.c.Path = best
-			}
+		}
+		if bestPath != "" {
+			c.c.Path = bestPath
 		}
 	default:
 		c.c.Label = "unknown"
