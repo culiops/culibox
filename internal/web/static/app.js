@@ -2715,7 +2715,7 @@ function renderSession(s, opts) {
   }
 
   // A nested shell is revealed beside its parent (docked), not opened as a pane.
-  nm.onclick = () => (nested ? revealShell(s.id) : openTerminal(s.id, s.name));
+  nm.onclick = () => sessionRowAction(s, nested);
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
 
   if (compact) {
@@ -7848,6 +7848,12 @@ function openTabSwitcher(anchor, cell) {
   menu.replaceChildren(...rows);
   sessionMenuSid = null; // not about one session: the list poll must not close it
   placeSessionMenu(menu, anchor);
+}
+
+// sessionRowAction: what clicking a session's sidebar row does. A nested shell is revealed beside its parent (docked); any other
+// session opens as a pane. Shared with the Analytics page's session rows, so both do the same thing.
+function sessionRowAction(s, nested) {
+  return nested ? revealShell(s.id) : openTerminal(s.id, s.name);
 }
 
 // sessionRowFor(id): the live row for a session id, or null if none is on

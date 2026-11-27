@@ -667,9 +667,15 @@ function anSessionMedian(rows) {
   return median(topSessionsByCost(rows, Infinity).map((x) => x.cost));
 }
 
+// anLoadSeq numbers the loads. Several can be in flight (a closed select fires change on each arrow key), and they may answer out of
+// order: only the newest load may write AN.data or draw, so the page never shows the figures of a different Where, range or
+// Compare than the controls say.
+let anLoadSeq = 0;
+
 async function anLoad() {
   const body = document.getElementById("analytics-body");
   if (!body) return;
+  const seq = ++anLoadSeq;
   body.replaceChildren(anEmpty("Loading…"));
   const win = `from=${AN.from}&to=${AN.to}`;
   const q = `${win}&where=${encodeURIComponent(AN.where)}`; // one code path: an empty where is "All"
@@ -684,9 +690,10 @@ async function anLoad() {
       api(`/api/analytics/where?${win}`),
     ]);
   } catch (_) {
-    body.replaceChildren(anEmpty("Could not load analytics."));
+    if (seq === anLoadSeq) body.replaceChildren(anEmpty("Could not load analytics."));
     return;
   }
+  if (seq !== anLoadSeq) return; // a newer load has been asked for: this answer is for a filter that is no longer chosen
   const byDayModel = (summary && summary.byDayModel) || [];
   const sessRows = (sessions && sessions.sessions) || [];
   AN.whereOpts = (where && where.options) || [];
@@ -708,12 +715,17 @@ async function anLoad() {
   AN.data.cache = anCacheOfModels(AN.data.byModel);
   AN.data.models = AN.data.costByDay.models;
   AN.data.pricedModels = pricedModelIds(AN.data.byModel); // for legends: drop $0 models
-  if (AN.compare) await anLoadCompare();
+  if (AN.compare) {
+    const cmp = await anLoadCompare();
+    if (seq !== anLoadSeq) return;
+    AN.data.cmp = cmp;
+  }
   anRender();
 }
 
 // anLoadCompare: the window before this one (equal length), only what the Overview's four tiles need: its API value, sessions,
-// median per session and cache hit, kept as AN.data.cmp = {days, prev} for anOverviewKpis.
+// median per session and cache hit, returned as {days, prev} for anLoad to keep as AN.data.cmp (anOverviewKpis); null when the
+// fetch fails.
 async function anLoadCompare() {
   const pw = prevWindow(AN.from, AN.to);
   const q = `from=${pw.from}&to=${pw.to}&where=${encodeURIComponent(AN.where)}`;
@@ -725,10 +737,10 @@ async function anLoadCompare() {
       api(`/api/analytics/session-costs?${q}`),
     ]);
   } catch (_) {
-    return; // comparison is best-effort; leave cmp null
+    return null; // comparison is best-effort; leave cmp null
   }
   const sessRows = (psess && psess.sessions) || [];
-  AN.data.cmp = {
+  return {
     days: daysBetween(AN.from, AN.to),
     prev: {
       cost: foldCostByDay((ps && ps.byDayModel) || []).totals.cost,
@@ -1227,12 +1239,14 @@ function anLiveRow(tr, liveId) {
   };
 }
 
-// anOpenLive: the sidebar row's own action: openTerminal(id, name) (a page that holds the panes closes first). The name comes from the
-// live list, which is also what says the session is still there: a session the list no longer holds opens nothing.
+// anOpenLive: the sidebar row's own action (sessionRowAction), on the same terms as the row: the page is the desktop's, so the row is
+// the compact one and a companion shell is nested (revealed, not opened), and a session being ended is not clickable. The live list
+// is also what says the session is still there: a session it no longer holds opens nothing.
 function anOpenLive(id) {
-  if (typeof openTerminal !== "function" || typeof lastSessions === "undefined") return;
+  if (typeof sessionRowAction !== "function" || typeof lastSessions === "undefined") return;
   const live = (lastSessions || []).find((x) => x && x.id === id);
-  if (live) openTerminal(live.id, live.name);
+  if (!live || killing.has(live.id)) return;
+  sessionRowAction(live, isNestedShell(live, lastSessions));
 }
 
 // anToolsPage: as the phone's, until the four cards are drawn.

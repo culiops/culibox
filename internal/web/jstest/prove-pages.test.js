@@ -2031,13 +2031,23 @@ test("Sessions on the page follow §3.4", () => {
   assert.ok(!/Fleet at a glance|Session shape|Session cost|band/i.test(root.textContent));
 });
 
+// sidebarGlobals: the globals a session row's action reaches in the page: the real isNestedShell (shellnest.js), `killing`, and
+// sessionRowAction / openTerminal / revealShell recording what they are asked, as app.js and tabs.js would be.
+function sidebarGlobals(env, opened, revealed) {
+  new vm.Script(read("shellnest.js"), { filename: "shellnest.js" }).runInContext(env.ctx);
+  env.ctx.killing = new Set();
+  env.ctx.openTerminal = (id, name) => opened.push([id, name]);
+  env.ctx.revealShell = (id) => revealed.push(id);
+  env.ctx.sessionRowAction = (s, nested) => (nested ? env.ctx.revealShell(s.id) : env.ctx.openTerminal(s.id, s.name));
+}
+
 test("Sessions on the page: a row culibox still holds opens that session like its sidebar row; the others are plain rows", () => {
   const env = analyticsEnv();
   env.page(true);
   loadWindow(env);
   const opened = [];
   env.ctx.lastSessions = [{ id: "live-1", name: "culipulse" }, { id: "live-other", name: "x" }];
-  env.ctx.openTerminal = (id, name) => opened.push([id, name]);
+  sidebarGlobals(env, opened, []);
   const { rows } = tableOf(view(env, "anSessions").elements[1].elements[0]);
   // 3d6b98e8 and 9d3dc2af carry a liveId in the fixture (one of them has since left the live list).
   const live = rows.filter((r) => r[0].parent.cls.includes("an-live"));
@@ -2066,6 +2076,122 @@ test("Sessions on the page: a row culibox still holds opens that session like it
   // A session the live list no longer holds opens nothing.
   gone.onclick();
   assert.strictEqual(opened.length, 3);
+});
+
+test("a session row follows the sidebar row's branches: a nested shell is revealed, a session being ended is not clickable", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  const opened = [], revealed = [];
+  sidebarGlobals(env, opened, revealed);
+  // live-1 is a session, live-gone a companion shell listed under it (parent_id), as the sidebar nests it.
+  env.ctx.lastSessions = [{ id: "live-1", name: "culipulse" }, { id: "live-gone", name: "sh", parent_id: "live-1", kind: "shell" }];
+  const { rows } = tableOf(view(env, "anSessions").elements[1].elements[0]);
+  const [top, nested] = rows.filter((r) => r[0].parent.cls.includes("an-live")).map((r) => r[0].parent);
+  assert.strictEqual(env.run("isNestedShell(lastSessions[1], lastSessions)"), true, "the fixture really is nested to the sidebar");
+  nested.onclick();
+  assert.deepStrictEqual([opened, revealed], [[], ["live-gone"]], "revealShell, not openTerminal");
+  top.onclick();
+  assert.deepStrictEqual([opened, revealed], [[["live-1", "culipulse"]], ["live-gone"]]);
+  // Ending: the sidebar paints "ending…" with no click handler, so the page's row does nothing either, for either branch.
+  env.ctx.killing.add("live-1");
+  env.ctx.killing.add("live-gone");
+  top.onclick();
+  nested.onclick();
+  top.onkeydown({ key: "Enter", preventDefault() {} });
+  assert.deepStrictEqual([opened.length, revealed.length], [1, 1]);
+  env.ctx.killing.delete("live-1");
+  top.onclick();
+  assert.strictEqual(opened.length, 2, "once it is no longer ending it opens again");
+});
+
+test("app.js: the sidebar row and the Analytics row share one action, a nested shell revealed and any other session opened", () => {
+  const app = stripJsComments(read("app.js"));
+  assert.match(app, /nm\.onclick = \(\) => sessionRowAction\(s, nested\);/);
+  assert.match(fnBody(app, "sessionRowAction"), /nested \? revealShell\(s\.id\) : openTerminal\(s\.id, s\.name\)/);
+  assert.ok(!/nested \? revealShell\(s\.id\) : openTerminal/.test(app.replace(/function sessionRowAction[\s\S]*?\n\}/, "")), "the condition is written once");
+});
+
+test("a late answer from an earlier Where never replaces the newer one's figures or options", async () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const { run, el, ctx } = env;
+  run("anWirePage(); anFitTimeChart = () => {};"); // the fake DOM has no layout to fit the chart to
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07";');
+  const byWhere = { host: [], box: [] }; // the held requests of each load, by the where it asked for
+  const whereCalls = [];                 // the held /where requests, in load order
+  ctx.api = (path) => new Promise((resolve) => {
+    const kind = path.split("?")[0].split("/").pop();
+    if (kind === "where") return whereCalls.push(resolve);
+    byWhere[/where=([^&]*)$/.exec(path)[1]].push({ kind, resolve });
+  });
+  // Answer one whole load: its summary says which where it is by its cost, its /where lists that where.
+  const answer = (load, where, cost) => {
+    for (const r of byWhere[where]) r.resolve(r.kind === "summary" ? { from: "2026-10-09", to: "2026-11-07", byDayModel: [{ day: "2026-10-10", model: "claude-opus-5-5", costUsd: cost }] } : {});
+    whereCalls[load]({ options: [{ key: "", label: "All", costUsd: 1 }, { key: where, label: where, costUsd: 1 }] });
+  };
+  // Two loads in a row, as two arrow-key presses make: host, then box.
+  run('AN.where = "host";');
+  const first = run("anLoad()");
+  run('AN.where = "box";');
+  const second = run("anLoad()");
+  // The newer one answers first, the older one later.
+  answer(1, "box", 222);
+  await second;
+  assert.strictEqual(run("AN.data.costByDay.totals.cost"), 222);
+  answer(0, "host", 111);
+  await first;
+  assert.strictEqual(run("AN.data.costByDay.totals.cost"), 222, "the late host answer did not replace box's data");
+  assert.strictEqual(run("AN.whereOpts[1].key"), "box", "nor the options");
+  assert.ok(el("analytics-body").children.length > 0 && !/Loading/.test(el("analytics-body").textContent), "and the body is box's figures, not Loading… again");
+});
+
+test("a late failure of an earlier load does not paint an error over the newer load's figures", async () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const { run, el, ctx } = env;
+  run("anFitTimeChart = () => {};");
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07";');
+  let failOld;
+  let n = 0;
+  ctx.api = (path) => {
+    if (path.startsWith("/api/analytics/summary") && n++ === 0) return new Promise((_, rej) => { failOld = rej; });
+    const q = /from=([\d-]+)&to=([\d-]+)/.exec(path);
+    return Promise.resolve(path.startsWith("/api/analytics/summary") ? { from: q[1], to: q[2], byDayModel: [{ day: "2026-10-10", model: "claude-opus-5-5", costUsd: 5 }] } : {});
+  };
+  const old = run("anLoad()");
+  await run("anLoad()");
+  failOld(new Error("late"));
+  await old;
+  assert.ok(!/Could not load/.test(el("analytics-body").textContent));
+  assert.strictEqual(run("AN.data.costByDay.totals.cost"), 5);
+});
+
+test("with Compare on, a stale load's previous-window answer does not land on the newer data", async () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const { run, ctx } = env;
+  run("anFitTimeChart = () => {};");
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.compare = true;');
+  const gates = [];
+  ctx.api = (path) => {
+    const q = /from=([\d-]+)&to=([\d-]+)/.exec(path);
+    const cost = /where=host/.test(path) ? 111 : 222;
+    const body = path.startsWith("/api/analytics/summary") ? { from: q[1], to: q[2], byDayModel: [{ day: "2026-10-10", model: "claude-opus-5-5", costUsd: cost }] } : {};
+    // the previous window's summary (2026-09-1x) is held, so the first load is stuck inside anLoadCompare
+    if (path.startsWith("/api/analytics/summary") && q[1] < "2026-10-01" && /where=host/.test(path)) return new Promise((r) => gates.push(() => r(body)));
+    return Promise.resolve(body);
+  };
+  run('AN.where = "host";');
+  const first = run("anLoad()");
+  await settle();
+  run('AN.where = "box";');
+  await run("anLoad()");
+  const boxCmp = run("JSON.stringify(AN.data.cmp)");
+  gates.forEach((g) => g());
+  await first;
+  assert.strictEqual(run("AN.data.costByDay.totals.cost"), 222);
+  assert.strictEqual(run("JSON.stringify(AN.data.cmp)"), boxCmp, "the stale host comparison was dropped");
 });
 
 test("Sessions on the phone: lowercase heads, the Session shape section is gone", () => {
