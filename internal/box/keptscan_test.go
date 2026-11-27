@@ -474,14 +474,19 @@ func TestScreenTimeout(t *testing.T) {
 	dir, root := keptHome(t)
 	keptWrite(t, dir, ".culiops/a", "x")
 	setCap(t, &keptScreenTimeout, time.Duration(0))
-	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" {
-		t.Fatalf("past the deadline: reason = %q, want too many files to check", got.Reason)
+	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" || !got.Timeout {
+		t.Fatalf("past the deadline: %+v, want too many files to check, on the time cap", got)
 	}
 	setCap(t, &keptScreenTimeout, time.Minute)
+	setCap(t, &keptScreenMaxEntries, 0)
+	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" || got.Timeout {
+		t.Fatalf("entry cap: %+v, want too many files to check, not on the time cap", got)
+	}
+	keptScreenMaxEntries = 20000
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := screenKept(ctx, root, ".culiops"); got.Reason != "could not read" {
-		t.Fatalf("cancelled: reason = %q, want could not read", got.Reason)
+	if got := screenKept(ctx, root, ".culiops"); got.Reason != "could not read" || got.Timeout {
+		t.Fatalf("cancelled: %+v, want could not read", got)
 	}
 	// The caller's own deadline is not the screen's cap.
 	past, cancel2 := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

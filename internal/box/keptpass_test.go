@@ -64,7 +64,7 @@ func keptPassSetup(t *testing.T) (*Manager, *fakeClient, string, *keptAuditLog) 
 	audit := &keptAuditLog{}
 	m.opts.Audit = audit.record
 	home := keptPassBox(t, m, keptTestBox)
-	keptSeedState(t, m, KeptState{Profile: "p"})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w"})
 	return m, f, home, audit
 }
 
@@ -303,7 +303,7 @@ func TestPassNoRecordNoop(t *testing.T) {
 func TestPassRescreenHolds(t *testing.T) {
 	m, _, _, audit := keptPassSetup(t)
 	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	keptSeedState(t, m, KeptState{Profile: "p", Kept: []KeptEntry{{Path: ".culiops", KeptAt: at, Bytes: 1, Files: 1, Status: keptStatusKept}}})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".culiops", KeptAt: at, Bytes: 1, Files: 1, Status: keptStatusKept}}})
 	shome := keptStoreHomeDir(m)
 	keptWrite(t, shome, ".culiops/notes", "n")
 	keptWrite(t, shome, ".culiops/id_rsa", "k")
@@ -338,7 +338,7 @@ func TestPassRescreenHolds(t *testing.T) {
 // A kept folder that is gone from the store (removed by hand) is dropped.
 func TestPassDropsMissingStoreFolder(t *testing.T) {
 	m, _, _, _ := keptPassSetup(t)
-	keptSeedState(t, m, KeptState{Profile: "p", Kept: []KeptEntry{{Path: ".gone", Status: keptStatusKept}}})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".gone", Status: keptStatusKept}}})
 	mustPass(t, m, keptTestBox)
 	if st := keptLoad(t, m); len(st.Kept) != 0 {
 		t.Fatalf("kept = %+v, want the missing folder dropped", st.Kept)
@@ -370,7 +370,7 @@ func TestPassRefusalRowsCapped(t *testing.T) {
 	for i := range 30 {
 		rows = append(rows, KeptRefusalRow{Path: ".o" + strconv.Itoa(i), Reason: keptReasonLink, Box: keptTestBox, SeenAt: old.Add(time.Duration(i) * time.Second)})
 	}
-	keptSeedState(t, m, KeptState{Profile: "p", NotKept: rows})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", NotKept: rows})
 	target := t.TempDir()
 	for i := range 30 {
 		keptSymlink(t, target, home, ".l"+strconv.Itoa(i))
@@ -396,7 +396,7 @@ func TestPassRefusalRowsCapped(t *testing.T) {
 // Ruling R2: a forgotten folder is neither screened nor kept, silently.
 func TestPassSkipsForgotten(t *testing.T) {
 	m, _, home, _ := keptPassSetup(t)
-	keptSeedState(t, m, KeptState{Profile: "p", Forgotten: []string{".culiops", ".gone"}})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Forgotten: []string{".culiops", ".gone"}})
 	keptWrite(t, home, ".culiops/x", "x")
 	keptSymlink(t, t.TempDir(), home, ".gone")                  // refused as a link, were it not forgotten
 	keptWrite(t, keptStoreHomeDir(m), ".culiops/leftover", "l") // a forget that could not remove it
@@ -416,7 +416,7 @@ func TestPassSkipsForgotten(t *testing.T) {
 func TestPassTooManyKeptFolders(t *testing.T) {
 	m, _, home, _ := keptPassSetup(t)
 	setCap(t, &keptMaxPaths, 2)
-	keptSeedState(t, m, KeptState{Profile: "p", Kept: []KeptEntry{{Path: ".a", Status: keptStatusKept}}})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".a", Status: keptStatusKept}}})
 	keptWrite(t, keptStoreHomeDir(m), ".a/old", "o")
 	keptWrite(t, home, ".a/new", "n") // merges: needs no slot
 	keptWrite(t, home, ".b/x", "b")   // the last slot
@@ -531,7 +531,7 @@ func TestPassNoDuplicateEntryForSameFolder(t *testing.T) {
 	}
 	shome := keptStoreHomeDir(m)
 	keptWrite(t, shome, ".culiops/old", "o")
-	keptSeedState(t, m, KeptState{Profile: "p", Kept: []KeptEntry{{Path: ".culiops", Status: keptStatusKept}}})
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".culiops", Status: keptStatusKept}}})
 	keptWrite(t, home, ".Culiops/new", "n")
 	mustPass(t, m, keptTestBox)
 	st := keptLoad(t, m)
@@ -653,4 +653,230 @@ func TestStoppedRunsPass(t *testing.T) {
 		t.Fatal("the stop did not keep .culiops")
 	}
 	keptGone(t, home, ".culiops")
+}
+
+// --- fix round 1 ---
+
+// keptCountOpens counts the screen's opens of rel, from now on.
+func keptCountOpens(t *testing.T, rel string) func() int {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	keptHook(t, &keptOpenHook, func(p string) {
+		if p == rel {
+			mu.Lock()
+			n++
+			mu.Unlock()
+		}
+	})
+	return func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// One boot run re-screens a store's kept folders once, whatever the number
+// of its homes: N homes must not cost N walks of the store.
+func TestKeepStoppedHomesRescreensStoreOnce(t *testing.T) {
+	m, _, _, _ := keptPassSetup(t)
+	keptPassBox(t, m, "ab-box-bbbbbbbbbbbb")
+	keptPassBox(t, m, "ab-box-cccccccccccc")
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".kept1", Status: keptStatusKept}}})
+	keptWrite(t, keptStoreHomeDir(m), ".kept1/f", "f")
+	opens := keptCountOpens(t, ".kept1/f")
+	m.KeepStoppedHomes(context.Background())
+	if n := opens(); n != 1 {
+		t.Fatalf("the store's kept folder was screened %d times over 3 homes, want 1", n)
+	}
+	// A folder a later home merges into it is screened again: it changed.
+	keptWrite(t, m.stateDir("ab-box-cccccccccccc"), ".kept1/g", "g")
+	opens = keptCountOpens(t, ".kept1/g")
+	m.KeepStoppedHomes(context.Background())
+	if n := opens(); n != 2 {
+		t.Fatalf(".kept1/g opened %d times, want 2 (the home's screen, then the store's)", n)
+	}
+	if got := keptRead(t, keptStoreHomeDir(m), ".kept1/g"); got != "g" {
+		t.Fatal(".kept1 was not merged")
+	}
+}
+
+// The boot trigger runs in the background: it returns before the pass ends.
+func TestStartKeepStoppedHomesDoesNotBlock(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	release := make(chan struct{})
+	keptHook(t, &keptPassLockHook, func(string) { <-release })
+	done := make(chan struct{})
+	go func() { m.StartKeepStoppedHomes(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("StartKeepStoppedHomes waited for the pass")
+	}
+	close(release)
+	m.WaitKeptPasses()
+	if got := keptRead(t, keptStoreHomeDir(m), ".culiops/x"); got != "x" {
+		t.Fatal("the background pass did not keep .culiops")
+	}
+}
+
+func TestKeptStateAttribution(t *testing.T) {
+	good := KeptState{Profile: "p", Workspace: "/w"}
+	if p, w, a, ok := keptStateAttribution("TEST", keptTestKey, good); !ok || p != "p" || w != "/w" || a != "" {
+		t.Fatalf("good = %q %q %q %v", p, w, a, ok)
+	}
+	// "default" is the default account, as ConversationsKey has it.
+	if _, _, _, ok := keptStateAttribution("TEST", keptTestKey, KeptState{Profile: "p", Workspace: "/w", Account: "default"}); !ok {
+		t.Fatal("the default account spelled out does not attribute")
+	}
+	for _, st := range []KeptState{
+		{Profile: "evil", Workspace: "/w"},
+		{Profile: "p", Workspace: "/other"},
+		{Profile: "p", Workspace: "/w", Account: "work"},
+		{},
+	} {
+		if p, w, a, ok := keptStateAttribution("TEST", keptTestKey, st); ok || p != "" || w != "" || a != "" {
+			t.Fatalf("%+v attributed: %q %q %q %v", st, p, w, a, ok)
+		}
+	}
+	if _, _, _, ok := keptStateAttribution("PROD", keptTestKey, good); ok {
+		t.Fatal("another instance's key attributed")
+	}
+}
+
+// A state.json that names a profile the store's key does not hash to (the
+// macOS VM can write it) is not believed: the audit row says "unknown".
+func TestPassAuditNameUnknownWhenStateLies(t *testing.T) {
+	m, _, home, audit := keptPassSetup(t)
+	keptSeedState(t, m, KeptState{Profile: "someone-else", Workspace: "/w"})
+	keptWrite(t, home, ".culiops/x", "x")
+	mustPass(t, m, keptTestBox)
+	rows := audit.of(keptAuditKept)
+	if len(rows) != 1 || rows[0].name != "unknown" {
+		t.Fatalf("audit = %+v, want one row named unknown", rows)
+	}
+}
+
+// A merge whose every file clashes leaves the state as it was, yet data left
+// the home: it is audited.
+func TestPassAuditsClashOnlyMove(t *testing.T) {
+	m, _, home, audit := keptPassSetup(t)
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{{Path: ".culiops", Bytes: 1, Files: 1, Status: keptStatusKept}}})
+	keptWrite(t, keptStoreHomeDir(m), ".culiops/a", "1")
+	keptWrite(t, home, ".culiops/a", "2")
+	if n := mustPass(t, m, keptTestBox); n != 1 {
+		t.Fatalf("kept %d, want 1", n)
+	}
+	keptGone(t, home, ".culiops")
+	if got := keptRead(t, filepath.Join(KeptStoreDir(m.opts.StateRoot, keptTestKey), keptTestClash), ".culiops/a"); got != "2" {
+		t.Fatalf("clash copy = %q", got)
+	}
+	if rows := audit.of(keptAuditKept); len(rows) != 1 || rows[0].detail != "paths=.culiops box="+keptTestBox {
+		t.Fatalf("audit = %+v, want the clash-only move audited", audit.rows)
+	}
+}
+
+// A record that is there but cannot be read is an error, so reclaim keeps
+// the home rather than taking its folders with it.
+func TestPassRecordUnreadableIsError(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	rec := filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptBoxesDirName, keptTestBox)
+	if err := os.WriteFile(rec, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.keepPass(context.Background(), keptTestBox); err == nil {
+		t.Fatal("no error for an unreadable record")
+	}
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || !done[0].Kept || done[0].KeptWhy == "" {
+		t.Fatalf("done = %+v %v, want the home kept with a reason", done, err)
+	}
+	if got := keptRead(t, home, ".culiops/x"); got != "x" {
+		t.Fatal("the home went")
+	}
+}
+
+// The wait for opMu ends with the pass's context: a pass never waits forever
+// behind a stuck spawn.
+func TestPassLockWaitEndsWithContext(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := m.keepPass(ctx, keptTestBox); err == nil {
+		t.Fatal("no error when opMu could not be had in time")
+	}
+	if got := keptRead(t, home, ".culiops/x"); got != "x" {
+		t.Fatal("the home changed")
+	}
+}
+
+// Moving a top-level folder out does not make a marker-less home look used:
+// its mtime is its age.
+func TestPassKeepsHomeMtime(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	if err := os.Remove(m.markerPath(keptTestBox)); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-40 * 24 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(home, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if n := mustPass(t, m, keptTestBox); n != 1 {
+		t.Fatalf("kept %d, want 1", n)
+	}
+	fi, err := os.Lstat(home)
+	if err != nil || !fi.ModTime().Equal(old) {
+		t.Fatalf("home mtime %v %v, want %v", fi.ModTime(), err, old)
+	}
+}
+
+// Ruling R8: at reclaim, a folder whose screen ran out of time keeps the home
+// for the next reclaim; one that hit the entry cap goes with it, not kept.
+func TestReclaimScreenTimeCapKeepsHome(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptWrite(t, home, ".culiops/y", "y") // the cap is checked between entries
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	setCap(t, &keptScreenTimeout, time.Millisecond)
+	slow := func(p string) {
+		if strings.HasPrefix(p, ".culiops/") {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	keptHook(t, &keptOpenHook, slow)
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || !done[0].Kept || !strings.Contains(done[0].KeptWhy, `".culiops"`) {
+		t.Fatalf("done = %+v %v, want the home kept for .culiops", done, err)
+	}
+	if got := keptRead(t, home, ".culiops/x"); got != "x" {
+		t.Fatal("the home went")
+	}
+	// A stop pass treats the same time cap as not kept, with a row.
+	keptOpenHook = slow
+	if _, err := m.keepPass(context.Background(), keptTestBox); err != nil {
+		t.Fatalf("stop pass: %v", err)
+	}
+	if r, ok := keptRow(keptLoad(t, m), ".culiops"); !ok || r.Reason != keptReasonTooMany {
+		t.Fatalf("row = %+v %v", r, ok)
+	}
+}
+
+func TestReclaimScreenEntryCapDoesNotHoldHome(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	setCap(t, &keptScreenMaxEntries, 2)
+	for i := range 5 {
+		keptWrite(t, home, ".big/f"+strconv.Itoa(i), "z")
+	}
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || done[0].Kept {
+		t.Fatalf("done = %+v %v, want the home reclaimed", done, err)
+	}
+	if _, err := os.Lstat(home); !os.IsNotExist(err) {
+		t.Fatalf("home still there: %v", err)
+	}
 }

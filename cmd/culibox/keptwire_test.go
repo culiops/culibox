@@ -63,13 +63,14 @@ func keptWireHome(t *testing.T, l *boxLayer, box string, age time.Duration) stri
 }
 
 // At boot (and after a VM start) the homes of boxes stopped while the daemon
-// was down are passed: a young home, which reclaim leaves alone, still has its
-// app folders kept.
+// was down are passed, in the background: a young home, which reclaim leaves
+// alone, still has its app folders kept.
 func TestReconcileAndReclaimKeepsStoppedHomes(t *testing.T) {
 	l, _, d := darwinLayer(t, false)
 	d.set(t, "inspect", "false\n") // every box is stopped
 	home := keptWireHome(t, l, "ab-box-aaaaaaaaaaaa", 5*time.Minute)
 	l.reconcileAndReclaim(context.Background())
+	l.boxes.WaitKeptPasses()
 	kept := filepath.Join(l.stateRoot, "boxstate", ".kept", keptWireKey, "home", ".culiops", "x")
 	if b, err := os.ReadFile(kept); err != nil || string(b) != "x" {
 		t.Fatalf("kept copy: %q %v", b, err)

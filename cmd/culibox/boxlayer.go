@@ -638,8 +638,10 @@ func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 		log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
 	}
 	// The homes of boxes stopped while the daemon was down: their app folders
-	// move into their profile's kept store before anything reclaims them.
-	l.boxes.KeepStoppedHomes(ctx)
+	// move into their profile's kept store, in the background, so the boot and
+	// a spawn's VM start never wait on it. Reclaim below runs its own pass on a
+	// home before it removes it.
+	l.boxes.StartKeepStoppedHomes(ctx)
 	l.reclaimBoxState(ctx)
 }
 

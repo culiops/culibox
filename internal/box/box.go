@@ -471,9 +471,13 @@ type Manager struct {
 	// never interleave. Taken before opMu, never while holding it. The map is
 	// guarded by mu (keptStoreLock).
 	keptMu map[string]*sync.Mutex
-	// keptPasses counts the keep passes stopped() started, so a test can wait
-	// for them. Each is bounded by keptPassBudget.
+	// keptPasses counts the keep passes running in the background, started by
+	// stopped() and StartKeepStoppedHomes (WaitKeptPasses). Each is bounded:
+	// keptPassBudget, keptBootBudget.
 	keptPasses sync.WaitGroup
+	// keptBadAttr holds the store keys whose state.json named a profile it
+	// does not belong to, once logged. Guarded by mu.
+	keptBadAttr map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -2526,7 +2530,7 @@ func (m *Manager) stopped(name, ws string) {
 	m.keptPasses.Add(1)
 	go func() {
 		defer m.keptPasses.Done()
-		m.runKeepPass(context.Background(), name)
+		m.runKeepPass(context.Background(), name, keptPassOpts{})
 	}()
 }
 

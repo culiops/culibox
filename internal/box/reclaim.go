@@ -164,7 +164,7 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		// (credentials, a cap, a read error) goes with it as before.
 		why := ""
 		if age >= ttl && !kept {
-			if _, kerr := m.keepPass(ctx, name); kerr != nil {
+			if _, kerr := m.keepPassWith(ctx, name, keptPassOpts{reclaim: true}); kerr != nil {
 				if ctx.Err() != nil {
 					break // cut short: the home stays, unreported
 				}

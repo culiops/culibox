@@ -289,6 +289,10 @@ type screenResult struct {
 	Bytes, Files int64
 	Dev, Ino     uint64
 	Reason       string
+	// Timeout is set when the Reason is the screen's own time cap
+	// (keptScreenTimeout): a slow folder, not a large or a secret one, which a
+	// pass about to remove the home retries rather than lets go (ruling R8).
+	Timeout bool
 }
 
 // errKeptScreenTimeout is the cause of the screen's own deadline: a cap, unlike
@@ -348,6 +352,7 @@ func (w *keptWalk) expired() bool {
 		return false
 	}
 	if errors.Is(context.Cause(w.ctx), errKeptScreenTimeout) {
+		w.res.Timeout = w.res.Reason == ""
 		w.stop(keptReasonTooMany)
 	} else {
 		w.stop(keptReasonUnreadable)

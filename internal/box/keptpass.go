@@ -113,6 +113,21 @@ func (e keptErrs) Error() string {
 
 func (e keptErrs) Unwrap() []error { return e }
 
+// keptFirstBadAttribution reports whether this is the first time the state of
+// store key named someone it does not belong to, so that is logged once.
+func (m *Manager) keptFirstBadAttribution(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.keptBadAttr == nil {
+		m.keptBadAttr = map[string]bool{}
+	}
+	if m.keptBadAttr[key] {
+		return false
+	}
+	m.keptBadAttr[key] = true
+	return true
+}
+
 // keptStoreLock is the lock of the store key: held by a pass from reading its
 // state.json to writing it back. Take it before opMu, never while holding it.
 func (m *Manager) keptStoreLock(key string) *sync.Mutex {
@@ -131,16 +146,43 @@ func (m *Manager) keptStoreLock(key string) *sync.Mutex {
 
 // runKeepPass is keepPass for the stop and boot triggers, which log what it
 // left in the home (reclaim reports it instead).
-func (m *Manager) runKeepPass(ctx context.Context, box string) {
-	if _, err := m.keepPass(ctx, box); err != nil {
+func (m *Manager) runKeepPass(ctx context.Context, box string, o keptPassOpts) {
+	if _, err := m.keepPassWith(ctx, box, o); err != nil {
 		log.Printf("box: %s: a folder to keep stays in its home for now: %v", box, err)
 	}
 }
 
+// keptBootBudget bounds one background KeepStoppedHomes run
+// (StartKeepStoppedHomes). A variable so tests can lower it.
+var keptBootBudget = 10 * time.Minute
+
+// StartKeepStoppedHomes runs KeepStoppedHomes in its own goroutine, bounded by
+// keptBootBudget, and returns at once: the boot and the first spawn after a
+// VM start never wait on it. That is safe: reclaim runs its own pass on a home
+// before it removes it, and every move re-checks under opMu that its box is
+// unused. ctx's values are kept, its cancel and deadline are not (the caller's
+// pass ends long before this one may). WaitKeptPasses waits for it.
+func (m *Manager) StartKeepStoppedHomes(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
+	m.keptPasses.Add(1)
+	go func() {
+		defer m.keptPasses.Done()
+		ctx, cancel := context.WithTimeout(ctx, keptBootBudget)
+		defer cancel()
+		m.KeepStoppedHomes(ctx)
+	}()
+}
+
+// WaitKeptPasses waits for the keep passes running in the background: those
+// stopped() and StartKeepStoppedHomes started. For tests.
+func (m *Manager) WaitKeptPasses() { m.keptPasses.Wait() }
+
 // KeepStoppedHomes runs the keep pass on every box home that has a store
 // record and whose box does not run (keepPass checks both): at boot, after
-// Reconcile, for the homes of boxes stopped while the daemon was down. ctx
-// bounds the whole run; each pass is bounded by keptPassBudget too.
+// Reconcile, for the homes of boxes stopped while the daemon was down. A
+// store's kept folders are re-screened once per run, by the first of its homes
+// to get there, not once per home; what a later home moves in is screened
+// still. ctx bounds the whole run; each pass is bounded by keptPassBudget too.
 func (m *Manager) KeepStoppedHomes(ctx context.Context) {
 	entries, err := os.ReadDir(filepath.Join(m.opts.StateRoot, stateDirName))
 	if err != nil {
@@ -149,14 +191,27 @@ func (m *Manager) KeepStoppedHomes(ctx context.Context) {
 		}
 		return
 	}
+	o := keptPassOpts{screened: map[string]bool{}}
 	for _, e := range entries {
 		if ctx.Err() != nil {
 			return
 		}
 		if e.IsDir() && isBoxName(e.Name()) {
-			m.runKeepPass(ctx, e.Name())
+			m.runKeepPass(ctx, e.Name(), o)
 		}
 	}
+}
+
+// keptPassOpts are what a trigger asks of a pass beyond the default.
+type keptPassOpts struct {
+	// reclaim: the home is removed right after a clean pass. A folder whose
+	// screen stopped on its time cap keeps the home then, for the next
+	// reclaim, instead of going with it as not kept (ruling R8).
+	reclaim bool
+	// screened holds the store keys whose kept folders this run re-screened in
+	// full already (KeepStoppedHomes); the pass then screens only what it
+	// moved in. nil: every pass re-screens.
+	screened map[string]bool
 }
 
 // keepPass keeps the app folders of box's home into its profile's store and
@@ -166,22 +221,31 @@ func (m *Manager) KeepStoppedHomes(ctx context.Context) {
 //
 // keptN is how many home folders it moved into the store. The error lists the
 // keepable folders it could not move (they stay in the home), or says the
-// pass could not tell whether the box runs or could not read the store: a
-// caller about to remove the home must keep it. A folder that is not kept
-// (credentials, a cap, a read error) is never an error: its not-kept row says
-// why, and it goes with the home.
+// pass could not read the box's record, tell whether the box runs, or read
+// the store: a caller about to remove the home must keep it. A folder that is
+// not kept (credentials, a cap, a read error) is never an error: its not-kept
+// row says why, and it goes with the home.
 func (m *Manager) keepPass(ctx context.Context, box string) (keptN int, err error) {
+	return m.keepPassWith(ctx, box, keptPassOpts{})
+}
+
+// keepPassWith is keepPass with a trigger's options.
+func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) (keptN int, err error) {
 	// Most boxes have no record: one lstat (never followed) settles it before
-	// any root is opened.
+	// any root is opened. A record that is there but cannot be read is an
+	// error: the home may hold folders to keep.
 	if !isBoxName(box) {
 		return 0, nil
 	}
 	if _, err := os.Lstat(filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptBoxesDirName, box)); err != nil {
-		return 0, nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("its kept-folder record: %w", err)
 	}
 	rec, ok := readKeptBoxRecord(m.opts.StateRoot, box)
 	if !ok {
-		return 0, nil
+		return 0, errors.New("its kept-folder record could not be read, so nothing was kept")
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, keptPassBudget)
@@ -227,7 +291,7 @@ func (m *Manager) keepPass(ctx context.Context, box string) (keptN int, err erro
 	if err != nil {
 		return 0, err
 	}
-	p := &keptPass{m: m, box: box, home: home, store: store, shome: shome, now: time.Now(), st: keptCopy(before)}
+	p := &keptPass{m: m, box: box, key: rec.Key, opts: o, home: home, store: store, shome: shome, now: time.Now(), st: keptCopy(before)}
 	if err := p.plan(rec.Mounts); err != nil {
 		return 0, err
 	}
@@ -242,6 +306,17 @@ func (m *Manager) keepPass(ctx context.Context, box string) (keptN int, err erro
 		return len(p.moved), p.errs
 	}
 	return len(p.moved), nil
+}
+
+// keptStateAttribution is who a store's state.json says the store belongs to,
+// believed only when it hashes to the store's key: on macOS the VM can write
+// state.json, but the key is the directory name the host chose. ok false: the
+// three are "" and the state names nobody.
+func keptStateAttribution(instance, key string, st KeptState) (profile, workspace, account string, ok bool) {
+	if !ValidConversationsKey(key) || ConversationsKey(instance, st.Workspace, st.Account, st.Profile) != key {
+		return "", "", "", false
+	}
+	return st.Profile, st.Workspace, st.Account, true
 }
 
 // keptOpenHome opens box's home as a root: a real directory in boxstate,
@@ -308,7 +383,8 @@ func keptFolderID(root *os.Root, rel string) ([2]uint64, error) {
 // keptPass is one pass over one home and its store.
 type keptPass struct {
 	m                  *Manager
-	box                string
+	box, key           string // the box and its store's key
+	opts               keptPassOpts
 	home, store, shome *os.Root // the box home, the store, the store's home/
 	now                time.Time
 	st                 KeptState // the state being built, saved by finish
@@ -407,6 +483,10 @@ func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 		case ctx.Err() != nil:
 			p.notChecked(p.todo[i:]) // cut short: its result is no verdict
 			return
+		case r.Timeout && p.opts.reclaim:
+			// Slow, not refused: the home stays for the next reclaim (R8).
+			p.row(c.Rel, r.Reason, p.box)
+			p.fail(c.Rel, errKeptOutOfTime)
 		case r.Reason != "":
 			p.row(c.Rel, r.Reason, p.box)
 		case r.Dev != c.Dev || r.Ino != c.Ino:
@@ -419,19 +499,35 @@ func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 
 // move moves the screened folders into the store under opMu, once the box is
 // known to be still unused. mergeMove moves only the directory screened (the
-// candidate's device and inode, checked by descriptor).
+// candidate's device and inode, checked by descriptor). The wait for opMu ends
+// with ctx. The home's own mtime is put back after: it is the age of a home
+// with no marker, and a move out of it is not a use.
 func (p *keptPass) move(ctx context.Context) {
 	if len(p.ready) == 0 {
 		return
 	}
 	m := p.m
-	m.opMu.Lock()
+	if err := m.lockOp(ctx); err != nil {
+		p.notChecked(p.ready)
+		return
+	}
 	defer m.opMu.Unlock()
 	if _, ok := m.stillUnused(ctx, p.box, 0); !ok {
 		for _, c := range p.ready {
 			p.fail(c.Rel, errKeptBusy)
 		}
 		return
+	}
+	if hfi, err := p.home.Lstat("."); err == nil {
+		defer func() {
+			if len(p.moved) == 0 {
+				return
+			}
+			// A zero time leaves the access time as it is.
+			if err := p.home.Chtimes(".", time.Time{}, hfi.ModTime()); err != nil {
+				log.Printf("box: %s: restoring the age of its home: %v", p.box, err)
+			}
+		}()
 	}
 	until := time.Now().Add(keptPassMoveBudget)
 	clash := keptClashDirName + "/" + p.box
@@ -452,15 +548,22 @@ func (p *keptPass) move(ctx context.Context) {
 // it. Kept folders come first, in a new order each pass (a pass out of time
 // leaves a different few for the next), then the folders new to the state,
 // then the held ones, which no box mounts.
+//
+// In a run that already re-screened this store (opts.screened), only the
+// entries this pass moved something into are screened again, plus the fresh
+// folders. A full re-screen that ends in time marks the store screened.
 func (p *keptPass) screenStore(ctx context.Context) {
 	p.drop = map[int]bool{}
+	again := p.opts.screened[p.key]
 	var kept, held []int
 	inState := map[string]bool{}
 	ids := map[[2]uint64]bool{} // the entries' folders
 	for i, e := range p.st.Kept {
-		if e.Status == keptStatusHeld {
+		switch {
+		case again && !slices.Contains(p.moved, e.Path):
+		case e.Status == keptStatusHeld:
 			held = append(held, i)
-		} else {
+		default:
 			kept = append(kept, i)
 		}
 		inState[e.Path] = true
@@ -502,6 +605,9 @@ func (p *keptPass) screenStore(ctx context.Context) {
 			p.unchecked = len(items) - n
 			return
 		}
+	}
+	if p.opts.screened != nil {
+		p.opts.screened[p.key] = true
 	}
 }
 
@@ -563,8 +669,10 @@ func (p *keptPass) screenFresh(ctx context.Context, rel string, ids map[[2]uint6
 }
 
 // finish saves the state when the pass changed it, then audits and logs what
-// it kept and held. The rows go after the save: a save that fails leaves the
-// moved folders unrecorded, and the next pass records (and audits) them.
+// it kept and held. Folders that left the home are audited whatever the
+// state says (a merge whose every file clashed changes nothing in it). What
+// only the state records (newly recorded or kept again, held) is audited after
+// a save that worked: when it fails, the next pass records and audits it.
 func (p *keptPass) finish(before KeptState) {
 	if p.unchecked > 0 {
 		log.Printf("box: %s: %d folder(s) in the kept store not checked again in time; the next pass does it", p.box, p.unchecked)
@@ -583,15 +691,20 @@ func (p *keptPass) finish(before KeptState) {
 		return r.Box == p.box && slices.Contains(p.moved, r.Path)
 	})
 	p.st.NotKept = append(p.st.NotKept, p.rows...)
-	if reflect.DeepEqual(cleanKeptState(before), cleanKeptState(p.st)) {
-		return
+	saved := false
+	if !reflect.DeepEqual(cleanKeptState(before), cleanKeptState(p.st)) {
+		if err := saveKeptState(p.store, p.st); err != nil {
+			log.Printf("box: %s: the kept store's state was not saved (%v); the next pass records what moved", p.box, err)
+		} else {
+			saved = true
+		}
 	}
-	if err := saveKeptState(p.store, p.st); err != nil {
-		log.Printf("box: %s: the kept store's state was not saved (%v); the next pass records what moved", p.box, err)
-		return
+	recorded := p.kept
+	if !saved {
+		recorded, p.held = nil, nil
 	}
 	var paths []string
-	for _, rel := range slices.Concat(p.moved, p.kept) {
+	for _, rel := range slices.Concat(p.moved, recorded) {
 		if !slices.Contains(paths, rel) {
 			paths = append(paths, rel)
 		}
@@ -612,13 +725,23 @@ func (p *keptPass) finish(before KeptState) {
 	}
 }
 
-// audit writes one row, named after the store's profile. A failure is logged:
-// the move it records has happened either way.
+// audit writes one row, named after the store's profile when its state.json
+// hashes to the store's key, else "unknown" (keptStateAttribution), said once
+// per store in the log. A failure is logged: the move it records has happened
+// either way.
 func (p *keptPass) audit(action, detail string) {
 	if p.m.opts.Audit == nil {
 		return
 	}
-	if err := p.m.opts.Audit(action, p.st.Profile, detail); err != nil {
+	name, _, _, ok := keptStateAttribution(p.m.opts.Instance, p.key, p.st)
+	if !ok {
+		name = "unknown"
+		if p.m.keptFirstBadAttribution(p.key) {
+			log.Printf("box: kept store %s: its state names a profile, folder or account that is not the store's; "+
+				"its audit rows name the profile \"unknown\"", p.key)
+		}
+	}
+	if err := p.m.opts.Audit(action, name, detail); err != nil {
 		log.Printf("box: %s: audit row %s not written: %v", p.box, action, err)
 	}
 }
