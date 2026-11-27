@@ -680,3 +680,84 @@ func TestKeptHiddenHomeCopyKeptAtStop(t *testing.T) {
 		t.Fatalf("the store's copy changed: %q %v", b, err)
 	}
 }
+
+// A box created while a keep pass re-screens the store, right after its moves
+// (the boot pass and the first spawns overlap), mounts what was just moved:
+// the pass records the moved folders before it lets go of opMu (ruling R9).
+func TestCreateRightAfterMovesMountsMoved(t *testing.T) {
+	ctx := context.Background()
+	m, f := newTestManagerWithFake(t)
+	ws := realTemp(t)
+	key := ConversationsKey("TEST", ws, "", "p")
+	_, _, name, err := m.Wrap(ctx, ws, "s1", convKey("p"), []string{"bash"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptWrite(t, m.stateDir(name), ".culiops/notes.md", "hello")
+	var seen KeptState
+	keptHook(t, &keptPassMovedHook, func(box string) {
+		if box != name {
+			return
+		}
+		store, err := os.OpenRoot(KeptStoreDir(m.opts.StateRoot, key))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		seen, err = loadKeptState(store)
+		store.Close()
+		if err != nil {
+			t.Error(err)
+		}
+		if _, _, _, err := m.Wrap(ctx, ws, "s2", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	stopBox(t, m, name)
+	if e, ok := keptEntry(seen, ".culiops"); !ok || e.Status != keptStatusKept || e.FromBox != name {
+		t.Fatalf("state right after the moves = %+v, want .culiops kept from %s", seen, name)
+	}
+	if f.runs() != 2 || !containsPair(f.runArgs[1], "--mount", keptMountArg(m, key, ".culiops")) {
+		t.Fatalf("a box created right after the moves does not mount the moved folder: %q", f.runArgs[len(f.runArgs)-1])
+	}
+	// The re-screen that follows still records it once, with its counts.
+	st := func() KeptState {
+		store, err := os.OpenRoot(KeptStoreDir(m.opts.StateRoot, key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		st, err := loadKeptState(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}()
+	if len(st.Kept) != 1 || st.Kept[0].Status != keptStatusKept || st.Kept[0].Files != 1 || st.Kept[0].Bytes != 5 {
+		t.Fatalf("final state = %+v", st.Kept)
+	}
+}
+
+// A moved folder the store's re-screen refuses goes from kept to held, and is
+// audited as held.
+func TestMovedThenHeldByRescreen(t *testing.T) {
+	m, _, home, audit := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/notes.md", "hello")
+	var seen KeptState
+	keptHook(t, &keptPassMovedHook, func(string) {
+		seen = keptLoad(t, m)
+		// Changed in the store between the move and its re-screen.
+		keptWrite(t, keptStoreHomeDir(m), ".culiops/id_rsa", "x")
+	})
+	mustPass(t, m, keptTestBox)
+	if e, ok := keptEntry(seen, ".culiops"); !ok || e.Status != keptStatusKept {
+		t.Fatalf("state right after the move = %+v", seen.Kept)
+	}
+	e, ok := keptEntry(keptLoad(t, m), ".culiops")
+	if !ok || e.Status != keptStatusHeld || !strings.Contains(e.HeldReason, "id_rsa") {
+		t.Fatalf("after the re-screen = %+v %v, want held", e, ok)
+	}
+	if rows := audit.of(keptAuditHeld); len(rows) != 1 {
+		t.Fatalf("held audit rows = %+v", rows)
+	}
+}

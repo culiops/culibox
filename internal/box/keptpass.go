@@ -14,12 +14,14 @@ package box
 // The screens run outside opMu: under it they would block every spawn on every
 // profile for as long as they take. The moves run under opMu, once stillUnused
 // says the box is still unused, and each moves only the very directory that
-// was screened (mergeMove compares device and inode by descriptor). Then the
-// store side is screened: the folders just moved (so whatever changed in one
-// between its screen and its move is seen), what a pass left in the store
-// unrecorded (a stop between a move and its save), and every kept folder, since
-// the profile's boxes mount them read-write. A hit there holds the folder: it
-// stays on disk and is not mounted until a later screen passes.
+// was screened (mergeMove compares device and inode by descriptor). Before the
+// pass lets go of opMu it records the moved folders as kept (recordMoved), so a
+// box created right after mounts them. Then the store side is screened: the
+// folders just moved (so whatever changed in one between its screen and its
+// move is seen), what a pass left in the store unrecorded (a stop between a
+// move and its save), and every kept folder, since the profile's boxes mount
+// them read-write. A hit there holds the folder: it stays on disk and is not
+// mounted from the next create until a later screen passes.
 
 import (
 	"context"
@@ -51,11 +53,13 @@ var (
 )
 
 // Test hooks. keptPassLockHook, when set, runs between the home's screens and
-// the moves, with no lock but the store's held. keptMergeMove is mergeMove,
-// replaced by a test to fail a move.
+// the moves, with no lock but the store's held. keptPassMovedHook runs right
+// after the moves, once opMu is let go, before the store's re-screen.
+// keptMergeMove is mergeMove, replaced by a test to fail a move.
 var (
-	keptPassLockHook func(box string)
-	keptMergeMove    = mergeMove
+	keptPassLockHook  func(box string)
+	keptPassMovedHook func(box string)
+	keptMergeMove     = mergeMove
 )
 
 // Audit actions of the pass.
@@ -302,6 +306,9 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 		keptPassLockHook(box)
 	}
 	p.move(ctx)
+	if keptPassMovedHook != nil {
+		keptPassMovedHook(box)
+	}
 	p.screenStore(ctx)
 	p.finish(before)
 	if len(p.errs) > 0 {
@@ -406,15 +413,16 @@ type keptPass struct {
 	now                time.Time
 	st                 KeptState // the state being built, saved by finish
 
-	adopt []string         // store folders state.json does not list
-	todo  []keptCandidate  // home folders to screen
-	ready []keptCandidate  // home folders that passed, to move
-	moved []string         // home folders moved into the store
-	rows  []KeptRefusalRow // new not-kept rows
-	errs  keptErrs         // keepable home folders not moved
-	kept  []string         // folders the store now records, or kept again
-	held  []KeptEntry      // entries that became held
-	drop  map[int]bool     // entries whose folder is gone from the store
+	adopt []string            // store folders state.json does not list
+	todo  []keptCandidate     // home folders to screen
+	ready []keptCandidate     // home folders that passed, to move
+	sizes map[string][2]int64 // bytes and files the home's screen counted, by ready folder
+	moved []string            // home folders moved into the store
+	rows  []KeptRefusalRow    // new not-kept rows
+	errs  keptErrs            // keepable home folders not moved
+	kept  []string            // folders the store now records, or kept again
+	held  []KeptEntry         // entries that became held
+	drop  map[int]bool        // entries whose folder is gone from the store
 	// unchecked counts the store folders not screened in time.
 	unchecked int
 }
@@ -522,6 +530,10 @@ func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 			p.fail(c.Rel, errKeptChanged)
 		default:
 			p.ready = append(p.ready, c)
+			if p.sizes == nil {
+				p.sizes = map[string][2]int64{}
+			}
+			p.sizes[c.Rel] = [2]int64{r.Bytes, r.Files}
 		}
 	}
 }
@@ -530,7 +542,8 @@ func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 // known to be still unused. mergeMove moves only the directory screened (the
 // candidate's device and inode, checked by descriptor). The wait for opMu ends
 // with ctx. The home's own mtime is put back after: it is the age of a home
-// with no marker, and a move out of it is not a use.
+// with no marker, and a move out of it is not a use. What moved is recorded
+// before opMu is let go (recordMoved).
 func (p *keptPass) move(ctx context.Context) {
 	if len(p.ready) == 0 {
 		return
@@ -558,6 +571,8 @@ func (p *keptPass) move(ctx context.Context) {
 			}
 		}()
 	}
+	// Last before opMu is let go, whichever way the moves end.
+	defer p.recordMoved()
 	until := time.Now().Add(keptPassMoveBudget)
 	clash := keptClashDirName + "/" + p.box
 	for i, c := range p.ready {
@@ -570,6 +585,50 @@ func (p *keptPass) move(ctx context.Context) {
 			continue
 		}
 		p.moved = append(p.moved, c.Rel)
+	}
+}
+
+// recordMoved records the folders this pass moved into the store that the
+// state does not list yet, as kept entries, and saves the state, while the
+// pass still holds opMu (ruling R9). ensure reads state.json under opMu
+// without the store's lock, so a box created as soon as opMu is let go mounts
+// them, instead of finding them neither in its home nor in the state for as
+// long as the store's re-screen takes. They passed the home's screen; the
+// re-screen that follows can still hold one, from the next create on, as for
+// any kept folder. A moved folder that is an entry's under another spelling (a
+// case-insensitive volume) is not a new entry. A failed save is logged: finish
+// saves again.
+func (p *keptPass) recordMoved() {
+	if len(p.moved) == 0 {
+		return
+	}
+	inState := map[string]bool{}
+	ids := map[[2]uint64]bool{}
+	for _, e := range p.st.Kept {
+		inState[e.Path] = true
+		if id, err := keptFolderID(p.shome, e.Path); err == nil {
+			ids[id] = true
+		}
+	}
+	added := false
+	for _, rel := range p.moved {
+		if inState[rel] {
+			continue // merged into a folder the store had: its entry stays as it is
+		}
+		id, err := keptFolderID(p.shome, rel)
+		if err != nil || ids[id] {
+			continue
+		}
+		ids[id], inState[rel] = true, true
+		sz := p.sizes[rel]
+		p.st.Kept = append(p.st.Kept, KeptEntry{Path: rel, KeptAt: p.now, Bytes: sz[0], Files: sz[1], FromBox: p.box, Status: keptStatusKept})
+		added = true
+	}
+	if !added {
+		return
+	}
+	if err := saveKeptState(p.store, p.st); err != nil {
+		log.Printf("box: %s: the kept store's state was not saved after the moves (%v); it is saved again after the store's check", p.box, err)
 	}
 }
 
@@ -668,8 +727,9 @@ func (p *keptPass) screenEntry(ctx context.Context, i int) bool {
 	return true
 }
 
-// screenFresh screens a store folder state.json does not list yet (moved now,
-// or by a pass that stopped before its save) and records it. One that is an
+// screenFresh screens a store folder state.json does not list yet (left by a
+// pass that stopped before its save; one moved now is an entry already, from
+// recordMoved, unless that could not read it) and records it. One that is an
 // entry's folder under another spelling (a case-insensitive volume) is not a
 // new folder. false: out of time, it stays unrecorded for the next pass.
 func (p *keptPass) screenFresh(ctx context.Context, rel string, ids map[[2]uint64]bool) bool {
