@@ -418,13 +418,13 @@ func TestNewFileBornBackfilled(t *testing.T) {
 // so it is not backfilled a second time on top of that read.
 func TestApplyFromZeroMarksBackfilled(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), 5, 0, 1, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), true, 5, 0, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`UPDATE ingest_state SET backfilled=0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), 9, 9, 2, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), true, 9, 9, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !backfilledOf(t, s, "/t/a.jsonl") {
@@ -434,11 +434,19 @@ func TestApplyFromZeroMarksBackfilled(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE ingest_state SET backfilled=0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), 12, 12, 3, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), false, 12, 12, 3, nil); err != nil {
 		t.Fatal(err)
 	}
 	if backfilledOf(t, s, "/t/a.jsonl") {
 		t.Error("a read from offset 9 marked the row backfilled")
+	}
+	// The read's own start decides, not the offset the row holds: a row carried
+	// here with offset 12 and read from 0 (the pass missed the carry) is marked.
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, newParsed(), true, 12, 12, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !backfilledOf(t, s, "/t/a.jsonl") {
+		t.Error("a read from offset 0 over a row at offset 12 did not mark it backfilled")
 	}
 }
 
@@ -465,7 +473,7 @@ func TestIngestRecordsRuntimeFromRoot(t *testing.T) {
 
 	// A session an older version counted: a row in ingest_state, no dim yet.
 	legacy := filepath.Join(home, ".claude", "projects", "-p", "OLD.jsonl")
-	if err := svc.store.Apply("", "-p", legacy, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+	if err := svc.store.Apply("", "-p", legacy, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := svc.Ingest(); err != nil || st.Errors != 0 || st.Files != 4 {

@@ -71,7 +71,7 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 	}
 	transcript := e.legacy + "/boxstate/b/.claude/projects/p/a.jsonl"
 	p := &analytics.Parsed{Tokens: map[analytics.TokKey]*analytics.Tok{}, Attrs: map[analytics.AttrKey]int64{}}
-	if err := st.Apply("S1", "proj", transcript, analytics.RootInfo{}, p, 10, 10, 1, nil); err != nil {
+	if err := st.Apply("S1", "proj", transcript, analytics.RootInfo{}, p, true, 10, 10, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -606,7 +606,7 @@ func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
 		defer st.Close()
 		tr := e.legacy + "/boxstate/b/.claude/projects/p/a.jsonl"
 		p := &analytics.Parsed{Tokens: map[analytics.TokKey]*analytics.Tok{}, Attrs: map[analytics.AttrKey]int64{}}
-		if err := st.Apply("S1", "proj", tr, analytics.RootInfo{}, p, 10, 10, 1, nil); err != nil {
+		if err := st.Apply("S1", "proj", tr, analytics.RootInfo{}, p, true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 		return tr

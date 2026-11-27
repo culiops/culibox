@@ -113,7 +113,7 @@ func ingestOpened(s *Store, path, project string, info RootInfo, st *IngestStats
 	}
 	if size < offset {
 		log.Printf("analytics: %q shrank (%d < %d); clamping offset, not re-ingesting", path, size, offset)
-		return s.Apply("", project, path, info, newParsed(), size, size, mtime, seen)
+		return s.Apply("", project, path, info, newParsed(), false, size, size, mtime, seen)
 	}
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
@@ -137,7 +137,7 @@ func ingestOpened(s *Store, path, project string, info RootInfo, st *IngestStats
 	if consumed > 0 { // a size bump that was only a partial trailing line isn't a "file ingested"
 		st.Files++
 	}
-	return s.Apply(sessionID, project, path, info, parsed, size, offset+consumed, mtime, seen)
+	return s.Apply(sessionID, project, path, info, parsed, offset == 0, size, offset+consumed, mtime, seen)
 }
 
 // backfillOpened parses the bytes of the already-open file that an earlier

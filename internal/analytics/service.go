@@ -287,10 +287,11 @@ func DefaultRoots(home, dataDir string) []string {
 // from from to to the read offsets stored for from (Store.RewritePathPrefix), so
 // the next pass does not count it again under its new path. The box layer calls
 // it before each move it makes out of a box home into a conversations folder
-// (#330). It does not wait for a running pass: no container writes the file it
-// moves, so a pass usually has nothing new to read from it; one that reads it
-// at that moment can leave lines written since its last pass to be counted
-// again, once (accepted: waiting here would hold up the spawn).
+// (#330). It does not wait for a running pass (waiting would hold up the
+// spawn): the carried offsets also go into that pass's state cache, so when it
+// reaches the new path it reads on from them, not from 0. Accepted: a pass
+// that is loading its cache at the very moment of the carry misses it and
+// counts the moved file's totals again, once; its drivers still count once.
 func (s *Service) CarryOffsets(from, to string) error {
 	_, err := s.store.RewritePathPrefix(from, to)
 	return err

@@ -30,11 +30,11 @@ func delta(day, model string, in, out, cr, cc, prompts int64) *Parsed {
 
 func TestApplyIsAdditive(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 100, 20, 5, 3, 2), 500, 500, 1, nil); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 100, 20, 5, 3, 2), true, 500, 500, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second batch for the same session/day/model adds to the first.
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2, nil); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 50, 10, 1, 0, 1), false, 800, 800, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
@@ -55,7 +55,7 @@ func TestStateRoundTrip(t *testing.T) {
 	if _, _, ok, _, _, _ := s.State("/t/a.jsonl"); ok {
 		t.Fatal("state should be absent before any Apply")
 	}
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, newParsed(), 1234, 1200, 42, nil); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, newParsed(), true, 1234, 1200, 42, nil); err != nil {
 		t.Fatal(err)
 	}
 	size, off, ok, _, _, err := s.State("/t/a.jsonl")
@@ -71,10 +71,10 @@ func TestStateRoundTrip(t *testing.T) {
 // agent-console → agent-box rename produced exactly this).
 func TestProjectDisambiguatesSameSession(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", RootInfo{}, delta("2026-08-05", "m1", 100, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
+	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", RootInfo{}, delta("2026-08-05", "m1", 100, 0, 0, 0, 1), true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
+	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 0, 0, 0, 1), true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
@@ -89,7 +89,7 @@ func TestProjectDisambiguatesSameSession(t *testing.T) {
 func TestTokensPerPrompt(t *testing.T) {
 	s := openTemp(t)
 	// 300 total tokens (100+20+... let's make it clean), 4 prompts → 75/prompt.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 60, 30, 10, 4), true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
@@ -122,7 +122,7 @@ func TestIngestRefusesConcurrent(t *testing.T) {
 func TestRowsCarryCost(t *testing.T) {
 	s := openTemp(t)
 	// 1,000,000 opus input tokens = $5 exactly.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	dm, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
@@ -146,10 +146,10 @@ func TestRowsCarryCost(t *testing.T) {
 func TestByModel(t *testing.T) {
 	s := openTemp(t)
 	// Two sessions, same model, different days → 1 model row, 2 sessions.
-	s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
-	s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
+	s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), true, 1, 1, 1, nil)
+	s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), true, 1, 1, 1, nil)
 	// A different model.
-	s.Apply("S3", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S3", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
@@ -175,8 +175,8 @@ func TestByModel(t *testing.T) {
 // under two project slugs is two sessions (the rename case the PK guards).
 func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
@@ -190,9 +190,9 @@ func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 // project totals and the per-project model mix in one call.
 func TestByProject(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("S1", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	s.Apply("S2", "alpha", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	s.Apply("S3", "beta", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S1", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
+	s.Apply("S2", "alpha", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
+	s.Apply("S3", "beta", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
 	rows, err := s.ByProject("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
@@ -220,10 +220,10 @@ func TestSessionCosts(t *testing.T) {
 	s := openTemp(t)
 	// One session spanning two days and two models → one aggregate, cost summed,
 	// model "mixed", day = the later one.
-	s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
-	s.Apply("S1", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
+	s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), true, 1, 1, 1, nil)
+	s.Apply("S1", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), true, 1, 1, 1, nil)
 	// A cheaper single-model session.
-	s.Apply("S2", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S2", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
@@ -246,8 +246,8 @@ func TestSessionCosts(t *testing.T) {
 // keep them separate, matching the rollup PK.
 func TestSessionCostsProjectDisambiguates(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), true, 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +262,7 @@ func TestToolsAggregate(t *testing.T) {
 	p := newParsed()
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "skill", Name: "brainstorming"}] = 3
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "mcp_server", Name: "playwright"}] = 1
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p, 1, 1, 1, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p, true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	tools, err := s.Tools("2026-08-01", "2026-08-31", 10, Where{})
@@ -365,7 +365,7 @@ func TestOpenMigratesOnceAndBacksUp(t *testing.T) {
 	before := fi.ModTime()
 
 	// New data after the rebuild must survive a second boot.
-	if err := s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-opus-5", 5, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
+	if err := s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-opus-5", 5, 0, 0, 0, 1), true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -681,13 +681,13 @@ func TestRowsCarryStoredCost(t *testing.T) {
 	s := openTemp(t)
 	p := newParsed()
 	p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-5"}] = &Tok{Input: 10, Output: 1, CacheCreation: 7, CacheWrite1h: 4, Prompts: 1, Cost: 1.23}
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p, 1, 1, 1, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p, true, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second batch accumulates on upsert.
 	p2 := newParsed()
 	p2.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-5"}] = &Tok{CacheCreation: 3, CacheWrite1h: 2, Cost: 0.77}
-	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p2, 2, 2, 2, nil); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p2, false, 2, 2, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	const want = 2.0
@@ -739,7 +739,7 @@ func ingestPaths(t *testing.T, s *Store) []string {
 func TestRewritePathPrefix(t *testing.T) {
 	s := openTemp(t)
 	for _, p := range []string{"/r/agent-box/x.jsonl", "/r/agent-box/accounts/w/claude/projects/p/y.jsonl", "/r/agent-box", "/home/u/.claude/projects/p/z.jsonl"} {
-		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -777,10 +777,10 @@ func TestRewritePathPrefix(t *testing.T) {
 // root) wins: the copy does not overwrite it and does not fail.
 func TestRewritePathPrefixKeepsExistingNewRow(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("S1", "proj", "/r/agent-box/x.jsonl", RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+	if err := s.Apply("S1", "proj", "/r/agent-box/x.jsonl", RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("S1", "proj", "/r/culibox/x.jsonl", RootInfo{}, newParsed(), 20, 20, 1, nil); err != nil {
+	if err := s.Apply("S1", "proj", "/r/culibox/x.jsonl", RootInfo{}, newParsed(), true, 20, 20, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	n, err := s.RewritePathPrefix("/r/agent-box", "/r/culibox")
@@ -795,7 +795,7 @@ func TestRewritePathPrefixKeepsExistingNewRow(t *testing.T) {
 func TestRewritePathPrefixKeepsSiblingPrefix(t *testing.T) {
 	s := openTemp(t)
 	for _, p := range []string{"/r/agent-box-prod/x.jsonl", "/r/agent-boxx", "/r/agent-box/y.jsonl"} {
-		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -841,7 +841,7 @@ func TestRewritePathPrefixRangeEdges(t *testing.T) {
 	under := []string{"/r/a", "/r/a/", "/r/a/x", "/r/a/été.jsonl", "/r/a/\xff", "/r/a//x"}
 	beside := []string{"/r/a-prod/x", "/r/a.bak/x", "/r/a0/x", "/r/a0", "/r/", "/r/b/x", "/r/A/x"}
 	for _, p := range append(slices.Clone(under), beside...) {
-		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+		if err := s.Apply("S1", "proj", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -889,7 +889,7 @@ func TestApplyKeepsFirstCwd(t *testing.T) {
 		t.Helper()
 		p := newParsed()
 		p.Cwd, p.Branch = cwd, branch
-		if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{Runtime: "box", Key: "B1"}, p, off, off, 1, nil); err != nil {
+		if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{Runtime: "box", Key: "B1"}, p, off == 10, off, off, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -908,7 +908,7 @@ func TestApplyKeepsFirstCwd(t *testing.T) {
 		t.Helper()
 		p := newParsed()
 		p.Cwd = cwd
-		if err := s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, p, off, off, 1, nil); err != nil {
+		if err := s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, p, off == 1, off, off, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -931,7 +931,7 @@ func TestApplyAddsDriversAndLeavesResolvedDimsAlone(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		p := newParsed()
 		p.Drivers[key] = &DriverVal{Cost: 1.5, Tokens: 10}
-		if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{Runtime: "host"}, p, int64(i), int64(i), 1, nil); err != nil {
+		if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{Runtime: "host"}, p, i == 1, int64(i), int64(i), 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -960,7 +960,7 @@ func TestApplyAddsDriversAndLeavesResolvedDimsAlone(t *testing.T) {
 func TestCarryOffsetsKeepsBackfilled(t *testing.T) {
 	s := openTemp(t)
 	for _, p := range []string{"/r/old/a.jsonl", "/r/old/b.jsonl"} {
-		if err := s.Apply("S1", "p", p, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+		if err := s.Apply("S1", "p", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -990,7 +990,7 @@ func TestSeedLegacyDims(t *testing.T) {
 		data + "/boxstate/.conversations/c9/-p/C1.jsonl",
 		"/elsewhere/-q/U1.jsonl",
 	} {
-		if err := s.Apply("", "p", p, RootInfo{}, newParsed(), 10, 10, 1, nil); err != nil {
+		if err := s.Apply("", "p", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -333,9 +333,11 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 		return 0, err
 	}
 	var n int64
+	carried := make(map[string]fileState, len(from))
 	for _, p := range from {
+		to := newRoot + p[len(oldRoot):]
 		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids,backfilled)
-SELECT ?,size,read_offset,mtime,seen_ids,backfilled FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
+SELECT ?,size,read_offset,mtime,seen_ids,backfilled FROM ingest_state WHERE path=?`, to, p)
 		if err != nil {
 			return 0, fmt.Errorf("analytics: copy %q: %w", p, err)
 		}
@@ -344,10 +346,34 @@ SELECT ?,size,read_offset,mtime,seen_ids,backfilled FROM ingest_state WHERE path
 			return 0, err
 		}
 		n += k
+		var fs fileState
+		var bf int
+		if err := tx.QueryRow(`SELECT size, read_offset, seen_ids, backfilled FROM ingest_state WHERE path=?`, to).
+			Scan(&fs.size, &fs.offset, &fs.seen, &bf); err != nil {
+			return 0, fmt.Errorf("analytics: read copy %q: %w", to, err)
+		}
+		fs.backfilled = bf != 0
+		carried[to] = fs
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	// A pass may be running (adoption does not wait for it, see
+	// Service.CarryOffsets). Its cache was loaded before these rows existed, so
+	// without them it would read each moved transcript from 0 when it reaches
+	// the new path and count it again. A key the cache already has is newer
+	// than this copy (Apply wrote it) and is kept. Accepted: a pass whose
+	// beginPass read the table before this commit but installed its cache after
+	// it misses the copy (the window is the cache load itself).
+	s.stMu.Lock()
+	if s.states != nil {
+		for to, fs := range carried {
+			if _, ok := s.states[to]; !ok {
+				s.states[to] = fs
+			}
+		}
+	}
+	s.stMu.Unlock()
 	return int(n), nil
 }
 
@@ -431,10 +457,10 @@ func (s *Store) endPass() {
 // matching rows (or vice versa). session_id and project tag every delta row.
 //
 // It also records the session's dims (folder, branch, where it ran: info comes
-// from the ingest root) and adds the cost-driver deltas. A read that started at
-// offset 0 parsed the whole file, drivers included, so the row is marked
-// backfilled; any other row keeps the mark it has.
-func (s *Store) Apply(sessionID, project, path string, info RootInfo, p *Parsed, size, offset, mtime int64, seen []string) error {
+// from the ingest root) and adds the cost-driver deltas. fromZero says this read
+// started at offset 0: it parsed the whole file, drivers included, so the row is
+// marked backfilled; any other row keeps the mark it has.
+func (s *Store) Apply(sessionID, project, path string, info RootInfo, p *Parsed, fromZero bool, size, offset, mtime int64, seen []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -474,14 +500,15 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 		return err
 	}
 
-	// Where the read started decides the mark: from 0 (or a new row) the parse
-	// saw every byte, so drivers are complete; else keep what the row has.
-	backfilled := true
-	var oldOff int64
+	// Where this read started decides the mark: from 0 the parse saw every
+	// byte, so drivers are complete; else keep what the row has. The row's
+	// stored offset cannot tell: a row carried to this path while the pass ran
+	// holds the old path's offset although this read began at 0.
+	backfilled := fromZero
 	var oldBF int
-	switch err := tx.QueryRow(`SELECT read_offset, backfilled FROM ingest_state WHERE path=?`, path).Scan(&oldOff, &oldBF); err {
+	switch err := tx.QueryRow(`SELECT backfilled FROM ingest_state WHERE path=?`, path).Scan(&oldBF); err {
 	case nil:
-		backfilled = oldOff == 0 || oldBF != 0
+		backfilled = fromZero || oldBF != 0
 	case sql.ErrNoRows:
 	default:
 		return fmt.Errorf("state read: %w", err)
