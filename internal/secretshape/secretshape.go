@@ -7,6 +7,7 @@ package secretshape
 import (
 	"bytes"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -49,10 +50,6 @@ var (
 
 	// assignTailAt is assignTail at the very start of its input.
 	assignTailAt = regexp.MustCompile(`^` + assignTail)
-
-	// assignAt is the whole secret-assignment rule at the very start of its
-	// input, with the rule's case folding.
-	assignAt = regexp.MustCompile(`(?i)^(?:` + quoteAll(keyNames) + `)` + assignTail)
 )
 
 // tokenStems are the literal starts of the token alternatives: every token
@@ -78,22 +75,16 @@ var keyLits = newLiterals(keyNames)
 const tokenWindow = 64
 
 // foldOdd are the two runes that case folding (the rule's (?i)) takes for an
-// ASCII letter: U+017F for s and U+212A for k. A key name spelt with one is
-// not in the lower-case copy, so the rule is tried near each of them.
+// ASCII letter: U+017F for s and U+212A for k. hasAssignment spells them s and
+// k in its lower-case copy.
 var foldOdd = [][]byte{[]byte("ſ"), []byte("K")}
 
-// maxNameBytes bounds how far before an odd rune a key name can start: every
-// letter of it as a 3-byte rune.
-var maxNameBytes = func() int {
-	n := 0
-	for _, k := range keyNames {
-		n = max(n, 3*len(k))
-	}
-	return n
-}()
-
-// lowBufs holds the lower-case copies the key-name search reads.
-var lowBufs = sync.Pool{New: func() any { return new([]byte) }}
+// lowBufs and shiftBufs hold the lower-case copies the key-name search reads
+// and their shifts.
+var (
+	lowBufs   = sync.Pool{New: func() any { return new([]byte) }}
+	shiftBufs = sync.Pool{New: func() any { return new([]keyShift) }}
+)
 
 // lowerASCII maps A-Z to a-z and every other byte to itself.
 var lowerASCII = func() (t [256]byte) {
@@ -142,41 +133,67 @@ func tokenChar(c byte) bool {
 	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-'
 }
 
-// hasAssignment reports whether a key name with a value follows in b. A name
-// spelt in ASCII is found in a lower-case copy, at the same offset as in b;
-// one spelt with an odd rune (foldOdd) is tried with the whole rule from every
-// byte up to maxNameBytes before that rune. The start of a match is an ASCII
-// byte or a UTF-8 lead byte, a rune boundary either way; from any other byte
-// the rule fails at once.
+// hasAssignment reports whether a key name with a value follows in b. The
+// names are found in a lower-case copy of b. The rule's (?i) also takes U+017F
+// for s and U+212A for k (foldOdd): the copy spells those s and k, and shifts
+// says how far each offset of the copy lies before the same byte of b from
+// there on. Every other byte is copied as it is: one at or above 0x80 never
+// matches an ASCII name, as no other rune does in the rule. Both odd runes
+// start with a UTF-8 lead byte, which is always a rune boundary. The tail is
+// matched on b itself, right after the name's last rune.
 func hasAssignment(b []byte) bool {
 	lp := lowBufs.Get().(*[]byte)
 	defer lowBufs.Put(lp)
-	if cap(*lp) < len(b) {
-		*lp = make([]byte, len(b))
-	}
-	low := (*lp)[:len(b)]
-	for i, c := range b {
-		low[i] = lowerASCII[c]
-	}
-	if keyLits.each(low, func(name []byte, p int) bool { return assignTailAt.Match(b[p+len(name):]) }) {
-		return true
-	}
-	for _, odd := range foldOdd {
-		for off := 0; ; {
-			i := bytes.Index(b[off:], odd)
-			if i < 0 {
-				break
+	sp := shiftBufs.Get().(*[]keyShift)
+	defer shiftBufs.Put(sp)
+	low, shifts := grow(lp, len(b)), (*sp)[:0]
+	n := 0
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c == 0xc5 || c == 0xe2 { // the lead bytes of U+017F and U+212A
+			if odd := keyOddAt(b[i:]); odd >= 0 {
+				low[n] = "sk"[odd]
+				n++
+				i += len(foldOdd[odd]) - 1
+				shifts = append(shifts, keyShift{at: n, by: i + 1 - n})
+				continue
 			}
-			q := off + i
-			for s := max(0, q-maxNameBytes); s <= q; s++ {
-				if assignAt.Match(b[s:]) {
-					return true
-				}
-			}
-			off = q + 1
+		}
+		low[n] = lowerASCII[c]
+		n++
+	}
+	*sp = shifts
+	low = low[:n]
+	return keyLits.each(low, func(name []byte, p int) bool {
+		q := p + len(name)
+		k := sort.Search(len(shifts), func(x int) bool { return shifts[x].at > q })
+		if k > 0 {
+			q += shifts[k-1].by
+		}
+		return assignTailAt.Match(b[q:])
+	})
+}
+
+// keyOddAt is the index in foldOdd of the rune b starts with, or -1.
+func keyOddAt(b []byte) int {
+	for k, odd := range foldOdd {
+		if bytes.HasPrefix(b, odd) {
+			return k
 		}
 	}
-	return false
+	return -1
+}
+
+// keyShift: from offset at of hasAssignment's lower-case copy on, a byte of
+// the copy is by bytes before the same byte of the input.
+type keyShift struct{ at, by int }
+
+// grow is *bp with length n, reallocated when its capacity is short.
+func grow(bp *[]byte, n int) []byte {
+	if cap(*bp) < n {
+		*bp = make([]byte, n)
+	}
+	return (*bp)[:n]
 }
 
 // literals are fixed strings, found by their rarest byte. bytes.Index scans for
@@ -240,19 +257,13 @@ func (ls literals) each(b []byte, f func(s []byte, p int) bool) bool {
 			q := off + i
 			off = q + 1
 			for _, l := range g.lits {
-				if p := q - l.at; p >= 0 && p+len(l.s) <= len(b) && bytes.Equal(b[p:p+len(l.s)], l.s) && f(l.s, p) {
+				// The first byte first: a run of the scanned byte (kkkk...)
+				// fails there without a call.
+				if p := q - l.at; p >= 0 && p+len(l.s) <= len(b) && b[p] == l.s[0] && bytes.Equal(b[p:p+len(l.s)], l.s) && f(l.s, p) {
 					return true
 				}
 			}
 		}
 	}
 	return false
-}
-
-func quoteAll(ss []string) string {
-	q := make([]string, len(ss))
-	for i, s := range ss {
-		q[i] = regexp.QuoteMeta(s)
-	}
-	return strings.Join(q, "|")
 }

@@ -182,3 +182,35 @@ func TestTokenWindowCoversEveryAlternative(t *testing.T) {
 		}
 	}
 }
+
+// A head made of the runes case folding takes for s and k (or of those and
+// ASCII letters) is tried from each byte at most once, not up to 64 times.
+func TestFindSpeedFoldRunes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("speed test")
+	}
+	fill := func(unit string) []byte {
+		return []byte(strings.Repeat(unit, (64<<10)/len(unit)))
+	}
+	heads := map[string][]byte{"ſ": fill("ſ"), "K": fill("K"), "aſ": fill("aſ"), "pa_K": fill("pa_K")}
+	for name, b := range heads {
+		if want, wok := refFind(b); wok {
+			t.Fatalf("%s: the rules hit (%q): pick another head", name, want)
+		}
+		start := time.Now()
+		for range 25 {
+			if rule, ok := Find(b); ok {
+				t.Fatalf("%s: hit %q", name, rule)
+			}
+		}
+		took := time.Since(start)
+		// 4 ms a head: TestFindSpeed's 2 ms, doubled for heads built to be
+		// the worst case (the rules' regexps took about 25 ms, the first
+		// version of this search 1 s).
+		limit := 100 * time.Millisecond * slowFactor
+		t.Logf("25 heads of 64 KiB of %s: %v (limit %v)", name, took, limit)
+		if took > limit {
+			t.Fatalf("25 heads of 64 KiB of %s took %v, want under %v", name, took, limit)
+		}
+	}
+}
