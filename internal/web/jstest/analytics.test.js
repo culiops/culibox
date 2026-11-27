@@ -1026,3 +1026,20 @@ test("anDriversPage: no covered value shows the empty-state sentence and no tile
   assert.equal(root.querySelector(".an-card"), null);
   assert.ok(!/NaN|0%/.test(root.textContent));
 });
+
+test("anCoverageText: one ulp short of full coverage still says 99%, never 100%", () => {
+  assert.match(anCoverageText(1 - Number.EPSILON), /^Based on 99% of/);
+  assert.match(anCoverageText(0.9999999999999998), /^Based on 99% of/);
+  assert.match(anCoverageText(0.999999999), /^Based on 99% of/);
+});
+
+test("anWorkspaceRowModel: an unmatched workspace's box child is compared with the real path, not the 'unmatched' sentence", () => {
+  const row = anWorkspaceRows({ workspaces: [{
+    workspace: "/gone/acme", name: "acme", unmatched: true, costUsd: 2, sessions: 2, hostCost: 0, boxCost: 2, byModel: {}, cacheRead: 0, cacheDenom: 0, sessionCosts: [1, 1],
+    children: [
+      { runtime: "box", profile: "p", via: "inplace", label: "box · p", path: "/gone/acme", costUsd: 1, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [1] },
+      { runtime: "box", profile: "q", via: "clone", label: "box · q", path: "/clone/acme", costUsd: 1, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [1] },
+    ] }] })[0];
+  assert.equal(row.path, "unmatched · folder no longer known");
+  assert.deepEqual(anWorkspaceRowModel(row).children.map((c) => c.line), ["", "clone · /clone/acme"]);
+});

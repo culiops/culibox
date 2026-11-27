@@ -474,7 +474,7 @@ function anWorkspaceRows(resp) {
     const models = Object.entries(w.byModel || {}).sort((a, b) => b[1] - a[1]);
     const modelTotal = models.reduce((t, e) => t + e[1], 0);
     return {
-      name: w.name, path: w.unmatched ? AN_COPY.workspaces.unmatchedPath : w.workspace, unmatched: !!w.unmatched,
+      name: w.name, workspace: w.workspace, path: w.unmatched ? AN_COPY.workspaces.unmatchedPath : w.workspace, unmatched: !!w.unmatched,
       ...fig(w),
       hostPct, boxPct: split > 0 ? 100 - hostPct : 0, hostCost: host, boxCost: box,
       mix: modelTotal > 0 ? models.map(([model, v]) => ({ model, share: v / modelTotal })) : [],
@@ -546,9 +546,11 @@ function anWorkspaceRowModel(row) {
     median: x.median == null ? "—" : usd(x.median),
     cache: x.cacheHit == null ? "—" : (x.cacheHit * 100).toFixed(1) + "%",
   });
+  // The workspace's real path (an unmatched row's `path` is a display sentence, not a folder).
+  const real = row.workspace != null ? row.workspace : row.path;
   const line = (c, kind) => {
     const p = c.path || "";
-    if (kind === "box") return p && p !== row.path ? W.clone.replace("{dir}", p) : "";
+    if (kind === "box") return p && p !== real ? W.clone.replace("{dir}", p) : "";
     return p;
   };
   const children = (row.children || []).map((c) => {
@@ -589,7 +591,7 @@ function anDriverTiles(resp) {
 // some is missing, and a sliver reads "<1%", never "0%". The tiny epsilon keeps 0.29 (28.999999999999996 as a float) at 29.
 function anCoverageText(coverage) {
   if (!(coverage > 0 && coverage < 1)) return "";
-  const n = Math.floor(coverage * 100 + 1e-9);
+  const n = Math.min(99, Math.floor(coverage * 100 + 1e-9)); // under 1 means some value is uncovered, so never "100"
   return AN_COPY.drivers.coverage.replace("{N}", n < 1 ? "<1" : String(n));
 }
 
