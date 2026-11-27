@@ -428,8 +428,7 @@ func lockWithin(ctx context.Context, mu *sync.Mutex) error {
 
 // KeptForget forgets the kept folder rel of store key, on the word of actor
 // (the person, as the web layer names them: "web", "bearer"): its home/<rel>
-// and every older copy of it (clash/<box>/<rel>, and the numbered <rel>~N)
-// are removed, its entry and not-kept rows go, and rel is added to the
+// and every older copy of it (keptRemoveClashes) are removed, its entry and not-kept rows go, and rel is added to the
 // store's forgotten list, so no keep pass keeps it again. The audit row
 // box_kept_forget names actor and the store's profile
 // (keptStateAttribution), else "unknown".
@@ -614,67 +613,107 @@ func (m *Manager) keptForgetAudit(key string, st KeptState, rel, actor string) {
 	}
 }
 
-// keptRemoveCopies removes home/<rel> and the older copies of rel in every
-// clash/<box> of the store (a box name, reached without a link).
+// keptRemoveCopies removes home/<rel> and every older copy of rel
+// (keptRemoveClashes).
 func keptRemoveCopies(ctx context.Context, store *os.Root, rel string) error {
-	var errs []error
-	if err := keptRemoveIn(ctx, store, keptHomeDirName+"/"+rel, false); err != nil {
-		errs = append(errs, err)
-	}
+	_, herr := keptRemoveIn(ctx, store, keptHomeDirName+"/"+rel, false)
+	_, cerr := keptRemoveClashes(ctx, store, rel)
+	return errors.Join(herr, cerr)
+}
+
+// keptRemoveClashes removes the older copies of rel in every clash/<box> of
+// the store (a box name, reached without a link): <rel>, the numbered
+// <rel>~N beside it, and the same under each clash/<box>/~N, where toClash
+// puts a copy that cannot go under its own path. n is how many it removed.
+func keptRemoveClashes(ctx context.Context, store *os.Root, rel string) (n int, err error) {
 	clash, err := keptOpenRootPath(store, keptClashDirName)
 	switch {
 	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errKeptLink) || errors.Is(err, errKeptNotDir):
-		// None of the store's own there: a link is never followed.
-		return errors.Join(errs...)
+		return 0, nil // none of the store's own there: a link is never followed
 	case err != nil:
-		return errors.Join(append(errs, err)...)
+		return 0, err
 	}
 	defer clash.Close()
 	boxes, err := keptBoxDirs(clash)
 	if err != nil {
-		return errors.Join(append(errs, err)...)
+		return 0, err
 	}
+	var errs []error
 	for _, b := range boxes {
-		if err := keptRemoveIn(ctx, clash, b+"/"+rel, true); err != nil {
-			errs = append(errs, err)
+		dirs := []string{b}
+		if sub, err := keptOpenRootPath(clash, b); err == nil {
+			names, err := keptAllNames(sub)
+			sub.Close()
+			if err != nil {
+				errs = append(errs, err)
+			}
+			for _, nm := range names {
+				if keptFallbackDir(nm) {
+					dirs = append(dirs, b+"/"+nm)
+				}
+			}
+		}
+		for _, d := range dirs {
+			k, err := keptRemoveIn(ctx, clash, d+"/"+rel, true)
+			n += k
+			if err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
-	return errors.Join(errs...)
+	return n, errors.Join(errs...)
+}
+
+// keptFallbackDir reports whether n is ~N for N in 1..keptClashTries, a folder
+// toClash falls back to.
+func keptFallbackDir(n string) bool {
+	k, ok := strings.CutPrefix(n, "~")
+	if !ok {
+		return false
+	}
+	i, err := strconv.Atoi(k)
+	return err == nil && i >= 1 && i <= keptClashTries && strconv.Itoa(i) == k
 }
 
 // keptRemoveIn removes rel (two components or more) under root: its parent is
 // reached by keptOpenRootPath, so a link or a non-directory on the way means
 // there is nothing of the store's to remove. numbered also removes the
-// numbered clash copies <name>~2 .. <name>~keptClashTries beside it.
-func keptRemoveIn(ctx context.Context, root *os.Root, rel string, numbered bool) error {
+// numbered clash copies <name>~2 .. <name>~keptClashTries beside it. n is how
+// many names it removed.
+func keptRemoveIn(ctx context.Context, root *os.Root, rel string, numbered bool) (n int, err error) {
 	parent, err := keptOpenRootPath(root, path.Dir(rel))
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errKeptLink) || errors.Is(err, errKeptNotDir) {
-		return nil
+		return 0, nil
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer parent.Close()
 	base := path.Base(rel)
-	names := []string{base}
+	var names []string
+	if _, err := parent.Lstat(base); !errors.Is(err, fs.ErrNotExist) { // one name: nothing to follow
+		names = append(names, base)
+	}
 	if numbered {
 		all, err := keptAllNames(parent)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		for _, n := range all {
-			if keptNumbered(n, base) {
-				names = append(names, n)
+		for _, nm := range all {
+			if keptNumbered(nm, base) {
+				names = append(names, nm)
 			}
 		}
 	}
 	var errs []error
-	for _, n := range names {
-		if err := keptRemoveOne(ctx, parent, n); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %s", strconv.Quote(path.Join(path.Dir(rel), n)), removalCause(err)))
+	for _, nm := range names {
+		if err := keptRemoveOne(ctx, parent, nm); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %s", strconv.Quote(path.Join(path.Dir(rel), nm)), removalCause(err)))
+			continue
 		}
+		n++
 	}
-	return errors.Join(errs...)
+	return n, errors.Join(errs...)
 }
 
 // keptAllNames lists root's own directory.

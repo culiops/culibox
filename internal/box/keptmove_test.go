@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -510,4 +511,54 @@ func keptNames(t *testing.T, dir string) []string {
 		out = append(out, e.Name())
 	}
 	return out
+}
+
+// A clash copy that cannot go under its own path in clash/<box> goes to
+// clash/<box>/~<N>/<rel> instead: never a home held for ever. Three ways the
+// own path fails: a file where a folder of it belongs, every numbered name
+// taken, and a name so long a ~N suffix passes NAME_MAX.
+func TestMergeClashFallback(t *testing.T) {
+	long := strings.Repeat("x", 254)
+	for _, tc := range []struct {
+		name, rel, file string
+		rig             func(t *testing.T, storeDir string)
+	}{
+		{"file in the way", ".config/culiops", "f", func(t *testing.T, storeDir string) {
+			keptWrite(t, storeDir, keptTestClash+"/.config", "a file, not a folder")
+		}},
+		{"every name taken", ".culiops", "f", func(t *testing.T, storeDir string) {
+			keptWrite(t, storeDir, keptTestClash+"/.culiops/f", "old")
+			for i := 2; i <= keptClashTries; i++ {
+				keptWrite(t, storeDir, keptTestClash+"/.culiops/f~"+strconv.Itoa(i), "old")
+			}
+		}},
+		{"name too long to number", ".culiops", long, func(t *testing.T, storeDir string) {
+			keptWrite(t, storeDir, keptTestClash+"/.culiops/"+long, "old")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir, home, storeDir, store := keptMoveSetup(t)
+			keptWrite(t, storeDir, "home/"+tc.rel+"/"+tc.file, "store")
+			keptWrite(t, homeDir, tc.rel+"/"+tc.file, "home")
+			tc.rig(t, storeDir)
+			if moved, clashed := mustMerge(t, home, store, keptWant(t, homeDir, tc.rel)); moved != 0 || clashed != 1 {
+				t.Fatalf("moved %d, clashed %d; want the copy in clash/", moved, clashed)
+			}
+			if got := keptRead(t, storeDir, keptTestClash+"/~1/"+tc.rel+"/"+tc.file); got != "home" {
+				t.Fatalf("the fallback copy is %q", got)
+			}
+			keptGone(t, homeDir, tc.rel)
+			if got := keptRead(t, storeDir, "home/"+tc.rel+"/"+tc.file); got != "store" {
+				t.Fatalf("the store's copy changed: %q", got)
+			}
+			// The next one takes ~2.
+			keptWrite(t, homeDir, tc.rel+"/"+tc.file, "home again")
+			if _, clashed := mustMerge(t, home, store, keptWant(t, homeDir, tc.rel)); clashed != 1 {
+				t.Fatalf("again: clashed %d", clashed)
+			}
+			if got := keptRead(t, storeDir, keptTestClash+"/~2/"+tc.rel+"/"+tc.file); got != "home again" {
+				t.Fatalf("the second fallback copy is %q", got)
+			}
+		})
+	}
 }

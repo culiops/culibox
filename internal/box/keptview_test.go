@@ -256,6 +256,8 @@ func keptForgetSetup(t *testing.T) (*Manager, *fakeClient, *keptAuditLog, string
 	keptWrite(t, store, "clash/"+keptTestBox+"/.culiops~2/ledger.json", "older")
 	keptWrite(t, store, "clash/"+keptTestBox+"/.culiops-not-a-copy/x", "stay")
 	keptWrite(t, store, "clash/ab-box-aaaaaaaaaaaa/.culiops/z", "old")
+	keptWrite(t, store, "clash/"+keptTestBox+"/~1/.culiops/f", "a copy with no room under its own path")
+	keptWrite(t, store, "clash/"+keptTestBox+"/~1/.config/other/f", "stay")
 	return m, f, audit, store
 }
 
@@ -483,12 +485,13 @@ func TestKeptForgetRemovesAndRemembers(t *testing.T) {
 		t.Fatalf("KeptForget: %v", err)
 	}
 	for _, p := range []string{"home/.culiops", "clash/" + keptTestBox + "/.culiops", "clash/" + keptTestBox + "/.culiops~2",
-		"clash/ab-box-aaaaaaaaaaaa/.culiops"} {
+		"clash/ab-box-aaaaaaaaaaaa/.culiops", "clash/" + keptTestBox + "/~1/.culiops"} {
 		if _, err := os.Lstat(filepath.Join(store, p)); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s still there after forget (%v)", p, err)
 		}
 	}
-	for _, p := range []string{"home/.config/other/b.txt", "clash/" + keptTestBox + "/.culiops-not-a-copy/x"} {
+	for _, p := range []string{"home/.config/other/b.txt", "clash/" + keptTestBox + "/.culiops-not-a-copy/x",
+		"clash/" + keptTestBox + "/~1/.config/other/f"} {
 		if _, err := os.Lstat(filepath.Join(store, p)); err != nil {
 			t.Errorf("%s removed by the forget of .culiops: %v", p, err)
 		}

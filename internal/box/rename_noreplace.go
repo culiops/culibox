@@ -12,8 +12,10 @@ import "golang.org/x/sys/unix"
 // Where the call is not supported (a Linux kernel before 3.15 or a filesystem
 // without it, a macOS volume without VOL_CAP_INT_RENAME_EXCL, another OS) it
 // falls back to a plain renameat, which the caller must have preceded with its
-// own check that to is absent: that still never replaces a file or a non-empty
-// directory, but it does replace an empty directory created at to in between.
+// own check that to is absent. That check and the rename are two steps: what
+// is created at to in between is replaced, a file or a link when from is not a
+// directory, an empty directory when it is one. A known limit, for the moment
+// between the two calls.
 func renameNoReplace(fromfd int, from string, tofd int, to string) error {
 	err := renameExcl(fromfd, from, tofd, to)
 	if err != nil && noReplaceUnsupported(err) {

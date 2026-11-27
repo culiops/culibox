@@ -290,29 +290,56 @@ func (m *keptMerge) entry(hfd, sfd int, n, p string, hst *unix.Stat_t, depth int
 	}
 }
 
+// errKeptNoClashSlot: no name where clashIn looked can take a clash copy.
+var errKeptNoClashSlot = errors.New("no free name for an older copy")
+
 // toClash moves the entry name of the directory fromfd, whose home-relative
 // path is rel, to clash/<box>/<rel>: under name itself, or the first free of
-// name~2 .. name~keptClashTries. Nothing there is ever replaced.
+// name~2 .. name~keptClashTries. When none of those can take it (a file or a
+// link where a folder of the path belongs, every name taken, or a name so long
+// that a ~N suffix passes NAME_MAX), it goes to clash/<box>/~<N>/<rel>, for the
+// first N up to keptClashTries that can: a home-relative path starts with ".",
+// so a ~N folder is never one. Nothing there is ever replaced.
 func (m *keptMerge) toClash(fromfd int, name, rel string) error {
-	cd, _, err := keptMkdirPath(m.store, path.Join(m.clash, path.Dir(rel)))
+	err := m.clashIn(fromfd, name, rel, path.Join(m.clash, path.Dir(rel)), keptClashTries)
+	for n := 1; errors.Is(err, errKeptNoClashSlot) && n <= keptClashTries; n++ {
+		err = m.clashIn(fromfd, name, rel, path.Join(m.clash, "~"+strconv.Itoa(n), path.Dir(rel)), 1)
+	}
+	if errors.Is(err, errKeptNoClashSlot) {
+		return fmt.Errorf("box: %s: no free place for an older copy in %s", keptShow(rel), m.clash)
+	}
+	return err
+}
+
+// clashIn moves the entry name of fromfd into the store directory dir (made as
+// needed, never through a link) under the first free of name, name~2 ..
+// name~tries. errKeptNoClashSlot when dir cannot be made there or no name is
+// free.
+func (m *keptMerge) clashIn(fromfd int, name, rel, dir string, tries int) error {
+	cd, _, err := keptMkdirPath(m.store, dir)
 	if err != nil {
+		if errors.Is(err, errKeptNotDir) || errors.Is(err, errKeptLink) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ENAMETOOLONG) {
+			return fmt.Errorf("%w: %v", errKeptNoClashSlot, err)
+		}
 		return fmt.Errorf("box: %s: the clash folder: %w", keptShow(rel), err)
 	}
 	defer cd.Close()
 	cfd := int(cd.Fd())
-	for i := 1; i <= keptClashTries; i++ {
+	for i := 1; i <= tries; i++ {
 		to := name
 		if i > 1 {
 			to = name + "~" + strconv.Itoa(i)
 		}
-		// Checked first for renameNoReplace's fallback, which can replace an
-		// empty directory; the rename itself refuses any name taken since.
+		// Checked first for renameNoReplace's fallback, which can replace what
+		// is there; the rename itself refuses any name taken since.
 		var st unix.Stat_t
-		if err := unix.Fstatat(cfd, to, &st, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, unix.ENOENT) {
-			if err != nil {
-				return fmt.Errorf("box: %s: in the clash folder: %w", keptShow(rel), err)
-			}
+		switch err := unix.Fstatat(cfd, to, &st, unix.AT_SYMLINK_NOFOLLOW); {
+		case errors.Is(err, unix.ENAMETOOLONG):
+			return errKeptNoClashSlot // and so is every longer number
+		case err == nil:
 			continue
+		case !errors.Is(err, unix.ENOENT):
+			return fmt.Errorf("box: %s: in the clash folder: %w", keptShow(rel), err)
 		}
 		err := m.rename(fromfd, name, cfd, to, rel)
 		switch {
@@ -321,11 +348,13 @@ func (m *keptMerge) toClash(fromfd int, name, rel string) error {
 			return nil
 		case errors.Is(err, unix.ENOENT):
 			return nil // gone meanwhile
+		case errors.Is(err, unix.ENAMETOOLONG):
+			return errKeptNoClashSlot
 		case !keptTaken(err):
 			return fmt.Errorf("box: %s: moving it to the clash folder: %w", keptShow(rel), err)
 		}
 	}
-	return fmt.Errorf("box: %s: %d copies are already in %s", keptShow(rel), keptClashTries, m.clash)
+	return errKeptNoClashSlot
 }
 
 func (m *keptMerge) rename(fromfd int, from string, tofd int, to, rel string) error {
