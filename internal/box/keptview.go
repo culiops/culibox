@@ -514,7 +514,8 @@ func (m *Manager) KeptForget(ctx context.Context, key, rel, actor string) error 
 // audit row is box_kept_forget with clash=1.
 //
 // fs.ErrNotExist when key or rel cannot name a kept folder or the store holds
-// no older copy of rel. ErrKeptClashNotRemoved when some could not be removed.
+// no older copy of rel. ErrKeptClashNotRemoved when some could not be removed;
+// the audit row is written only when at least one went.
 func (m *Manager) KeptForgetClashes(ctx context.Context, key, rel, actor string) error {
 	if !ValidConversationsKey(key) || !validKeptRel(rel) {
 		return fs.ErrNotExist
@@ -534,8 +535,13 @@ func (m *Manager) KeptForgetClashes(ctx context.Context, key, rel, actor string)
 		return err
 	}
 	n, err := keptRemoveClashes(ctx, store, rel)
-	if n == 0 && err == nil {
+	switch {
+	case n == 0 && err == nil:
 		return fs.ErrNotExist
+	case n == 0:
+		// Nothing went, so nothing was done on the person's word: no row.
+		log.Printf("box: kept store %s: no older copy of %q could be removed: %v", key, rel, err)
+		return fmt.Errorf("%w: %v", ErrKeptClashNotRemoved, err)
 	}
 	m.keptForgetAudit(key, st, rel, actor, true)
 	if err != nil {

@@ -731,3 +731,28 @@ func TestTakeKeptNewsOnlyKept(t *testing.T) {
 		t.Fatalf("news once kept %q, want [.held]", got)
 	}
 }
+
+// A forget of older copies that removed none (every removal failed) writes no
+// audit row: nothing was done on the person's word.
+func TestKeptForgetClashesNothingRemovedNoAudit(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes from a read-only folder")
+	}
+	m, _, _, audit := keptPassSetup(t)
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{keptViewEntry(".culiops", 1)}})
+	store := KeptStoreDir(m.opts.StateRoot, keptTestKey)
+	keptWrite(t, store, "home/.culiops/a", "a")
+	keptWrite(t, store, "clash/"+keptTestBox+"/.culiops/old", "old")
+	locked := filepath.Join(store, "clash", keptTestBox)
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	err := m.KeptForgetClashes(context.Background(), keptTestKey, ".culiops", "web")
+	if !errors.Is(err, ErrKeptClashNotRemoved) {
+		t.Fatalf("KeptForgetClashes: %v, want ErrKeptClashNotRemoved", err)
+	}
+	if rows := audit.of(keptAuditForget); len(rows) != 0 {
+		t.Fatalf("audit rows %+v, want none when nothing was removed", rows)
+	}
+}
