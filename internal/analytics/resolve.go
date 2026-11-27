@@ -159,7 +159,7 @@ func resolveLegacy(d DimIn, env ResolveEnv, known []string) Resolved {
 	add := func(ws string) {
 		key := ws
 		if env.FoldCase {
-			key = asciiLower(ws)
+			key = strings.ToLower(ws)
 		}
 		if !seen[key] {
 			seen[key] = true
@@ -173,11 +173,7 @@ func resolveLegacy(d DimIn, env ResolveEnv, known []string) Resolved {
 			continue
 		}
 		if c := filepath.Clean(k); matches(c) {
-			if isCloneDir(c, env) {
-				add(cloneDirWorkspace(c, env))
-			} else {
-				add(c)
-			}
+			add(foldKnown(c, env))
 		}
 	}
 	for _, p := range env.Profiles {
@@ -206,19 +202,38 @@ func resolveLegacy(d DimIn, env ResolveEnv, known []string) Resolved {
 	return Resolved{Workspace: d.Project, Via: "legacy", Unmatched: true}
 }
 
-// isCloneDir reports whether c is a clone dir: a clone-dirs entry or a profile's default_cwd.
-func isCloneDir(c string, env ResolveEnv) bool {
+// foldKnown folds a slug-matched candidate, which may be box-supplied, through
+// rule 2 (worktree marker -> its prefix) and rule 1 (inside a clone dir with a
+// clone_of -> that repo) by string rules only. A bare clone dir (no clone_of)
+// becomes the config's own spelling of it. Anything else stays the cleaned
+// candidate. Normalize only ever sees a config entry, never the candidate.
+func foldKnown(c string, env ResolveEnv) string {
+	if prefix, _, ok := splitWorktree(c, env.FoldCase); ok {
+		c = prefix
+	}
+	if p, ok := cloneProfile(c, env); ok {
+		return gitrepo.Normalize(p.CloneOf)
+	}
+	if entry, ok := cloneDirEntry(c, env); ok {
+		return cloneDirWorkspace(entry, env)
+	}
+	return c
+}
+
+// cloneDirEntry is the config's own spelling of the clone dir that c is: a
+// clone-dirs entry or a profile's default_cwd.
+func cloneDirEntry(c string, env ResolveEnv) (string, bool) {
 	for _, cd := range env.CloneDirs {
 		if cd != "" && foldEq(filepath.Clean(cd), c, env.FoldCase) {
-			return true
+			return filepath.Clean(cd), true
 		}
 	}
 	for _, p := range env.Profiles {
 		if p.DefaultCwd != "" && foldEq(filepath.Clean(p.DefaultCwd), c, env.FoldCase) {
-			return true
+			return filepath.Clean(p.DefaultCwd), true
 		}
 	}
-	return false
+	return "", false
 }
 
 // cloneDirWorkspace is the repo a clone dir stands for: the clone_of of a profile
@@ -236,7 +251,7 @@ func cloneDirWorkspace(c string, env ResolveEnv) string {
 // ("/a/b" does not contain "/a/bc"). Both must be clean.
 func within(dir, p string, fold bool) bool {
 	if fold {
-		dir, p = asciiLower(dir), asciiLower(p)
+		dir, p = strings.ToLower(dir), strings.ToLower(p)
 	}
 	if p == dir {
 		return true
@@ -249,13 +264,15 @@ func within(dir, p string, fold bool) bool {
 
 func foldEq(a, b string, fold bool) bool {
 	if fold {
-		return asciiLower(a) == asciiLower(b)
+		return strings.ToLower(a) == strings.ToLower(b)
 	}
 	return a == b
 }
 
 // asciiLower lowercases A-Z only, so byte offsets in the result are valid in the
-// original (strings.ToLower can change a string's length).
+// original (strings.ToLower can change a string's length). Only splitWorktree's
+// marker search needs that; every other fold compare uses strings.ToLower, like
+// config/clone.go.
 func asciiLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {
