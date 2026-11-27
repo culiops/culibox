@@ -1165,10 +1165,14 @@ func TestPassAgainCaseInsensitiveVolume(t *testing.T) {
 		keptWrite(t, home, ".Culiops/new", "aws_secret_access_key = abc")
 	})
 	o := keptPassOpts{screened: map[string]bool{keptTestKey: true}}
-	if _, err := m.keepPassWith(context.Background(), keptTestBox, o); err != nil {
-		t.Fatal(err)
+	if n, err := m.keepPassWith(context.Background(), keptTestBox, o); n != 1 || err != nil {
+		t.Fatalf("moved %d, %v; want .Culiops merged into .culiops", n, err)
 	}
-	if e, ok := keptEntry(keptLoad(t, m), ".culiops"); !ok || e.Status != keptStatusHeld {
+	st := keptLoad(t, m)
+	if len(st.Kept) != 1 {
+		t.Fatalf("entries %+v, want only .culiops (no separate .Culiops)", st.Kept)
+	}
+	if e, ok := keptEntry(st, ".culiops"); !ok || e.Status != keptStatusHeld {
 		t.Fatalf("entry %+v %v, want held: what was merged into it is screened", e, ok)
 	}
 }
