@@ -61,7 +61,7 @@ func TestIngestIncremental(t *testing.T) {
 	if st.Files != 1 {
 		t.Fatalf("first pass files=%d want 1", st.Files)
 	}
-	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 1 || rows[0].Input != 100 || rows[0].Output != 20 || rows[0].Prompts != 1 {
 		t.Fatalf("after first pass: %+v", rows)
 	}
@@ -72,7 +72,7 @@ func TestIngestIncremental(t *testing.T) {
 	if st.Files != 0 || st.BytesRead != 0 {
 		t.Fatalf("no-change pass read data: %+v", st)
 	}
-	rows, _ = s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ = s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if rows[0].Input != 100 {
 		t.Fatalf("no-change pass double-counted: %+v", rows[0])
 	}
@@ -84,7 +84,7 @@ func TestIngestIncremental(t *testing.T) {
 	if st.Files != 1 || st.BytesRead != int64(len(line3)) {
 		t.Fatalf("append pass: files=%d bytes=%d want 1/%d", st.Files, st.BytesRead, len(line3))
 	}
-	rows, _ = s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ = s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if rows[0].Input != 150 || rows[0].Output != 30 {
 		t.Fatalf("after append: %+v want in=150 out=30", rows[0])
 	}
@@ -104,7 +104,7 @@ func TestIngestShrinkNoDouble(t *testing.T) {
 	st = IngestStats{}
 	ingestRoot(s, root, nil, &st)
 
-	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if rows[0].Input != 100 || rows[0].Output != 20 {
 		t.Fatalf("shrink double-counted: %+v", rows[0])
 	}
@@ -125,7 +125,7 @@ func TestIngestSubagentAttributedToParent(t *testing.T) {
 	var st IngestStats
 	ingestRoot(s, root, nil, &st)
 
-	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestIngestSkipsSymlinkedJSONL(t *testing.T) {
 	if st.Files != 0 || st.BytesRead != 0 || st.Errors != 1 {
 		t.Fatalf("symlink not refused: %+v", st)
 	}
-	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 0 {
 		t.Fatalf("symlink target was ingested: %+v", rows)
 	}
@@ -213,7 +213,7 @@ func TestDedupeAcrossBatches(t *testing.T) {
 	st = IngestStats{}
 	ingestRoot(s, root, nil, &st)
 
-	rows, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}

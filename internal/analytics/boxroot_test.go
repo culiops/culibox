@@ -68,7 +68,7 @@ func TestIngestBoxSymlinkedClaudeDirNotFollowed(t *testing.T) {
 	if !recorded(t, svc, bFile) {
 		t.Fatal("B's own transcript was not ingested")
 	}
-	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 1 || rows[0].Input != 100 {
 		t.Fatalf("double-counted or lost: %+v", rows)
 	}
@@ -90,7 +90,7 @@ func TestIngestBoxSymlinkedClaudeDirToHostNotFollowed(t *testing.T) {
 	if st.Files != 0 || st.Scanned != 0 {
 		t.Fatalf("followed a symlink out of the box: %+v", st)
 	}
-	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 0 {
 		t.Fatalf("host transcripts ingested via a box: %+v", rows)
 	}

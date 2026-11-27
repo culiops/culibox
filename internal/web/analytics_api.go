@@ -69,7 +69,7 @@ func (s *Server) handleAnalyticsSummary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.ByDayModel(from, to)
+	rows, err := s.Analytics.ByDayModel(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
@@ -84,7 +84,7 @@ func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.ByModel(from, to)
+	rows, err := s.Analytics.ByModel(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
@@ -100,7 +100,7 @@ func (s *Server) handleAnalyticsProjects(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.ByProject(from, to)
+	rows, err := s.Analytics.ByProject(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
@@ -115,7 +115,7 @@ func (s *Server) handleAnalyticsSessions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.Sessions(from, to, queryLimit(r, 200, 2000))
+	rows, err := s.Analytics.Sessions(from, to, queryLimit(r, 200, 2000), analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
@@ -132,7 +132,7 @@ func (s *Server) handleAnalyticsSessionCosts(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.SessionCosts(from, to)
+	rows, err := s.Analytics.SessionCosts(from, to, analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return
@@ -147,7 +147,7 @@ func (s *Server) handleAnalyticsTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from, to := analyticsWindow(r)
-	rows, err := s.Analytics.Tools(from, to, queryLimit(r, 50, 500))
+	rows, err := s.Analytics.Tools(from, to, queryLimit(r, 50, 500), analytics.ParseWhere(r.URL.Query().Get("where")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "query failed")
 		return

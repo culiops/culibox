@@ -21,7 +21,7 @@ func TestIngestRegloadsRootPatterns(t *testing.T) {
 	if _, err := svc.Ingest(); err != nil { // nothing exists yet
 		t.Fatal(err)
 	}
-	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 0 {
 		t.Fatalf("rows before any account exists: %+v", rows)
 	}
@@ -35,7 +35,7 @@ func TestIngestRegloadsRootPatterns(t *testing.T) {
 	if st.Files != 1 {
 		t.Fatalf("second pass files=%d want 1", st.Files)
 	}
-	rows, _ = svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ = svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 1 || rows[0].Input != 100 || rows[0].Output != 20 {
 		t.Fatalf("account transcript not ingested: %+v", rows)
 	}
@@ -159,7 +159,7 @@ func TestIngestSamePathTwiceInOnePassCountsOnce(t *testing.T) {
 		if _, err := svc.Ingest(); err != nil {
 			t.Fatal(err)
 		}
-		rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+		rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 		if len(rows) != 1 || rows[0].Input != 100 || rows[0].Output != 20 {
 			t.Fatalf("pass %d: rows %+v, want input 100 output 20 counted once", pass, rows)
 		}

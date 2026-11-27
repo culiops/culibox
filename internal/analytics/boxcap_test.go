@@ -31,7 +31,7 @@ func TestIngestBoxPerPassCap(t *testing.T) {
 	if off != int64(len(line1+line2)) {
 		t.Fatalf("offset after pass 1 = %d, want %d", off, len(line1+line2))
 	}
-	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if len(rows) != 1 || rows[0].Input != 100 {
 		t.Fatalf("pass 1 rows: %+v", rows)
 	}
@@ -44,7 +44,7 @@ func TestIngestBoxPerPassCap(t *testing.T) {
 	if off != int64(len(line1+line2+line3)) {
 		t.Fatalf("offset after pass 2 = %d", off)
 	}
-	rows, _ = svc.ByDayModel("2026-08-01", "2026-08-31")
+	rows, _ = svc.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if rows[0].Input != 150 {
 		t.Fatalf("pass 2 rows: %+v", rows)
 	}

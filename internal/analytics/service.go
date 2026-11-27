@@ -235,23 +235,23 @@ func (s *Service) Close() error { return s.store.Close() }
 
 // Query pass-throughs (the web layer never touches the store directly).
 
-func (s *Service) ByDayModel(from, to string) ([]DayModelRow, error) {
-	return s.store.ByDayModel(from, to)
+func (s *Service) ByDayModel(from, to string, w Where) ([]DayModelRow, error) {
+	return s.store.ByDayModel(from, to, w)
 }
-func (s *Service) ByModel(from, to string) ([]ModelRow, error) {
-	return s.store.ByModel(from, to)
+func (s *Service) ByModel(from, to string, w Where) ([]ModelRow, error) {
+	return s.store.ByModel(from, to, w)
 }
-func (s *Service) ByProject(from, to string) ([]ProjectRow, error) {
-	return s.store.ByProject(from, to)
+func (s *Service) ByProject(from, to string, w Where) ([]ProjectRow, error) {
+	return s.store.ByProject(from, to, w)
 }
-func (s *Service) Sessions(from, to string, limit int) ([]SessionRow, error) {
-	return s.store.Sessions(from, to, limit)
+func (s *Service) Sessions(from, to string, limit int, w Where) ([]SessionRow, error) {
+	return s.store.Sessions(from, to, limit, w)
 }
-func (s *Service) SessionCosts(from, to string) ([]SessionAggRow, error) {
-	return s.store.SessionCosts(from, to)
+func (s *Service) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
+	return s.store.SessionCosts(from, to, w)
 }
-func (s *Service) Tools(from, to string, limit int) ([]ToolRow, error) {
-	return s.store.Tools(from, to, limit)
+func (s *Service) Tools(from, to string, limit int, w Where) ([]ToolRow, error) {
+	return s.store.Tools(from, to, limit, w)
 }
 
 // DefaultRoots are the transcript roots used when the config sets none: the

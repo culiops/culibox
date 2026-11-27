@@ -794,12 +794,14 @@ type ToolRow struct {
 }
 
 // ByDayModel returns per-(day,model) token/prompt aggregates in [from,to] (inclusive).
-func (s *Store) ByDayModel(from, to string) ([]DayModelRow, error) {
+// Every query below takes a Where; the zero Where is every session.
+func (s *Store) ByDayModel(from, to string, w Where) ([]DayModelRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT day, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY day, model ORDER BY day, model`, from, to)
+SELECT r.day, r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.day, r.model ORDER BY r.day, r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -818,13 +820,14 @@ GROUP BY day, model ORDER BY day, model`, from, to)
 // ByModel returns one row per model across the whole window, with a
 // distinct-session count (session identity is (session_id, project), matching
 // the rollup PK) and a dollar cost. Ordered by cost descending.
-func (s *Store) ByModel(from, to string) ([]ModelRow, error) {
+func (s *Store) ByModel(from, to string, w Where) ([]ModelRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd),
-  COUNT(DISTINCT session_id || char(31) || project)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY model`, from, to)
+SELECT r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd),
+  COUNT(DISTINCT r.session_id || char(31) || r.project)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -847,12 +850,13 @@ GROUP BY model`, from, to)
 // ByProject returns per-(project, model) aggregates over the window, each with a
 // dollar cost. The frontend sums rows for a project total and uses the per-model
 // split for the mix. Ordered by cost descending.
-func (s *Store) ByProject(from, to string) ([]ProjectRow, error) {
+func (s *Store) ByProject(from, to string, w Where) ([]ProjectRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT project, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY project, model`, from, to)
+SELECT r.project, r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.project, r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -870,12 +874,13 @@ GROUP BY project, model`, from, to)
 
 // Sessions returns per-(day,session,project,model) rows in [from,to], newest day
 // first, with tokens/prompt derived (0 when a row has no prompts).
-func (s *Store) Sessions(from, to string, limit int) ([]SessionRow, error) {
+func (s *Store) Sessions(from, to string, limit int, w Where) ([]SessionRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT day, session_id, project, model, input_tokens, output_tokens, cache_read, cache_creation, prompts, cost_usd
-FROM session_rollup WHERE day BETWEEN ? AND ?
-ORDER BY day DESC, (input_tokens+output_tokens+cache_read+cache_creation) DESC
-LIMIT ?`, from, to, limit)
+SELECT r.day, r.session_id, r.project, r.model, r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation, r.prompts, r.cost_usd
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+ORDER BY r.day DESC, (r.input_tokens+r.output_tokens+r.cache_read+r.cache_creation) DESC
+LIMIT ?`, append(append([]any{from, to}, wargs...), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -902,12 +907,13 @@ LIMIT ?`, from, to, limit)
 // (no day-ordered LIMIT), so the Sessions view's distinct count, cost histogram,
 // and top-by-cost list stay correct on wide windows. Bounded by fleet size
 // (one grouped row per session/model), so it does not need a cap.
-func (s *Store) SessionCosts(from, to string) ([]SessionAggRow, error) {
+func (s *Store) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT session_id, project, model, MAX(day),
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY session_id, project, model`, from, to)
+SELECT r.session_id, r.project, r.model, MAX(r.day),
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -984,11 +990,12 @@ func (s *Store) ConversationCosts() (map[string]float64, error) {
 }
 
 // Tools returns attribution aggregates (skill/plugin/mcp) in [from,to], busiest first.
-func (s *Store) Tools(from, to string, limit int) ([]ToolRow, error) {
+func (s *Store) Tools(from, to string, limit int, w Where) ([]ToolRow, error) {
+	src, and, wargs := w.source("attribution_rollup")
 	rows, err := s.db.Query(`
-SELECT kind, name, SUM(records) AS r
-FROM attribution_rollup WHERE day BETWEEN ? AND ?
-GROUP BY kind, name ORDER BY r DESC LIMIT ?`, from, to, limit)
+SELECT r.kind, r.name, SUM(r.records) AS n
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.kind, r.name ORDER BY n DESC LIMIT ?`, append(append([]any{from, to}, wargs...), limit)...)
 	if err != nil {
 		return nil, err
 	}

@@ -37,7 +37,7 @@ func TestApplyIsAdditive(t *testing.T) {
 	if err := s.Apply("S1", "proj", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2, nil); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	rows, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestProjectDisambiguatesSameSession(t *testing.T) {
 	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	sessions, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTokensPerPrompt(t *testing.T) {
 	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,14 +125,14 @@ func TestRowsCarryCost(t *testing.T) {
 	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	dm, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil || len(dm) != 1 {
 		t.Fatalf("ByDayModel err=%v rows=%d", err, len(dm))
 	}
 	if !approx(dm[0].Cost, 5) {
 		t.Errorf("ByDayModel cost = %v, want 5", dm[0].Cost)
 	}
-	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil || len(ss) != 1 {
 		t.Fatalf("Sessions err=%v rows=%d", err, len(ss))
 	}
@@ -150,7 +150,7 @@ func TestByModel(t *testing.T) {
 	s.Apply("S2", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A different model.
 	s.Apply("S3", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	rows, err := s.ByModel("2026-08-01", "2026-08-31")
+	rows, err := s.ByModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 	s := openTemp(t)
 	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	rows, err := s.ByModel("2026-08-01", "2026-08-31")
+	rows, err := s.ByModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestByProject(t *testing.T) {
 	s.Apply("S1", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	s.Apply("S2", "alpha", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	s.Apply("S3", "beta", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	rows, err := s.ByProject("2026-08-01", "2026-08-31")
+	rows, err := s.ByProject("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestSessionCosts(t *testing.T) {
 	s.Apply("S1", "p", "/t/b.jsonl", RootInfo{}, delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A cheaper single-model session.
 	s.Apply("S2", "p", "/t/c.jsonl", RootInfo{}, delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	rows, err := s.SessionCosts("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestSessionCostsProjectDisambiguates(t *testing.T) {
 	s := openTemp(t)
 	s.Apply("SAME", "alpha", "/t/a.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	s.Apply("SAME", "beta", "/t/b.jsonl", RootInfo{}, delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
-	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	rows, err := s.SessionCosts("2026-08-01", "2026-08-31", Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestToolsAggregate(t *testing.T) {
 	if err := s.Apply("S1", "p", "/t/a.jsonl", RootInfo{}, p, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := s.Tools("2026-08-01", "2026-08-31", 10)
+	tools, err := s.Tools("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,23 +691,23 @@ func TestRowsCarryStoredCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	const want = 2.0
-	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	dm, err := s.ByDayModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil || len(dm) != 1 || !approx(dm[0].Cost, want) {
 		t.Errorf("ByDayModel = %+v err=%v, want cost %v", dm, err, want)
 	}
-	bm, err := s.ByModel("2026-08-01", "2026-08-31")
+	bm, err := s.ByModel("2026-08-01", "2026-08-31", Where{})
 	if err != nil || len(bm) != 1 || !approx(bm[0].Cost, want) {
 		t.Errorf("ByModel = %+v err=%v, want cost %v", bm, err, want)
 	}
-	bp, err := s.ByProject("2026-08-01", "2026-08-31")
+	bp, err := s.ByProject("2026-08-01", "2026-08-31", Where{})
 	if err != nil || len(bp) != 1 || !approx(bp[0].Cost, want) {
 		t.Errorf("ByProject = %+v err=%v, want cost %v", bp, err, want)
 	}
-	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10, Where{})
 	if err != nil || len(ss) != 1 || !approx(ss[0].Cost, want) {
 		t.Errorf("Sessions = %+v err=%v, want cost %v", ss, err, want)
 	}
-	sc, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	sc, err := s.SessionCosts("2026-08-01", "2026-08-31", Where{})
 	if err != nil || len(sc) != 1 || !approx(sc[0].Cost, want) {
 		t.Errorf("SessionCosts = %+v err=%v, want cost %v", sc, err, want)
 	}
