@@ -495,7 +495,7 @@ func TestKeptAPIForgetClashes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.store, "home/.culiops/a.txt")); err != nil {
 		t.Fatalf("the kept folder went with its older copies: %v", err)
 	}
-	want := [4]string{"web", "box_kept_forget", "p", `key="` + f.key + `" path=".culiops" clash=1`}
+	want := [4]string{"web", "box_kept_forget", "p", `key="` + f.key + `" path=".culiops" clash=1 removed=1`}
 	if rows := f.audit.all(); len(rows) != 1 || rows[0] != want {
 		t.Fatalf("audit rows %v, want %v", rows, want)
 	}

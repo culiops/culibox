@@ -674,7 +674,7 @@ func TestKeptForgetClashes(t *testing.T) {
 		t.Fatalf("a forget of older copies stopped %v", stopped)
 	}
 	rows := audit.of(keptAuditForget)
-	want := `key="` + keptTestKey + `" path=".culiops" clash=1`
+	want := `key="` + keptTestKey + `" path=".culiops" clash=1 removed=4`
 	if len(rows) != 1 || rows[0].detail != want || rows[0].actor != "web" || rows[0].name != "p" {
 		t.Fatalf("audit rows %+v, want one by web for p: %s", rows, want)
 	}
@@ -732,9 +732,11 @@ func TestTakeKeptNewsOnlyKept(t *testing.T) {
 	}
 }
 
-// A forget of older copies that removed none (every removal failed) writes no
-// audit row: nothing was done on the person's word.
-func TestKeptForgetClashesNothingRemovedNoAudit(t *testing.T) {
+// A forget of older copies is audited whenever it tried to remove one, even
+// when every removal failed (a removal can delete part of a copy and then
+// fail): the row says how many went and why the rest did not. With no copy to
+// try, nothing was touched and there is no row.
+func TestKeptForgetClashesAuditsAttempts(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root removes from a read-only folder")
 	}
@@ -752,7 +754,16 @@ func TestKeptForgetClashesNothingRemovedNoAudit(t *testing.T) {
 	if !errors.Is(err, ErrKeptClashNotRemoved) {
 		t.Fatalf("KeptForgetClashes: %v, want ErrKeptClashNotRemoved", err)
 	}
-	if rows := audit.of(keptAuditForget); len(rows) != 0 {
-		t.Fatalf("audit rows %+v, want none when nothing was removed", rows)
+	rows := audit.of(keptAuditForget)
+	prefix := `key="` + keptTestKey + `" path=".culiops" clash=1 removed=0 err="`
+	if len(rows) != 1 || !strings.HasPrefix(rows[0].detail, prefix) || !strings.HasSuffix(rows[0].detail, `"`) || rows[0].actor != "web" {
+		t.Fatalf("audit rows %+v, want one starting %s", rows, prefix)
+	}
+	// No copy of .config/other: nothing tried, no row.
+	if err := m.KeptForgetClashes(context.Background(), keptTestKey, ".config/other", "web"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("no copy: %v, want fs.ErrNotExist", err)
+	}
+	if rows := audit.of(keptAuditForget); len(rows) != 1 {
+		t.Fatalf("audit rows %+v, want no new row when there was no copy", rows)
 	}
 }
