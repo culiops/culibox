@@ -148,10 +148,8 @@ func move(newRoot, legacy string, d Deps) (Outcome, error) {
 		}
 	}
 	// (f) darwin only: a box VM keeps absolute paths into legacy.
-	if d.GOOS == "darwin" {
-		if _, err := os.Lstat(filepath.Join(legacy, "vm")); err == nil {
-			return Outcome{Reason: "the box VM lives here"}, nil
-		}
+	if VMKeepsRoot(d.GOOS, legacy) {
+		return Outcome{Reason: "the box VM lives here"}, nil
 	}
 	// (b) Legacy is a real directory, not a symlink or a mount point; new is
 	// absent or a real empty directory; both on one filesystem.
@@ -462,6 +460,18 @@ func readJournal(path string) (legacy, hash string, err error) {
 		return "", "", errors.New("the second line is not a key hash")
 	}
 	return legacy, hash, nil
+}
+
+// VMKeepsRoot reports precondition (f): on darwin a box VM in root keeps
+// absolute paths into it, so the move never happens while it is there (a
+// recreate builds the VM in the same folder). doctor and service install read
+// it too, since for them it means the old root is the one in use for good.
+func VMKeepsRoot(goos, root string) bool {
+	if goos != "darwin" {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(root, "vm"))
+	return err == nil
 }
 
 // RealDir reports path as a real directory: not a symlink and not a mount

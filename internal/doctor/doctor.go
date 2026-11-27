@@ -385,10 +385,8 @@ func rootStory(in Input, dir, goos string) string {
 	newRoot, legacy := config.DefaultRoots(in.Home)
 	switch root.Kind {
 	case config.RootLegacy:
-		if goos == "darwin" {
-			if _, err := os.Lstat(filepath.Join(dir, "vm")); err == nil {
-				return " (kept in place: the box VM lives here; it cannot follow a move without box setup -recreate)"
-			}
+		if rootmove.VMKeepsRoot(goos, dir) {
+			return " (kept in place: the box VM lives here; it cannot follow a move without box setup -recreate)"
 		}
 		if in.RootNote != "" {
 			return " (kept in place: " + in.RootNote + ")"
