@@ -102,3 +102,24 @@ func TestDoctorKeptUnattributedStore(t *testing.T) {
 		t.Fatalf("rows = %v", rows)
 	}
 }
+
+// A store read error can carry names a box chose; the row prints it quoted, so
+// a control character cannot reach the doctor's output raw.
+func TestDoctorKeptErrorIsEscaped(t *testing.T) {
+	dataDir := t.TempDir()
+	key := box.ConversationsKey("default", "/w", "acct", "p1")
+	dir := filepath.Join(dataDir, "boxstate", ".kept", key)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("{\x1b[31m"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows := checkKeptStores(dataDir, "default", nil)
+	if len(rows) != 1 || rows[0].Status != Warn {
+		t.Fatalf("rows = %v", rows)
+	}
+	if strings.ContainsRune(rows[0].Detail, 0x1b) || !strings.HasPrefix(rows[0].Detail, `"`) {
+		t.Fatalf("not quoted: %q", rows[0].Detail)
+	}
+}

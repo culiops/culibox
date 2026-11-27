@@ -129,7 +129,7 @@ Swapping only the binary back (the `.prev` rollback line) runs the older CuliBox
 
 ### Kept box folders
 
-The first start of the version that adds kept box folders moves keepable folders out of old box homes into `<data dir>/boxstate/.kept/<key>/home/`. An older CuliBox (the `.prev` binary) never mounts `.kept/`, so its boxes do not see them. They are not deleted: they are lost from view, not lost. To get one back by hand, stop the boxes, then copy the folder from `<data dir>/boxstate/.kept/<key>/home/<path>` to the same path in the box home under `<data dir>/boxstate/<box name>/`. `<key>` is the store folder; its `state.json` names the profile and workspace. Folders that were in an old home that no box used again before the upgrade are not moved: they stay in that home and go at the 30-day reclaim, as before.
+The first start of the version that adds kept box folders moves keepable folders out of old box homes that a box uses again into `<data dir>/boxstate/.kept/<key>/home/`. An older CuliBox (the `.prev` binary) never mounts `.kept/`, so its boxes do not see them. They are not deleted: they are lost from view, not lost. To get one back by hand, stop the boxes, then copy the folder from `<data dir>/boxstate/.kept/<key>/home/<path>` to the same path in the box home under `<data dir>/boxstate/<box name>/`. `<key>` is the store folder; its `state.json` names the profile and workspace. Folders that were in an old home that no box used again before the upgrade are not moved: they stay in that home and go at the 30-day reclaim, as before.
 
 ## macOS
 

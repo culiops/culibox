@@ -23,7 +23,7 @@ func checkKeptStores(dataDir, instance string, profiles map[string]bool) []Resul
 	views, err := box.ReadKeptStores(dataDir, instance)
 	if len(views) == 0 {
 		if err != nil {
-			return []Result{{Warn, check, err.Error()}}
+			return []Result{{Warn, check, fmt.Sprintf("%q", err.Error())}}
 		}
 		return nil
 	}
@@ -49,7 +49,7 @@ func checkKeptStores(dataDir, instance string, profiles map[string]bool) []Resul
 		len(views), noun, float64(total)/(1024*1024), box.KeptRoot(dataDir))
 	status := Pass
 	if err != nil {
-		warns = append(warns, "the list may be incomplete: "+err.Error())
+		warns = append(warns, fmt.Sprintf("the list may be incomplete: %q", err.Error()))
 	}
 	if len(warns) > 0 {
 		status = Warn
