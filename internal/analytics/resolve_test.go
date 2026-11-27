@@ -6,9 +6,14 @@ import (
 	"testing"
 )
 
-// resolveOnce files one session with a Resolver of its own.
+// resolveOnce files one session with a Resolver of its own. Each known folder
+// is a host session's, so it is a candidate for a session of any runtime.
 func resolveOnce(d DimIn, env ResolveEnv, known []string) Resolved {
-	return NewResolver(env, known).Resolve(d)
+	kp := make([]KnownPath, len(known))
+	for i, k := range known {
+		kp[i] = KnownPath{Path: k, Runtime: "host"}
+	}
+	return NewResolver(env, kp).Resolve(d)
 }
 
 func TestResolve(t *testing.T) {

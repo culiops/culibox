@@ -59,24 +59,39 @@ const convRootPrefix = ".conversations/"
 // files, so the candidates are indexed once per pass and each session costs a
 // map lookup. Not safe for concurrent use: the pass is serialized.
 type Resolver struct {
-	env    ResolveEnv
-	legacy legacyIndex
+	env ResolveEnv
+	// all is every candidate, for box and unknown-runtime sessions. host is
+	// the candidates of host sessions and config only: a box writes its own
+	// cwd, and a folder a box planted must not decide where a host session's
+	// spend is filed (spec §7: a box can only mislabel its own).
+	all, host legacyIndex
 }
 
 // NewResolver indexes rule 5's candidates once: the known folders, then each
 // profile's default_cwd and clone_of, then the clone dirs, the order Resolve
 // offers them in. Each candidate is cleaned and slugged here and nowhere else.
-func NewResolver(env ResolveEnv, known []string) *Resolver {
-	z := &Resolver{env: env, legacy: legacyIndex{bySlug: map[string][]legacyCand{}, found: map[string][]string{}}}
+func NewResolver(env ResolveEnv, known []KnownPath) *Resolver {
+	z := &Resolver{env: env, all: newLegacyIndex(), host: newLegacyIndex()}
+	add := func(p string, kind candKind, forHost bool) {
+		if p == "" {
+			return
+		}
+		c := legacyCand{path: filepath.Clean(p), kind: kind}
+		k := foldKey(slugFn(c.path), env.FoldCase)
+		z.all.add(k, c)
+		if forHost {
+			z.host.add(k, c)
+		}
+	}
 	for _, k := range known { // may be box-supplied: cleaned, never resolved
-		z.legacy.add(k, candKnown, env.FoldCase)
+		add(k.Path, candKnown, k.Runtime == "host")
 	}
 	for _, p := range env.Profiles {
-		z.legacy.add(p.DefaultCwd, candCloneDir, env.FoldCase)
-		z.legacy.add(p.CloneOf, candCloneOf, env.FoldCase)
+		add(p.DefaultCwd, candCloneDir, true)
+		add(p.CloneOf, candCloneOf, true)
 	}
 	for _, cd := range env.CloneDirs {
-		z.legacy.add(cd, candCloneDir, env.FoldCase)
+		add(cd, candCloneDir, true)
 	}
 	return z
 }
@@ -212,14 +227,11 @@ func foldKey(s string, fold bool) string {
 	return s
 }
 
-func (ix *legacyIndex) add(p string, kind candKind, fold bool) {
-	if p == "" {
-		return
-	}
-	c := filepath.Clean(p)
-	k := foldKey(slugFn(c), fold)
-	ix.bySlug[k] = append(ix.bySlug[k], legacyCand{path: c, kind: kind})
+func newLegacyIndex() legacyIndex {
+	return legacyIndex{bySlug: map[string][]legacyCand{}, found: map[string][]string{}}
 }
+
+func (ix *legacyIndex) add(key string, c legacyCand) { ix.bySlug[key] = append(ix.bySlug[key], c) }
 
 // workspaces is the distinct workspaces the candidates under one slug key stand
 // for, the first spelling of each kept (case-folded on darwin). A known
@@ -253,10 +265,15 @@ func (ix *legacyIndex) workspaces(key string, env ResolveEnv) []string {
 }
 
 // resolveLegacy is rule 5: a session with no cwd is matched to a workspace by
-// its project slug against every folder the config and earlier sessions know.
-// Exactly one workspace matches, or the slug stays its name, unmatched.
+// its project slug against every folder the config and earlier sessions know
+// (for a host session: the folders of host sessions and the config). Exactly
+// one workspace matches, or the slug stays its name, unmatched.
 func (z *Resolver) resolveLegacy(d DimIn) Resolved {
-	if ws := z.legacy.workspaces(foldKey(d.Project, z.env.FoldCase), z.env); len(ws) == 1 {
+	ix := &z.all
+	if d.Runtime == "host" {
+		ix = &z.host
+	}
+	if ws := ix.workspaces(foldKey(d.Project, z.env.FoldCase), z.env); len(ws) == 1 {
 		return Resolved{Workspace: ws[0], Via: "legacy"}
 	}
 	return Resolved{Workspace: d.Project, Via: "legacy", Unmatched: true}

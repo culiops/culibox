@@ -1032,3 +1032,55 @@ func TestSeedLegacyDims(t *testing.T) {
 		t.Errorf("a parsed row was changed by seeding: %+v", d)
 	}
 }
+
+// After a data-root move (#255) a session has a path under the old root (no
+// known root: an empty runtime) that sorts before its path under the new one. The
+// later, classified path gives the seeded row its runtime; a row with a
+// runtime, or a parsed one, is never changed.
+func TestSeedLegacyDimsAfterARootMove(t *testing.T) {
+	const home, data = "/h/u", "/h/u/.local/share/culibox"
+	const old = "/h/u/.local/share/agent-box"
+	cl := func(p string) (RootInfo, string, bool) { return classifyPath(p, home, data) }
+	s := openTemp(t)
+	for _, p := range []string{
+		old + "/boxstate/B1/.claude/projects/-p/X1.jsonl",
+		data + "/boxstate/B1/.claude/projects/-p/X1.jsonl",
+		old + "/accounts/w/claude/projects/-p/A1.jsonl",
+		data + "/accounts/w/claude/projects/-p/A1.jsonl",
+		old + "/boxstate/B2/.claude/projects/-p/P1.jsonl",
+		data + "/boxstate/B2/.claude/projects/-p/P1.jsonl",
+		data + "/boxstate/B3/.claude/projects/-p/R1.jsonl",
+	} {
+		if err := s.Apply("", "p", p, RootInfo{}, newParsed(), true, 10, 10, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// P1 was parsed with runtime '' and R1 seeded host earlier: neither may move.
+	for _, q := range []string{
+		`INSERT INTO session_dim(session_id,project,cwd,runtime,parsed) VALUES('P1','-p','/real','',1)`,
+		`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES('R1','-p','host',0)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.SeedLegacyDims(cl); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		sid string
+		d   dimRow
+	}{
+		{"X1", dimRow{runtime: "box", rootKey: "B1"}},
+		{"A1", dimRow{runtime: "host", account: "w"}},
+		{"P1", dimRow{cwd: "/real", parsed: 1}},
+		{"R1", dimRow{runtime: "host"}},
+	} {
+		if d, ok := readDim(t, s, w.sid, "-p"); !ok || d != w.d {
+			t.Errorf("dim %s = %+v (ok=%v), want %+v", w.sid, d, ok, w.d)
+		}
+	}
+	if n, err := s.SeedLegacyDims(cl); err != nil || n != 0 {
+		t.Errorf("second seed = %d, %v; want 0", n, err)
+	}
+}

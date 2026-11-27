@@ -616,8 +616,10 @@ ON CONFLICT(day,session_id,project,kind,name,parent) DO UPDATE SET
 // with parsed = 0, derived from its ingest_state path alone: the project and
 // session id from the path's tail, runtime/account/key from the root classify
 // finds. A path under no known root still gets a row, with runtime ”. A row
-// that exists (parsed 0 or 1) is left as it is. It returns how many rows it
-// inserted; a second call inserts none.
+// that exists is left as it is, except that a parsed = 0 row with no runtime
+// takes the runtime, account and key of a later path of the same session under
+// a known root. It returns how many rows it inserted or so completed; a second
+// call changes none.
 func (s *Store) SeedLegacyDims(classify func(path string) (RootInfo, string, bool)) (int, error) {
 	rows, err := s.db.Query(`SELECT path FROM ingest_state ORDER BY path`)
 	if err != nil {
@@ -661,7 +663,12 @@ func (s *Store) SeedLegacyDims(classify func(path string) (RootInfo, string, boo
 		if !ok {
 			continue
 		}
-		res, err := tx.Exec(`INSERT OR IGNORE INTO session_dim(session_id,project,runtime,account,root_key,parsed) VALUES(?,?,?,?,?,0)`,
+		// A row seeded with no runtime (a path under no known root, e.g. the
+		// old root of a data-root move, which sorts first) takes the runtime of
+		// a later path of the same session that has one. Nothing else changes.
+		res, err := tx.Exec(`INSERT INTO session_dim(session_id,project,runtime,account,root_key,parsed) VALUES(?,?,?,?,?,0)
+ON CONFLICT(session_id,project) DO UPDATE SET runtime=excluded.runtime, account=excluded.account, root_key=excluded.root_key
+WHERE session_dim.parsed=0 AND session_dim.runtime='' AND excluded.runtime<>''`,
 			sid, project, info.Runtime, info.Account, info.Key)
 		if err != nil {
 			return 0, fmt.Errorf("seed dim: %w", err)
@@ -685,12 +692,14 @@ type DimRow struct {
 	DimIn
 }
 
-// PendingDims is every session with no workspace yet (an empty one) or one no
-// workspace explained (unmatched = 1). A resolved row is a snapshot and is never
-// listed again.
+// PendingDims is every session with no workspace yet (an empty one), one no
+// workspace explained (unmatched = 1), and one filed by its slug (via legacy)
+// whose transcript has since given it a cwd: a session first read before any
+// line with a cwd gets one more resolution, from the cwd, which never says
+// legacy. Any other resolved row is a snapshot and is never listed again.
 func (s *Store) PendingDims() ([]DimRow, error) {
 	rows, err := s.db.Query(`SELECT session_id,project,cwd,runtime,root_key FROM session_dim
-WHERE workspace='' OR unmatched=1 ORDER BY session_id,project`)
+WHERE workspace='' OR unmatched=1 OR (via='legacy' AND parsed=1 AND cwd<>'') ORDER BY session_id,project`)
 	if err != nil {
 		return nil, err
 	}
@@ -707,25 +716,31 @@ WHERE workspace='' OR unmatched=1 ORDER BY session_id,project`)
 	return out, rows.Err()
 }
 
+// KnownPath is a folder an earlier session points at and where that session
+// ran ("host", "box" or "").
+type KnownPath struct{ Path, Runtime string }
+
 // KnownPaths is every folder earlier sessions point at, for the slug match of a
 // session that carries no cwd: the workspace of each matched row and the cwd of
-// each parsed one. An unmatched row's workspace is only its slug, so it is left
-// out.
-func (s *Store) KnownPaths() ([]string, error) {
-	rows, err := s.db.Query(`SELECT workspace FROM session_dim WHERE workspace<>'' AND unmatched=0
+// each parsed one, each with the runtime of the row it came from (a folder that
+// rows of two runtimes point at is listed once per runtime). An unmatched row's
+// workspace is only its slug, so it is left out.
+func (s *Store) KnownPaths() ([]KnownPath, error) {
+	rows, err := s.db.Query(`SELECT workspace, runtime FROM session_dim WHERE workspace<>'' AND unmatched=0
 UNION
-SELECT cwd FROM session_dim WHERE cwd<>'' AND parsed=1`)
+SELECT cwd, runtime FROM session_dim WHERE cwd<>'' AND parsed=1
+ORDER BY 1, 2`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []KnownPath
 	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
+		var k KnownPath
+		if err := rows.Scan(&k.Path, &k.Runtime); err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, k)
 	}
 	return out, rows.Err()
 }

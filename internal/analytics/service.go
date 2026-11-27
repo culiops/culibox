@@ -126,7 +126,7 @@ func (s *Service) resolvePending() {
 	for _, r := range rows {
 		if err := s.store.SetResolved(r.SessionID, r.Project, z.Resolve(r.DimIn)); err != nil {
 			if failed == 0 {
-				log.Printf("analytics: filing session %s: %v", r.SessionID, err)
+				log.Printf("analytics: filing session %q: %v", r.SessionID, err)
 			}
 			failed++
 		}

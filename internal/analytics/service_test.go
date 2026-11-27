@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"sort"
 	"testing"
 	"time"
 )
@@ -253,6 +252,77 @@ func TestResolvePendingRetriesUnmatched(t *testing.T) {
 	}
 }
 
+// A main transcript first read before any line with a cwd is filed by its slug
+// (rule 5). Once its cwd is there, the session gets one more resolution, from
+// the cwd, and is then a snapshot like any other.
+func TestResolvePendingRefilesALegacyMatchOnceItsCwdArrives(t *testing.T) {
+	base := t.TempDir()
+	svc := boxSvc(t, base)
+	svc.SetResolveEnv(func() ResolveEnv {
+		return ResolveEnv{Profiles: []ProfileRef{{Name: "prd", DefaultCwd: "/clones/c", CloneOf: "/r1"}}}
+	})
+	path := filepath.Join(base, "boxstate", "b1", ".claude", "projects", "-clones-c", "S1.jsonl")
+	writeFile(t, path, `{"sessionId":"S1","type":"mode","timestamp":"2026-08-05T10:00:00Z"}`+"\n")
+	if _, err := svc.Ingest(); err != nil {
+		t.Fatal(err)
+	}
+	if d := readResolved(t, svc, "S1", "-clones-c"); d.workspace != "/r1" || d.via != "legacy" || d.profile != "" {
+		t.Fatalf("before its cwd = %+v, want /r1 by the slug, no profile", d)
+	}
+	appendFile(t, path, `{"sessionId":"S1","cwd":"/clones/c","timestamp":"2026-08-05T10:00:01Z","message":{"role":"assistant","model":"m1","usage":{"input_tokens":10,"output_tokens":2}}}`+"\n")
+	if _, err := svc.Ingest(); err != nil {
+		t.Fatal(err)
+	}
+	if d := readResolved(t, svc, "S1", "-clones-c"); d.workspace != "/r1" || d.via != "clone" || d.profile != "prd" || d.viaPath != "/clones/c" {
+		t.Fatalf("after its cwd = %+v, want /r1 via clone, profile prd", d)
+	}
+	if rows, err := svc.store.PendingDims(); err != nil || len(rows) != 0 {
+		t.Fatalf("pending after the refile = %+v, %v; want none", rows, err)
+	}
+}
+
+// Rule 5 for a host session takes its candidates from host sessions and the
+// config only: a folder a box wrote as its cwd can neither make a host session
+// ambiguous nor become its workspace. Box and unknown sessions keep every
+// candidate.
+func TestResolvePendingHostLegacyIgnoresBoxCandidates(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "a.db"), nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	for _, q := range []string{
+		`INSERT INTO session_dim(session_id,project,cwd,workspace,via,runtime,parsed) VALUES('HK','-work-app','/work/app','/work/app','host','host',1)`,
+		// Box cwds whose slugs equal the host legacy rows' slugs.
+		`INSERT INTO session_dim(session_id,project,cwd,workspace,via,runtime,parsed) VALUES('BP1','-x','/work-app','/work-app','inplace','box',1)`,
+		`INSERT INTO session_dim(session_id,project,cwd,workspace,via,runtime,parsed) VALUES('BP2','-y','/srv/real','/srv/real','inplace','box',1)`,
+		`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES('HL1','-work-app','host',0)`,
+		`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES('HL2','-srv-real','host',0)`,
+		`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES('BL','-srv-real','box',0)`,
+		`INSERT INTO session_dim(session_id,project,runtime,parsed) VALUES('UL','-work-app','',0)`,
+	} {
+		if _, err := svc.store.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.Ingest(); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		sid, project string
+		want         resolvedDim
+	}{
+		{"HL1", "-work-app", resolvedDim{workspace: "/work/app", via: "legacy"}},               // not ambiguous with the box's /work-app
+		{"HL2", "-srv-real", resolvedDim{workspace: "-srv-real", via: "legacy", unmatched: 1}}, // not filed under the box's /srv/real
+		{"BL", "-srv-real", resolvedDim{workspace: "/srv/real", via: "legacy"}},                // a box session still sees it
+		{"UL", "-work-app", resolvedDim{workspace: "-work-app", via: "legacy", unmatched: 1}},  // unknown: every candidate, as before
+	} {
+		if d := readResolved(t, svc, w.sid, w.project); d != w.want {
+			t.Errorf("%s = %+v, want %+v", w.sid, d, w.want)
+		}
+	}
+}
+
 // With no env func set the pass still resolves every pending row, from a zero env.
 func TestResolveNoEnvIsHarmless(t *testing.T) {
 	base := t.TempDir()
@@ -286,6 +356,8 @@ func TestKnownPaths(t *testing.T) {
 		`INSERT INTO session_dim(session_id,project,cwd,workspace,unmatched,parsed) VALUES('C','p','','-slug',1,0)`,
 		`INSERT INTO session_dim(session_id,project,cwd,workspace,unmatched,parsed) VALUES('D','p','','',0,0)`,
 		`INSERT INTO session_dim(session_id,project,cwd,workspace,unmatched,parsed) VALUES('E','p','/a','/a',0,1)`,
+		`INSERT INTO session_dim(session_id,project,cwd,workspace,unmatched,parsed,runtime) VALUES('F','p','/h','/h',0,1,'host')`,
+		`INSERT INTO session_dim(session_id,project,cwd,workspace,unmatched,parsed,runtime) VALUES('G','p','/a','/a',0,1,'box')`,
 	} {
 		if _, err := svc.store.db.Exec(q); err != nil {
 			t.Fatal(err)
@@ -295,8 +367,8 @@ func TestKnownPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sort.Strings(got)
-	if want := []string{"/a", "/a/wt", "/b"}; !slices.Equal(got, want) {
+	want := []KnownPath{{"/a", ""}, {"/a", "box"}, {"/a/wt", ""}, {"/b", ""}, {"/h", "host"}}
+	if !slices.Equal(got, want) {
 		t.Fatalf("KnownPaths = %v, want %v", got, want)
 	}
 }
