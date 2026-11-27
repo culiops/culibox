@@ -23,6 +23,8 @@ type Service struct {
 	roots    []string
 	interval time.Duration
 	boxState string     // <dataDir>/boxstate; roots inside it are walked through os.Root
+	home     string     // the user's home; its .claude/projects is the host root
+	seeded   bool       // SeedLegacyDims has run in this process
 	mu       sync.Mutex // held for the duration of one Ingest pass
 
 	// costs is the all-days cost per conversation id, rebuilt after every
@@ -83,6 +85,23 @@ func (s *Service) CostOf(sids []string) float64 {
 // plain walk. Call it before Start.
 func (s *Service) SetBoxState(dir string) { s.boxState = filepath.Clean(dir) }
 
+// SetHome names the user's home directory, so a transcript under
+// <home>/.claude/projects is known to be host usage. Call it before Start.
+func (s *Service) SetHome(home string) { s.home = filepath.Clean(home) }
+
+// classify says where a transcript path ran, from the root it sits under. The
+// data dir is the parent of the box-state dir. Pure string work, no stat.
+func (s *Service) classify(path string) (RootInfo, string, bool) {
+	home, dataDir := s.home, ""
+	if home == "." {
+		home = ""
+	}
+	if s.boxState != "" && s.boxState != "." {
+		dataDir = filepath.Dir(s.boxState)
+	}
+	return classifyPath(path, home, dataDir)
+}
+
 // inBoxState reports whether root lies strictly inside the box-controlled dir.
 func (s *Service) inBoxState(root string) bool {
 	if s.boxState == "" || s.boxState == "." {
@@ -102,6 +121,19 @@ func (s *Service) Ingest() (IngestStats, error) {
 		return IngestStats{}, ErrIngestBusy
 	}
 	defer s.mu.Unlock()
+	if !s.seeded {
+		// Once per process, before the first pass: sessions counted by an older
+		// version get their runtime from the path alone. It only inserts where
+		// no row exists, so doing it again would change nothing.
+		if n, err := s.store.SeedLegacyDims(s.classify); err != nil {
+			log.Printf("analytics: seeding session dims: %v", err)
+		} else {
+			s.seeded = true
+			if n > 0 {
+				log.Printf("analytics: seeded %d legacy session dims", n)
+			}
+		}
+	}
 	s.store.beginPass()
 	defer s.store.endPass()
 	var st IngestStats
@@ -115,10 +147,10 @@ func (s *Service) Ingest() (IngestStats, error) {
 		}
 		for _, root := range matches {
 			if s.inBoxState(root) {
-				ingestBoxRoot(s.store, s.boxState, root, &st)
+				ingestBoxRoot(s.store, s.boxState, root, s.classify, &st)
 				continue
 			}
-			ingestRoot(s.store, root, &st)
+			ingestRoot(s.store, root, s.classify, &st)
 		}
 	}
 	s.refreshCosts()

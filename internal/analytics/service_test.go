@@ -73,7 +73,7 @@ func TestCostMapAllDays(t *testing.T) {
 		sid, day string
 		cost     float64
 	}{{"A", "2026-08-01", 1.0}, {"A", "2026-08-09", 2.0}, {"B", "2026-08-09", 5.0}} {
-		if err := svc.store.Apply(d.sid, "proj", "/t/"+d.sid+d.day+".jsonl", costDelta(d.day, "m1", d.cost), 1, 1, int64(i), nil); err != nil {
+		if err := svc.store.Apply(d.sid, "proj", "/t/"+d.sid+d.day+".jsonl", RootInfo{}, costDelta(d.day, "m1", d.cost), 1, 1, int64(i), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -131,7 +131,7 @@ func TestRefreshCostsKeepsMapOnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.store.Apply("A", "proj", "/t/a.jsonl", costDelta("2026-08-01", "m1", 4.0), 1, 1, 1, nil); err != nil {
+	if err := svc.store.Apply("A", "proj", "/t/a.jsonl", RootInfo{}, costDelta("2026-08-01", "m1", 4.0), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	svc.refreshCosts()

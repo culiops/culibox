@@ -3,6 +3,7 @@ package analytics
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func boxSvc(t *testing.T, base string) *Service {
 
 func recorded(t *testing.T, svc *Service, path string) bool {
 	t.Helper()
-	_, off, _, _, err := svc.store.State(path)
+	_, off, _, _, _, err := svc.store.State(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,5 +208,56 @@ func TestIngestHostRootUnchangedWithBoxStateSet(t *testing.T) {
 	svc.SetBoxState(filepath.Join(base, "boxstate"))
 	if st, err := svc.Ingest(); err != nil || st.Files != 1 {
 		t.Fatalf("st=%+v err=%v", st, err)
+	}
+}
+
+// A legacy box file is backfilled through the same capped read as a new one: at
+// most boxMaxReadPerPass bytes of the already-counted prefix, never past a whole
+// line, and the file still ends up backfilled. No total moves.
+func TestBackfillBoxRootCapped(t *testing.T) {
+	old := boxMaxReadPerPass
+	defer func() { boxMaxReadPerPass = old }()
+
+	base := t.TempDir()
+	p := filepath.Join(base, "boxstate", "A", ".claude", "projects", "-p", "S1.jsonl")
+	writeFile(t, p, dl1+dl2+dl3)
+	svc := boxSvc(t, base)
+	if st, err := svc.Ingest(); err != nil || st.Errors != 0 {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+	wantCost := scalar(t, svc.store, `SELECT SUM(cost_usd) FROM session_rollup`)
+	full := scalar(t, svc.store, `SELECT SUM(cost_usd) FROM driver_rollup WHERE kind='skill'`)
+	if _, err := svc.store.db.Exec(`UPDATE ingest_state SET backfilled=0; DELETE FROM driver_rollup; DELETE FROM session_dim`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The window holds the first two lines and a few bytes of the third.
+	boxMaxReadPerPass = int64(len(dl1+dl2)) + 10
+	if st, err := svc.Ingest(); err != nil || st.Errors != 0 || st.BytesRead != 0 {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+	if !backfilledOf(t, svc.store, p) {
+		t.Error("a capped backfill left the file un-backfilled")
+	}
+	// Only the first two lines were read: dl3's skill cost is not in.
+	two, _, _, _, _, err := parseTranscript(strings.NewReader(dl1+dl2), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want float64
+	for k, v := range two.Drivers {
+		if k.Kind == "skill" {
+			want += v.Cost
+		}
+	}
+	got := scalar(t, svc.store, `SELECT SUM(cost_usd) FROM driver_rollup WHERE kind='skill'`)
+	if got != want || got >= full {
+		t.Errorf("skill driver cost %v, want the capped read's %v (full file %v)", got, want, full)
+	}
+	if d, ok := readDim(t, svc.store, "S1", "-p"); !ok || d.runtime != "box" || d.rootKey != "A" || d.parsed != 1 {
+		t.Errorf("dim = %+v (ok=%v), want box A parsed 1", d, ok)
+	}
+	if c := scalar(t, svc.store, `SELECT SUM(cost_usd) FROM session_rollup`); c != wantCost {
+		t.Errorf("session_rollup cost %v after the backfill, want %v", c, wantCost)
 	}
 }

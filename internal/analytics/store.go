@@ -35,6 +35,7 @@ type Store struct {
 type fileState struct {
 	size, offset int64
 	seen         string // space-joined message ids, as stored
+	backfilled   bool   // driver and dim data cover every byte before offset
 }
 
 const schema = `
@@ -333,8 +334,8 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 	}
 	var n int64
 	for _, p := range from {
-		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids)
-SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
+		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids,backfilled)
+SELECT ?,size,read_offset,mtime,seen_ids,backfilled FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
 		if err != nil {
 			return 0, fmt.Errorf("analytics: copy %q: %w", p, err)
 		}
@@ -362,29 +363,32 @@ const rewritePrefixQuery = `SELECT path FROM ingest_state WHERE path = ? OR (pat
 
 func underRoot(root string) []any { return []any{root, root + "/", root + "0"} }
 
-// State returns the recorded size and read offset for a transcript path, and the
+// State returns the recorded size and read offset for a transcript path, the
 // message ids already counted near that offset (oldest first), which let a
-// message split across two ingest batches be counted once.
-func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, err error) {
+// message split across two ingest batches be counted once, and whether the
+// session and cost-driver data already cover every byte before the offset
+// (backfilled; false for a file counted before schema v3).
+func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, backfilled bool, err error) {
 	s.stMu.Lock()
 	if s.states != nil {
 		st, found := s.states[path]
 		s.stMu.Unlock()
 		if !found {
-			return 0, 0, false, nil, nil
+			return 0, 0, false, nil, false, nil
 		}
-		return st.size, st.offset, true, strings.Fields(st.seen), nil
+		return st.size, st.offset, true, strings.Fields(st.seen), st.backfilled, nil
 	}
 	s.stMu.Unlock()
 	var ids string
-	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids FROM ingest_state WHERE path=?`, path)
-	switch err = row.Scan(&size, &offset, &ids); err {
+	var bf int
+	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids, backfilled FROM ingest_state WHERE path=?`, path)
+	switch err = row.Scan(&size, &offset, &ids, &bf); err {
 	case nil:
-		return size, offset, true, strings.Fields(ids), nil
+		return size, offset, true, strings.Fields(ids), bf != 0, nil
 	case sql.ErrNoRows:
-		return 0, 0, false, nil, nil
+		return 0, 0, false, nil, false, nil
 	default:
-		return 0, 0, false, nil, err
+		return 0, 0, false, nil, false, err
 	}
 }
 
@@ -392,7 +396,7 @@ func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, 
 // until endPass. Passes are serialized by Service.mu, so nothing else writes
 // ingest_state meanwhile. On error State keeps querying the DB.
 func (s *Store) beginPass() {
-	rows, err := s.db.Query(`SELECT path, size, read_offset, seen_ids FROM ingest_state`)
+	rows, err := s.db.Query(`SELECT path, size, read_offset, seen_ids, backfilled FROM ingest_state`)
 	if err != nil {
 		return
 	}
@@ -401,9 +405,11 @@ func (s *Store) beginPass() {
 	for rows.Next() {
 		var p string
 		var fs fileState
-		if rows.Scan(&p, &fs.size, &fs.offset, &fs.seen) != nil {
+		var bf int
+		if rows.Scan(&p, &fs.size, &fs.offset, &fs.seen, &bf) != nil {
 			return
 		}
+		fs.backfilled = bf != 0
 		m[p] = fs
 	}
 	if rows.Err() != nil {
@@ -423,7 +429,12 @@ func (s *Store) endPass() {
 // Apply writes one transcript batch's rollup deltas AND the new ingest_state row
 // in a single transaction, so a crash can never advance the offset without the
 // matching rows (or vice versa). session_id and project tag every delta row.
-func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64, seen []string) error {
+//
+// It also records the session's dims (folder, branch, where it ran: info comes
+// from the ingest root) and adds the cost-driver deltas. A read that started at
+// offset 0 parsed the whole file, drivers included, so the row is marked
+// backfilled; any other row keeps the mark it has.
+func (s *Store) Apply(sessionID, project, path string, info RootInfo, p *Parsed, size, offset, mtime int64, seen []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -459,11 +470,28 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 		}
 	}
 
+	if err := applyDimAndDrivers(tx, sessionID, project, info, p); err != nil {
+		return err
+	}
+
+	// Where the read started decides the mark: from 0 (or a new row) the parse
+	// saw every byte, so drivers are complete; else keep what the row has.
+	backfilled := true
+	var oldOff int64
+	var oldBF int
+	switch err := tx.QueryRow(`SELECT read_offset, backfilled FROM ingest_state WHERE path=?`, path).Scan(&oldOff, &oldBF); err {
+	case nil:
+		backfilled = oldOff == 0 || oldBF != 0
+	case sql.ErrNoRows:
+	default:
+		return fmt.Errorf("state read: %w", err)
+	}
+
 	const upsertState = `
-INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES(?,?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids`
+INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids,backfilled) VALUES(?,?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids, backfilled=excluded.backfilled`
 	// seen ids are whitespace-free by construction (safeMsgID), so Join/Fields round-trips.
-	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " ")); err != nil {
+	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " "), boolInt(backfilled)); err != nil {
 		return fmt.Errorf("state upsert: %w", err)
 	}
 
@@ -472,10 +500,149 @@ ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_of
 	}
 	s.stMu.Lock()
 	if s.states != nil {
-		s.states[path] = fileState{size: size, offset: offset, seen: strings.Join(seen, " ")}
+		s.states[path] = fileState{size: size, offset: offset, seen: strings.Join(seen, " "), backfilled: backfilled}
 	}
 	s.stMu.Unlock()
 	return nil
+}
+
+// ApplyBackfill adds the session dims and cost-driver deltas of a file's bytes
+// that were counted before schema v3 (parsed with a fresh dedupe by the caller)
+// and marks the file backfilled, in one transaction. It never writes
+// session_rollup or attribution_rollup, and never moves the read offset, so it
+// cannot change a total.
+func (s *Store) ApplyBackfill(sessionID, project, path string, info RootInfo, p *Parsed) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if err := applyDimAndDrivers(tx, sessionID, project, info, p); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE ingest_state SET backfilled=1 WHERE path=?`, path); err != nil {
+		return fmt.Errorf("backfill mark: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.stMu.Lock()
+	if s.states != nil {
+		if st, ok := s.states[path]; ok {
+			st.backfilled = true
+			s.states[path] = st
+		}
+	}
+	s.stMu.Unlock()
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// applyDimAndDrivers upserts a session's dims and adds its driver deltas. An
+// empty session id (a clamp of a shrunken file, which parsed nothing) writes
+// nothing. cwd keeps the first value, branch is replaced only by a non-empty
+// one, and runtime, account and root_key follow the ingest root. A legacy
+// parsed = 0 row becomes parsed = 1. workspace, unmatched, profile, via and
+// via_path are resolved elsewhere and never touched here.
+func applyDimAndDrivers(tx *sql.Tx, sessionID, project string, info RootInfo, p *Parsed) error {
+	if sessionID == "" {
+		return nil
+	}
+	const upsertDim = `
+INSERT INTO session_dim(session_id,project,cwd,branch,runtime,account,root_key,parsed)
+VALUES(?,?,?,?,?,?,?,1)
+ON CONFLICT(session_id,project) DO UPDATE SET
+  parsed=1,
+  cwd=CASE WHEN session_dim.cwd='' THEN excluded.cwd ELSE session_dim.cwd END,
+  branch=CASE WHEN excluded.branch<>'' THEN excluded.branch ELSE session_dim.branch END,
+  runtime=excluded.runtime, account=excluded.account, root_key=excluded.root_key`
+	if _, err := tx.Exec(upsertDim, sessionID, project, p.Cwd, p.Branch, info.Runtime, info.Account, info.Key); err != nil {
+		return fmt.Errorf("dim upsert: %w", err)
+	}
+	const upsertDriver = `
+INSERT INTO driver_rollup(day,session_id,project,kind,name,parent,cost_usd,tokens)
+VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(day,session_id,project,kind,name,parent) DO UPDATE SET
+  cost_usd=cost_usd+excluded.cost_usd,
+  tokens=tokens+excluded.tokens`
+	for k, v := range p.Drivers {
+		if _, err := tx.Exec(upsertDriver, k.Day, sessionID, project, k.Kind, k.Name, k.Parent, v.Cost, v.Tokens); err != nil {
+			return fmt.Errorf("driver upsert: %w", err)
+		}
+	}
+	return nil
+}
+
+// SeedLegacyDims gives every session counted before schema v3 a session_dim row
+// with parsed = 0, derived from its ingest_state path alone: the project and
+// session id from the path's tail, runtime/account/key from the root classify
+// finds. A path under no known root still gets a row, with runtime ”. A row
+// that exists (parsed 0 or 1) is left as it is. It returns how many rows it
+// inserted; a second call inserts none.
+func (s *Store) SeedLegacyDims(classify func(path string) (RootInfo, string, bool)) (int, error) {
+	rows, err := s.db.Query(`SELECT path FROM ingest_state ORDER BY path`)
+	if err != nil {
+		return 0, err
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	n := 0
+	for _, path := range paths {
+		var info RootInfo
+		rel := ""
+		if classify != nil {
+			var ok bool
+			if info, rel, ok = classify(path); !ok {
+				info, rel = RootInfo{}, ""
+			}
+		}
+		if rel == "" {
+			rel = tailRel(path)
+		}
+		sid, project, ok := legacyKeyFromRel(rel)
+		if !ok {
+			continue
+		}
+		res, err := tx.Exec(`INSERT OR IGNORE INTO session_dim(session_id,project,runtime,account,root_key,parsed) VALUES(?,?,?,?,?,0)`,
+			sid, project, info.Runtime, info.Account, info.Key)
+		if err != nil {
+			return 0, fmt.Errorf("seed dim: %w", err)
+		}
+		k, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		n += int(k)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // --- query types --------------------------------------------------------------

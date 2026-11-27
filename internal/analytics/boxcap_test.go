@@ -27,7 +27,7 @@ func TestIngestBoxPerPassCap(t *testing.T) {
 	if st.BytesRead != int64(len(line1+line2)) {
 		t.Fatalf("pass 1 read %d bytes, want %d (the cap bounds the window)", st.BytesRead, len(line1+line2))
 	}
-	_, off, _, _, _ := svc.store.State(p)
+	_, off, _, _, _, _ := svc.store.State(p)
 	if off != int64(len(line1+line2)) {
 		t.Fatalf("offset after pass 1 = %d, want %d", off, len(line1+line2))
 	}
@@ -40,7 +40,7 @@ func TestIngestBoxPerPassCap(t *testing.T) {
 	if st.BytesRead != int64(len(line3)) {
 		t.Fatalf("pass 2 read %d bytes, want %d", st.BytesRead, len(line3))
 	}
-	_, off, _, _, _ = svc.store.State(p)
+	_, off, _, _, _, _ = svc.store.State(p)
 	if off != int64(len(line1+line2+line3)) {
 		t.Fatalf("offset after pass 2 = %d", off)
 	}
@@ -55,7 +55,7 @@ func TestIngestBoxPerPassCap(t *testing.T) {
 	writeFile(t, hp, line1+line2+line3)
 	hs := openTemp(t)
 	var hst IngestStats
-	ingestRoot(hs, root, &hst)
+	ingestRoot(hs, root, nil, &hst)
 	if hst.BytesRead != int64(len(line1+line2+line3)) {
 		t.Fatalf("host root was capped: %+v", hst)
 	}

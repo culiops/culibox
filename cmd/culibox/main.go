@@ -1087,6 +1087,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// Everything under boxstate/ is written by a contained agent: its
 			// transcript roots are walked through os.Root, never followed out.
 			svc.SetBoxState(filepath.Join(dataDir, "boxstate"))
+			svc.SetHome(home)
 			analyticsSvc = svc
 			srv.Analytics = svc
 			// Only a live service: a nil *Service must never reach the manager.
