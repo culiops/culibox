@@ -1058,17 +1058,17 @@ test("every class the Audit markup and script use has a rule or is a named hook"
 const ANP = "#page-host > #analytics-modal.as-page";
 const analyticsTree = () => kids(parseHtml(dialogHtml("analytics-modal")))[0];
 
-// The phone's markup of #analytics-modal, from the title to the end: the page's nodes are added in front of it and none of
-// it is edited, so the modal the phone opens is the same bytes as on main c47442b.
+// The phone's markup of #analytics-modal, from the title to the end: the page's nodes are added in front of it. Its tab strip is
+// the five views (Task 12); the rest is the bytes of main c47442b.
 const PHONE_MARKUP = [
   "    <h2 class=\"pane-head dlg-title\">Analytics</h2>",
   "    <div class=\"dlg-head\">",
   "      <div class=\"dlg-tabs\" id=\"an-tabs\">",
-  "        <button type=\"button\" data-antab=\"overview\" class=\"act\">Overview · Cost</button>",
-  "        <button type=\"button\" data-antab=\"models\">Models</button>",
-  "        <button type=\"button\" data-antab=\"projects\">Projects</button>",
+  "        <button type=\"button\" data-antab=\"overview\" class=\"act\">Overview</button>",
+  "        <button type=\"button\" data-antab=\"workspaces\">Workspaces</button>",
+  "        <button type=\"button\" data-antab=\"drivers\">Drivers</button>",
   "        <button type=\"button\" data-antab=\"sessions\">Sessions</button>",
-  "        <button type=\"button\" data-antab=\"tools\">Tools</button>",
+  "        <button type=\"button\" data-antab=\"models\">Models</button>",
   "      </div>",
   "      <span class=\"spacer\"></span>",
   "      <span id=\"analytics-range\" class=\"an-caption\" style=\"margin:0\"></span>",
@@ -1144,7 +1144,7 @@ test("Analytics and Audit share one head, toolbar and KPI component", () => {
 test("the Analytics markup: the page's nodes in front, the phone's modal after them byte for byte", () => {
   const html = dialogHtml("analytics-modal");
   assert.ok(html.startsWith('<dialog id="analytics-modal" box-="square" shear-="top">\n'), "the opening tag is untouched");
-  assert.ok(html.endsWith(PHONE_MARKUP), "everything the phone shows is the markup of main c47442b");
+  assert.ok(html.endsWith(PHONE_MARKUP), "everything the phone shows is the markup of main c47442b, its tabs apart");
   const an = analyticsTree();
   assert.deepStrictEqual(kids(an).map(sig), ["div.page-head.an-phead", "div.toolbar.an-ptools", "div.toolbar.an-pcustom", "h2.pane-head.dlg-title", "div.dlg-head", "div.dlg-body"]);
   const [head, tools, custom] = kids(an);
@@ -1520,24 +1520,27 @@ test("the page's body holds no controls and no window line: the head carries the
 const serialize = (n) => (n instanceof TextNode ? n.text : [n.tag, n.className, n.attrs.type || n.type || "", n.title || "", n.style.width || "", n.value || "", ...n.children.map(serialize)]);
 const CMP_TITLE = "Compare this window to the equal-length window immediately before it";
 const chip = (cls, text) => ["button", cls, "button", "", "", "", text];
-// The control strip anControls(false) drew on main c47442b for three states of AN, taken from that file (pinned here).
+// The Where select (Task 12), on a line of its own at the end of the strip: with no options listed it offers All.
+const WHERE_ROW = ["div", "an-pwhere", "", "", "", "", ["span", "an-clabel", "", "", "", "", "Where"], ["select", "", "", "", "", "", ["option", "", "", "", "", "", "All"]]];
+// The control strip anControls(false) drew on main c47442b for three states of AN, taken from that file (pinned here), and now the
+// Where line after it.
 const PHONE_STRIP = {
   default: ["div", "an-controls", "", "", "", "",
     ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip", "7d"), chip("an-chip on", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip", "Custom…"),
     ["span", "", "", "", "12px", ""],
-    ["button", "an-chip", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+    ["button", "an-chip", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"], WHERE_ROW],
   custom: ["div", "an-controls", "", "", "", "",
     ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip", "7d"), chip("an-chip", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip on", "Custom…"),
     ["input", "an-date", "date", "", "", "2026-10-01"], ["span", "an-clabel", "", "", "", "", "→"], ["input", "an-date", "date", "", "", "2026-10-30"], chip("an-chip", "Apply"),
     ["span", "", "", "", "12px", ""],
-    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"], WHERE_ROW],
   seven: ["div", "an-controls", "", "", "", "",
     ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip on", "7d"), chip("an-chip", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip", "Custom…"),
     ["span", "", "", "", "12px", ""],
-    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"], WHERE_ROW],
 };
 
-test("the phone's control strip, anControls(false), is the strip main drew: classes, copy, order", () => {
+test("the phone's control strip, anControls(false), is the strip main drew with the Where line added: classes, copy, order", () => {
   const { run } = analyticsEnv();
   const strip = (code) => serialize(run(code));
   assert.deepStrictEqual(strip('AN.from = "2026-10-01"; AN.to = "2026-10-30"; AN.range = "30d"; AN.compare = false; AN.customOpen = false; anControls(false)'), PHONE_STRIP.default);
@@ -1570,7 +1573,7 @@ test("the phone's chips, tabs and Re-scan still work on the modal", async () => 
   // The tab strip: .act follows AN.tab, the page's seg is left alone.
   run('anSetTab("models");');
   assert.strictEqual(run("AN.tab"), "models");
-  assert.deepStrictEqual(el("an-tabs").elements.map((n) => n.cls.includes("act")), [false, true, false, false, false]);
+  assert.deepStrictEqual(el("an-tabs").elements.map((n) => n.cls.includes("act")), [false, false, false, false, true]);
   assert.deepStrictEqual(pressedOf(el("an-pview")), ["true", "false", "false", "false", "false"], "the hidden page seg keeps its markup on the phone");
   // Re-scan: disabled and "Scanning…" while it runs, the same words after.
   const btn = el("analytics-refresh");
@@ -1794,7 +1797,7 @@ function loadWindow(env, over = {}) {
       byProject: [...byProj.values()].sort((a, b) => b.cost - a.cost).slice(0, 14),
       sessions: sess, topSessions: topSessionsByCost(sess, 18), sessionCount: distinctSessions(sess),
       workspaces: anWorkspaceRows(FX.workspaces), modelMedians: anModelMedians(FX.modelCosts), median: anSessionMedian(sess),
-      drivers: anDriverCards(null), cmp: null,
+      drivers: anDriverCards(FX.drivers || null), driverTiles: anDriverTiles(FX.drivers || null), cmp: null,
     };
     AN.data.cache = anCacheOfModels(AN.data.byModel);
     AN.data.models = AN.data.costByDay.models;
@@ -1809,7 +1812,6 @@ function view(env, fn) {
   return root;
 }
 const tilesOf = (row) => row.elements.map((t) => ({ value: t.elements[0].textContent, label: t.elements[1].textContent }));
-const THS = ["Session", "Day", "Project", "Model", "Tokens", "Prompts", "Cost"];
 // the table of a card (a tablewrap holds it), as { head: [th…], rows: [[td…]…] }
 function tableOf(card) {
   const wrap = card.elements.find((n) => n.cls.includes("an-tablewrap"));
@@ -1893,7 +1895,7 @@ test("overview: only the top 8 workspaces are drawn, dearest first", () => {
   assert.deepStrictEqual(names, ["w10", "w9", "w8", "w7", "w6", "w5", "w4", "w3"]);
 });
 
-test("overview KPI labels on the phone are unchanged", () => {
+test("overview KPI tiles on the phone are the page's four, in the phone's own tile", () => {
   const env = analyticsEnv();
   env.page(false);
   loadWindow(env);
@@ -1902,11 +1904,10 @@ test("overview KPI labels on the phone are unchanged", () => {
   const grid = root.elements[0];
   assert.strictEqual(grid.className, "an-kpis");
   assert.deepStrictEqual(grid.elements.map((t) => [t.className, t.elements.map((c) => [c.className, c.textContent])]), [
-    ["an-kpi", [["v cost", "$4.3k"], ["l", "total cost"]]],
-    ["an-kpi", [["v", "10.4B"], ["l", "tokens"]]],
-    ["an-kpi", [["v", "1420"], ["l", "sessions"]]],
-    ["an-kpi", [["v", "3994"], ["l", "prompts"]]],
-    ["an-kpi", [["v cost", "$3.03"], ["l", "avg / session"]]],
+    ["an-kpi", [["v cost", "$4.3k"], ["l", "API value"]]],
+    ["an-kpi", [["v", "1,420"], ["l", "Sessions"]]],
+    ["an-kpi", [["v cost", "$80.07"], ["l", "Median per session"]]],
+    ["an-kpi", [["v", "59.8%"], ["l", "Cache hit"]]],
   ]);
 });
 
@@ -1914,14 +1915,14 @@ test("F01 pin: a numeric column's header and cells are .num together, on the pho
   for (const page of [false, true]) {
     const env = analyticsEnv();
     env.page(page);
-    const flags = (cols, firstNum) => [...env.run(`anHead(${JSON.stringify(cols)}, ${firstNum}).children.map((th) => th.className === "num")`)];
-    assert.deepStrictEqual(flags(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), [false, false, false, false, true, true, true], "th.num on exactly the last three");
-    assert.deepStrictEqual(flags(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1), [false, true, true, true, true, true, true]);
-    assert.deepStrictEqual(flags(["project", "cost", "tokens", "prompts"], 1), [false, true, true, true]);
+    const flags = (cols, firstNum) => [...env.run(`anColHead(${JSON.stringify(cols)}, ${firstNum}).children.map((th) => th.className === "num")`)];
+    assert.deepStrictEqual(flags(["a", "b", "c", "d"], 2), [false, false, true, true], "th.num from firstNum on");
+    assert.deepStrictEqual(flags(env.run("AN_COPY.sessions.columns"), 6), [false, false, false, false, false, false, true, true], "th.num on exactly the last two");
+    assert.deepStrictEqual(flags(env.run("AN_COPY.models.columns"), 1), [false, true, true, true, true, true, true, true]);
     // Every table the views draw: a column's th carries num exactly when its cells do.
     loadWindow(env);
     const numCls = (n) => n.cls.includes("num");
-    for (const fn of ["anModels", "anProjects", "anSessions"]) {
+    for (const fn of ["anModels", "anWorkspaces", "anSessions"]) {
       const tables = [];
       const walk = (n) => { if (n.tag === "table") tables.push(n); n.elements.forEach(walk); };
       walk(view(env, fn));
@@ -1943,15 +1944,14 @@ test("F01 pin: a numeric column's header and cells are .num together, on the pho
 });
 
 test("page tables use the kit head", () => {
-  // JS: the header labels are capitalised on the page, and only there.
-  const page = analyticsEnv();
-  page.page(true);
-  const ths = (env, cols, n) => [...env.run(`anHead(${JSON.stringify(cols)}, ${n}).children.map((th) => th.textContent)`)];
-  assert.deepStrictEqual(ths(page, ["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), THS);
-  assert.deepStrictEqual(ths(page, ["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1), ["Model", "Cost", "% cost", "Tokens", "Prompts", "Out/prompt", "Cache-read"]);
-  const phone = analyticsEnv();
-  phone.page(false);
-  assert.deepStrictEqual(ths(phone, ["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), THS.map((t) => t.toLowerCase()), "the phone stays lowercase");
+  // JS: the header labels are AN_COPY's words on both skins (the phone's stylesheet sets them in capitals).
+  const ths = (env, cols, n) => [...env.run(`anColHead(${JSON.stringify(cols)}, ${n}).children.map((th) => th.textContent)`)];
+  for (const on of [true, false]) {
+    const env = analyticsEnv();
+    env.page(on);
+    assert.deepStrictEqual(ths(env, [...env.run("AN_COPY.sessions.columns")], 6), ["Session", "Last day", "Workspace", "Where", "Branch", "Model", "Prompts", "API value"]);
+    assert.deepStrictEqual(ths(env, [...env.run("AN_COPY.models.columns")], 1), ["Model", "API value", "% of value", "Sessions", "Median / session", "Per prompt", "Cache hit", "Tokens"]);
+  }
   // CSS: §C9 on .an-table. 12px / 500 / muted / sentence case, 32px rows, a hairline under each.
   const th = decls(ANP + " .an-table th");
   assert.strictEqual(th.get("font-size"), "var(--t-sm)");
@@ -2194,7 +2194,7 @@ test("with Compare on, a stale load's previous-window answer does not land on th
   assert.strictEqual(run("JSON.stringify(AN.data.cmp)"), boxCmp, "the stale host comparison was dropped");
 });
 
-test("Sessions on the phone: lowercase heads, the Session shape section is gone", () => {
+test("Sessions on the phone: one section with its hint, the page's heads; the Session shape section is gone", () => {
   const env = analyticsEnv();
   env.page(false);
   loadWindow(env);
@@ -2206,7 +2206,7 @@ test("Sessions on the phone: lowercase heads, the Session shape section is gone"
   assert.deepStrictEqual(text("an-section").map((t) => t.slice(0, 20)), ["Top sessions by cost"]);
   assert.ok(text("an-hint").includes("Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts."));
   assert.deepStrictEqual(text("an-fleet"), [], "the Session shape and Fleet at a glance boxes are gone");
-  assert.deepStrictEqual(all.filter((n) => n.tag === "th").map((n) => n.textContent), ["session", "day", "project", "model", "tokens", "prompts", "cost"]);
+  assert.deepStrictEqual(all.filter((n) => n.tag === "th").map((n) => n.textContent), ["Session", "Last day", "Workspace", "Where", "Branch", "Model", "Prompts", "API value"]);
   assert.ok(!all.some((n) => /kpi-row|an-card|an-psec|an-split|section-title/.test(n.className)), "none of the page's nodes");
 });
 
@@ -2298,8 +2298,8 @@ test("Models, Workspaces and Cost drivers on the page: cards and kit tables", ()
   assert.deepStrictEqual(m.rows.map((r) => r[7].className), ["num sub", "num sub"], "Tokens is muted");
   assert.ok(models.textContent.endsWith("their tokens are counted, their value is not."), "the footnote says what other (unpriced) is");
 
-  // Workspaces (the page's anProjects slot): three tiles, one card holding the table, the footnote under it (its figures: analytics.test.js).
-  const workspaces = view(env, "anProjects");
+  // Workspaces (the page's anWorkspaces slot): three tiles, one card holding the table, the footnote under it (its figures: analytics.test.js).
+  const workspaces = view(env, "anWorkspaces");
   assert.deepStrictEqual(workspaces.elements.map((n) => n.tag + "." + n.className), ["div.kpi-row", "section.an-psec"]);
   assert.deepStrictEqual(workspaces.elements[1].elements.map((n) => n.tag + "." + n.className), ["div.an-card", "p.an-foot t-sm muted"]);
   const w = tableOf(cards(workspaces.elements[1])[0]);
@@ -2307,7 +2307,7 @@ test("Models, Workspaces and Cost drivers on the page: cards and kit tables", ()
   assert.deepStrictEqual(w.head.map((t) => t.className), ["", "num", "num", "", "", "num", "num"]);
 
   // Cost drivers: the old kinds are gone; with no driver data the page says why and draws nothing else.
-  const drivers = view(env, "anTools");
+  const drivers = view(env, "anDrivers");
   assert.deepStrictEqual(drivers.elements.map((n) => n.tag + "." + n.className), ["p.an-empty"]);
   assert.strictEqual(drivers.textContent, "No cost-driver data in this window: these sessions' transcripts are no longer on disk.");
 });
@@ -2318,7 +2318,7 @@ test("no off-scale analytics text on desktop", () => {
   const app = parseRules(APP_CSS);
   const raw = (sel) => app.filter((r) => parts(r.selector).includes(sel)).map((r) => r.decls.get("font-size")).filter(Boolean).pop();
   const STEP = /^var\(--t-(?:xs|sm|md|lg|xl|kpi)\)$/;
-  for (const sel of [".an-empty", ".an-hint", ".an-badge", ".an-bar .cap", ".an-hbar", ".an-legend", ".an-kdelta", ".an-divrow", ".an-mixlabel"]) {
+  for (const sel of [".an-empty", ".an-kdelta"]) {
     assert.match(raw(sel) || "", /px$/, sel + " is a px size on the phone (so the page must answer it)");
     const size = decls(ANP + " " + sel).get("font-size");
     assert.match(size || "", STEP, sel + " has a kit size under the page");
@@ -2326,7 +2326,7 @@ test("no off-scale analytics text on desktop", () => {
   assert.strictEqual(decls(ANP + " .an-empty").get("line-height"), "var(--lh-md)");
   // Every analytics rule the page wrote in this task sets a size only through a token (desktop-type.test.js covers the whole file).
   for (const r of RULES) {
-    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:card|psec|split|band|table|empty|hint|badge|bar)|\.kpi/.test(s))) continue;
+    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:card|psec|table|empty)|\.kpi/.test(s))) continue;
     for (const [k, v] of r.decls) if (k === "font-size") assert.match(v, STEP, r.selector);
   }
 });
@@ -2352,7 +2352,7 @@ test("every class the Analytics views build has a rule or is a named hook", () =
     AN.data.workspaces = anWorkspaceRows({ workspaces: [{ workspace: "/w", name: "w", unmatched: true, costUsd: 10, sessions: 2, hostCost: 5, boxCost: 5, byModel: { m: 10 }, cacheRead: 0, cacheDenom: 0, sessionCosts: [5, 5],
       children: [kid("host", "host", "/w"), kid("box · p", "box", "/c")] }] });
   })();`);
-  for (const fn of ["anOverview", "anModels", "anProjects", "anSessions", "anTools"]) walk(view(env, fn));
+  for (const fn of ["anOverview", "anModels", "anWorkspaces", "anSessions", "anDrivers"]) walk(view(env, fn));
   const kroot = new El("div");
   env.ctx.ROOT = kroot;
   env.run("ROOT.appendChild(anWsChildRow(anWorkspaceRowModel(AN.data.workspaces[0]).children[1]));");
@@ -2388,46 +2388,18 @@ test("Model cells are nowrap cells: only Project wraps, so Model keeps its word 
 
 // --- the page's views and the phone's share their data preparation ------------------------------------------------
 
-test("the page and the phone say the same thing: figures, colours, caps and words come from one preparation", () => {
-  const collect = (root) => {
-    const out = { titles: [], hints: [], cardTitles: [], bars: [], tables: [] };
-    const walk = (n) => {
-      const c = n.cls;
-      if (n.tag === "h3" && !c.length && n.parent && n.parent.cls.includes("an-section")) out.titles.push(n.textContent);
-      if (n.tag === "h2" && c.includes("section-title")) out.titles.push(n.textContent);
-      if (c.includes("an-hint")) out.hints.push(n.textContent);
-      if (n.tag === "span" && c.includes("muted") && n.parent && n.parent.cls.includes("an-psec-head")) out.hints.push(n.textContent);
-      if (n.tag === "h4" || (n.tag === "h3" && c.includes("w-600"))) out.cardTitles.push(n.textContent);
-      if (c.includes("an-hbar")) out.bars.push([n.elements[0].textContent, n.elements[2].textContent, n.elements[1].elements.map((f) => [f.style.width, f.style.background])]);
-      if (n.tag === "table") out.tables.push(n.elements.map((r) => r.elements.map((x) => x.textContent)));
-      n.elements.forEach(walk);
-    };
-    walk(root);
-    return out;
-  };
-  const both = (fn, over) => {
-    const phone = analyticsEnv(); phone.page(false); loadWindow(phone, over);
-    const page = analyticsEnv(); page.page(true); loadWindow(page, over);
-    return [collect(view(phone, fn)), collect(view(page, fn))];
-  };
-  const lower = (rows) => rows.map((r, i) => (i ? r : r.map((t) => t.toLowerCase())));
-  // Sessions and Models: the page's tables have the columns of §3.4 and §3.5 (the phone moves to them in its own task), so the
-  // two skins are compared on what they share: the same rows, in the same order, under the same ids.
-  const [ph, pg] = both("anSessions");
-  assert.ok(ph.titles.includes("Top sessions by cost"));
-  assert.deepStrictEqual(pg.tables[0].slice(1).map((r) => r[0]), ph.tables[0].slice(1).map((r) => r[0]));
-  const [phm, pgm] = both("anModels");
-  assert.deepStrictEqual(pgm.tables[0].slice(1).map((r) => r[0]), phm.tables[0].slice(1).map((r) => r[0]));
-  // No driver data: the same sentence.
-  const [pn, gn] = both("anTools");
-  assert.deepStrictEqual(gn.hints, pn.hints);
+test("the page and the phone say the same thing: the words are written once in analytics.js and both skins read them", () => {
+  // No driver data: the same sentence on both skins (the phone's section title aside).
+  const phone = phoneView("anDrivers").root, page = pageView("anDrivers").root;
+  assert.strictEqual(phone.textContent, "Cost drivers" + page.textContent);
+  // The tables themselves, cell for cell, are pinned beside this (phone Workspaces, Sessions and Models).
 
   // One definition each: the words of the views are written once in analytics.js.
   const src = stripAnalytics(read("analytics.js"));
   assert.ok(src.includes("function anModelsPage") && src.includes("function anDriversPage"), "the strip kept the whole file");
   const once = (lit) => assert.strictEqual(src.split(lit).length - 1, 1, lit + " is written once");
-  for (const lit of ["No cost-driver data in this window", "Per-model breakdown", "Cost, volume & efficiency",
-    "Bar split shows the model mix", "\"model\", \"cost\", \"% cost\"", "\"project\", \"cost\", \"tokens\", \"prompts\"", "\"session\", \"day\", \"project\", \"model\""]) once(lit);
+  for (const lit of ["No cost-driver data in this window", "Per-model breakdown", "Cost, volume & efficiency", "Cost by workspace",
+    "A box clone counts toward the repo", "A turn counts toward the subagent", "Based on {N}%", "\"Session\", \"Last day\""]) once(lit);
 });
 
 // =====================================================================================================================
@@ -2797,7 +2769,7 @@ test("the phone keeps its boxed disclaimer, its legend under the chart and its s
   walk(root);
   assert.strictEqual(all.filter((n) => n.cls.includes("an-cmpnote")).length, 1);
   assert.match(all.find((n) => n.cls.includes("an-cmpnote")).innerHTML, /^Descriptive only\. Cross-model differences reflect the <b>task<\/b>/);
-  assert.ok(root.textContent.includes("Where the money goes") && root.textContent.includes("Cost by project (top)"));
+  assert.ok(root.textContent.includes("Where the money goes") && root.textContent.includes("Cost by workspace (top 8)") && !root.textContent.includes("Cost by project"));
   assert.ok(all.some((n) => n.cls.includes("an-legend")) && !all.some((n) => /an-plegend|an-foot|an-hrow|an-pgrid|an-card/.test(n.className)), "none of the page's nodes");
 });
 
@@ -2904,7 +2876,7 @@ test("the Overview's rows, legend and footnote are drawn by the CSS the brief gi
   // and none of them uses color-mix, nesting or @layer.
   const STEP = /^var\(--t-(?:xs|sm|md|lg|xl|kpi)\)$/;
   for (const r of RULES) {
-    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:hrow|hrows|hv|plegend|sw|foot|chartbody|axis|hbar|legend|kdelta|divrow|mixlabel)/.test(s))) continue;
+    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:hrow|hrows|hv|plegend|sw|foot|chartbody|axis|kdelta)/.test(s))) continue;
     for (const [k, v] of r.decls) {
       if (k === "font-size") assert.match(v, STEP, r.selector);
       assert.ok(!/color-mix/.test(v), r.selector + " uses color-mix");
@@ -3129,23 +3101,27 @@ test("a saved projects or tools tab opens Workspaces or Cost drivers; the phone'
   run("anSetTab('projects')");
   assert.strictEqual(run("AN.tab"), "workspaces");
   assert.deepStrictEqual(pressedOf(el("an-pview")), ["false", "true", "false", "false", "false"]);
-  assert.deepStrictEqual(el("an-tabs").elements.map((t) => t.cls.includes("act")), [false, false, true, false, false], "the phone's Projects item is lit for Workspaces");
+  assert.deepStrictEqual(el("an-tabs").elements.map((t) => t.cls.includes("act")), [false, true, false, false, false], "the phone's Workspaces item is lit");
   run("anSetTab('tools')");
   assert.strictEqual(run("AN.tab"), "drivers");
   assert.deepStrictEqual(pressedOf(el("an-pview")), ["false", "false", "true", "false", "false"]);
-  assert.deepStrictEqual(el("an-tabs").elements.map((t) => t.cls.includes("act")), [false, false, false, false, true]);
+  assert.deepStrictEqual(el("an-tabs").elements.map((t) => t.cls.includes("act")), [false, false, true, false, false], "and its Drivers item for Cost drivers");
   run("anSetTab('nonsense')");
   assert.strictEqual(run("AN.tab"), "overview");
 });
 
-test("Workspaces and Cost drivers still draw through a builder until their own views come", async () => {
-  const env = analyticsEnv();
-  env.page(true);
-  loadWindow(env);
-  for (const tab of ["workspaces", "drivers"]) {
-    env.run(`AN.tab = ${JSON.stringify(tab)};`);
-    env.run("anRender();");
-    assert.ok(env.el("analytics-body").children.length >= 1, tab + " draws something");
+test("every tab draws on the page and on the phone", () => {
+  for (const on of [true, false]) {
+    const env = analyticsEnv();
+    env.page(on);
+    loadWindow(env, { drivers: DRIVERS });
+    env.run("anFitTimeChart = function () {};"); // the fake chart has no layout to fit (pinned in the chart tests)
+    for (const tab of ["overview", "workspaces", "drivers", "sessions", "models"]) {
+      env.run(`AN.tab = ${JSON.stringify(tab)};`);
+      env.run("anRender();");
+      assert.ok(env.el("analytics-body").children.length >= 1 && env.el("analytics-body").textContent.length > 20, tab + " draws something (" + (on ? "page" : "phone") + ")");
+      assert.ok(!/NaN|undefined/.test(env.el("analytics-body").textContent), tab + " says no NaN");
+    }
   }
 });
 
@@ -3166,4 +3142,224 @@ test("the head, the Where select and the tile changes have the CSS they need, on
     if (!parts(r.selector).some((x) => /\.an-(?:where|wsel|dlead|dup|ddown|dflat|wbox|wkey|hp|live|ell)/.test(x))) continue;
     assert.ok(!/color-mix|var\(--(?:red|amber|ok|warn|danger)/i.test(v), r.selector + " " + prop + " uses no status colour and no color-mix");
   }
+});
+
+// =====================================================================================================================
+// Analytics on the phone (Task 12; spec §3.6): the phone's builders read the same preparation as the page, so both skins
+// show the same figures in their own components.
+// =====================================================================================================================
+
+// A /drivers response: a covered 80 of 100, subagents, a skill, a plugin and an MCP server with two tools.
+const DRIVERS = {
+  total: 100, coveredTotal: 80,
+  agent: [{ name: "Explore", costUsd: 20 }, { name: "general-purpose", costUsd: 10 }],
+  skill: [{ name: "review", costUsd: 8 }],
+  plugin: [{ name: "superpowers", costUsd: 12 }],
+  mcp: [{ server: "docs", costUsd: 9, tools: [{ name: "search", costUsd: 5 }, { name: "fetch", costUsd: 3 }] }],
+};
+const allNodes = (root) => { const out = []; const walk = (n) => { out.push(n); n.elements.forEach(walk); }; walk(root); return out; };
+const phoneView = (fn, over) => { const env = analyticsEnv(); env.page(false); loadWindow(env, over); return { env, root: view(env, fn) }; };
+const pageView = (fn, over) => { const env = analyticsEnv(); env.page(true); loadWindow(env, over); return { env, root: view(env, fn) }; };
+const cellsOf = (tbl) => tbl.elements.map((tr) => tr.elements.map((c) => c.textContent));
+const appDecls = (sel) => decls(sel, parseRules(APP_CSS));
+
+test("phone tabs: Overview · Workspaces · Drivers · Sessions · Models, with the keys of the page's views", () => {
+  const env = analyticsEnv();
+  const tabs = env.el("an-tabs").elements;
+  assert.deepStrictEqual(tabs.map((b) => b.dataset.antab), ["overview", "workspaces", "drivers", "sessions", "models"]);
+  assert.deepStrictEqual(tabs.map((b) => b.textContent), ["Overview", "Workspaces", "Drivers", "Sessions", "Models"]);
+  // Each tab opens its own view, and the lit one follows.
+  tabs.forEach((b, i) => {
+    env.run(`anSetTab(${JSON.stringify(b.dataset.antab)});`);
+    assert.strictEqual(env.run("AN.tab"), b.dataset.antab);
+    assert.deepStrictEqual(tabs.map((t) => t.cls.includes("act")), tabs.map((_, k) => k === i));
+  });
+});
+
+test("phone Overview: the four tiles are the page's (anOverviewKpis), 2×2, each with its change while Compare is on", () => {
+  for (const cmp of [false, true]) {
+    const page = pageView("anOverview"), phone = phoneView("anOverview");
+    for (const e of [page.env, phone.env]) {
+      e.run("AN.data.sessionCount = 1420;");
+      e.run(cmp ? "AN.compare = true; AN.data.cmp = { days: 30, prev: { cost: 3000, sessions: 3, median: 100, cache: 0.602 } };" : "AN.compare = false;");
+    }
+    const pageRow = view(page.env, "anOverview").elements[0];
+    const grid = view(phone.env, "anOverview").elements[0];
+    assert.strictEqual(grid.className, "an-kpis");
+    assert.strictEqual(grid.elements.length, 4, "four tiles, not five");
+    assert.deepStrictEqual(grid.elements.map((t) => [t.elements[0].textContent, t.elements[1].textContent]),
+      pageRow.elements.map((t) => [t.elements[0].textContent, t.elements[1].textContent]), "the same values and labels as the page");
+    assert.deepStrictEqual(grid.elements.map((t) => t.elements[0].textContent), ["$4.3k", "1,420", "$80.07", "59.8%"]);
+    const delta = (t) => (t.elements[2] ? t.elements[2].textContent : null);
+    assert.deepStrictEqual(grid.elements.map(delta), pageRow.elements.map(delta), "the same change lines (none with Compare off)");
+    if (cmp) assert.deepStrictEqual(grid.elements.map(delta), ["▲ 43% vs the 30 days before", "▲ 47233%", "▼ 20%", "▼ 0.4 pt"]);
+  }
+});
+
+test("phone Overview: cost by workspace is host / box bars like the page's; the old tiles and the project card are gone", () => {
+  const { env } = phoneView("anOverview");
+  env.run(`AN.data.workspaces = Array.from({ length: 11 }, (_, i) => ({ name: "w" + i, cost: 10 + i, hostCost: 4 + i, boxCost: 6 }));`);
+  const phone = view(env, "anOverview");
+  const text = phone.textContent;
+  assert.ok(/Cost by workspace/.test(text) && /Cost by model/.test(text));
+  assert.ok(!/Cost by project|total cost|avg \/ session|tokens|prompts/.test(text), "no project card, no Tokens or Prompts tiles");
+  const hbars = allNodes(phone).filter((n) => n.cls.includes("an-hbar"));
+  const ws = hbars.filter((h) => /^w\d+$/.test(h.elements[0].textContent));
+  assert.deepStrictEqual(ws.map((h) => h.elements[0].textContent), ["w10", "w9", "w8", "w7", "w6", "w5", "w4", "w3"], "the top 8, dearest first");
+  assert.strictEqual(ws[0].elements[2].textContent, "$20.00");
+  // host then box, in the page's colours and as shares of the longest bar (w10's 20): 14 host + 6 box.
+  assert.deepStrictEqual(ws[0].elements[1].elements.map((f) => [f.style.width, f.style.background, f.title]), [["70%", "var(--an-6)", "host $14.00"], ["30%", "var(--an-1)", "box $6.00"]]);
+  const key = allNodes(phone).find((n) => n.cls.includes("an-legend") && /host/.test(n.textContent));
+  assert.deepStrictEqual(key.elements.map((s) => [s.elements[0].style.background, s.textContent]), [["var(--an-6)", "host"], ["var(--an-1)", "box"]]);
+});
+
+test("phone Workspaces: bars and the table with the page's figures; no expandable children", () => {
+  const phone = phoneView("anWorkspaces");
+  const page = pageView("anWorkspacesPage");
+  const all = allNodes(phone.root);
+  assert.ok(!all.some((n) => n.tag === "button" || /an-exp|an-child|an-wtbl|an-mini/.test(n.className)), "no expand button, no child rows, no mini bars");
+  const pageTbl = tableOf(page.root.elements[1].elements[0]);
+  const tbl = nodesOf(phone.root, "table")[0];
+  assert.deepStrictEqual(tbl.elements[0].elements.map((t) => t.textContent), ["Workspace", "API value", "Sessions", "Host · Box", "Median / session", "Cache hit"], "the page's columns, Model mix aside");
+  const rows = tbl.elements.slice(1).map((r) => r.elements.map((c) => c.textContent));
+  const pick = (cells, ix) => ix.map((i) => cells[i]);
+  assert.deepStrictEqual(rows.map((r) => pick(r, [1, 2, 3, 4, 5])), pageTbl.rows.map((r) => pick(r.map((c) => c.textContent), [1, 2, 3, 5, 6])));
+  assert.deepStrictEqual(pick(rows[0], [1, 2, 3, 4, 5]), ["$100", "3", "31% · 69%", "$20.00", "90.0%"]);
+  assert.deepStrictEqual(rows.map((r) => r[0]), ["acme", "oldunmatched"], "an unmatched row carries its tag");
+  assert.strictEqual(allNodes(tbl.elements[2]).find((n) => n.cls.includes("an-badge")).textContent, "unmatched");
+  // The bars: one per workspace, host then box.
+  const bars = all.filter((n) => n.cls.includes("an-hbar"));
+  assert.deepStrictEqual(bars.map((b) => [b.elements[0].textContent, b.elements[2].textContent]), [["acme", "$100"], ["old", "$0.00"]]);
+  assert.deepStrictEqual(bars[0].elements[1].elements.map((f) => [f.style.width, f.style.background]), [["31%", "var(--an-6)"], ["69%", "var(--an-1)"]]);
+  assert.ok(phone.root.textContent.endsWith("is marked unmatched."), "the footnote is the page's");
+});
+
+test("phone Workspaces: a hostile name stays text", () => {
+  const evil = "<img src=x onerror=alert(1)>\n\u001b[31m";
+  const over = { workspaces: { workspaces: [{ workspace: "/w", name: evil, unmatched: true, costUsd: 5, sessions: 1, hostCost: 5, boxCost: 0, byModel: {}, cacheRead: 0, cacheDenom: 0, sessionCosts: [5], children: [] }] } };
+  const { root } = phoneView("anWorkspaces", over);
+  const all = allNodes(root);
+  assert.ok(all.some((n) => n.textContent === evil), "the name is one text node, unchanged");
+  assert.ok(!all.some((n) => n.tag === "img") && !all.some((n) => n.innerHTML), "no node was made from it");
+});
+
+test("phone Cost drivers: four sections in the bar style, the page's figures, muted last rows, the coverage line", () => {
+  const phone = phoneView("anDrivers", { drivers: DRIVERS });
+  const page = pageView("anDriversPage", { drivers: DRIVERS });
+  const secs = phone.root.elements.filter((n) => n.cls.includes("an-section"));
+  assert.deepStrictEqual(secs.map((s) => s.elements.slice(0, s.elements[1].cls.includes("an-hint") ? 2 : 1).map((n) => n.textContent)),
+    [["Subagents", "main agent vs subagents"], ["Skills"], ["Plugins"], ["MCP", "server → its tools"]]);
+  // Every row: name, value, % of the covered value: the page's, card for card.
+  const pageCards = page.root.elements.find((n) => n.cls.includes("an-dgrid")).elements;
+  secs.forEach((sec, k) => {
+    const mine = allNodes(sec).filter((n) => n.cls.includes("an-hbar"));
+    const theirs = allNodes(pageCards[k]).filter((n) => n.cls.includes("an-drow"));
+    const flat = (r) => [r.elements[0].textContent, r.elements[2].textContent, r.elements[3].textContent, r.cls.includes("an-mut"), r.cls.includes("an-sub")];
+    assert.ok(mine.length >= 2);
+    assert.deepStrictEqual(mine.map(flat), theirs.map(flat), "card " + k);
+    assert.deepStrictEqual(mine.map((r) => r.elements[1].elements.map((f) => f.style.width)), theirs.map((r) => r.elements[1].elements.map((f) => f.style.width)), "bars " + k);
+  });
+  const last = (sec) => allNodes(sec).filter((n) => n.cls.includes("an-hbar")).pop();
+  assert.deepStrictEqual(secs.map((s) => last(s).elements[0].textContent), ["main agent (no subagent)", "outside any skill", "outside any plugin", "outside any MCP tool"]);
+  assert.ok(secs.every((s) => last(s).cls.includes("an-mut") && last(s).elements[1].elements.length === 0), "the muted last row has no bar");
+  // MCP: the server, its two tools indented, then outside.
+  assert.deepStrictEqual(allNodes(secs[3]).filter((n) => n.cls.includes("an-hbar")).map((r) => [r.elements[0].textContent, r.cls.includes("an-sub")]),
+    [["docs", false], ["search", true], ["fetch", true], ["outside any MCP tool", false]]);
+  // 80 of 100 covered: one muted line before the sections, then the footnote.
+  assert.strictEqual(phone.root.elements[0].textContent, "Based on 80% of this window's API value: sessions whose transcripts are still on disk.");
+  assert.ok(phone.root.textContent.endsWith("count as \"outside\"."), "the footnote is the page's");
+  assert.ok(!/NaN|undefined|Infinity/.test(phone.root.textContent + JSON.stringify(allNodes(phone.root).map((n) => n.style))));
+});
+
+test("phone Cost drivers: full coverage has no line; nothing covered is the one sentence; a card with only its muted row draws no bar", () => {
+  const full = phoneView("anDrivers", { drivers: { ...DRIVERS, total: 80 } });
+  assert.ok(!/Based on/.test(full.root.textContent));
+  const none = phoneView("anDrivers");
+  assert.deepStrictEqual(none.root.elements.map((n) => n.className), ["an-section"]);
+  assert.strictEqual(none.root.textContent, "Cost drivers" + "No cost-driver data in this window: these sessions' transcripts are no longer on disk.");
+  assert.ok(!allNodes(none.root).some((n) => /an-hbar|an-kpi/.test(n.className)), "no bars, no tiles");
+  const lone = phoneView("anDrivers", { drivers: { total: 10, coveredTotal: 10, agent: [], skill: [], plugin: [], mcp: [] } });
+  const bars = allNodes(lone.root).filter((n) => n.cls.includes("an-hbar"));
+  assert.strictEqual(bars.length, 4);
+  assert.ok(bars.every((b) => b.elements[1].elements.length === 0 && b.elements[3].textContent === "100%"));
+  assert.ok(!/NaN/.test(lone.root.textContent));
+});
+
+test("phone Cost drivers: a name is text, a newline stays one text node", () => {
+  const name = "<b>x</b>\nand";
+  const { root } = phoneView("anDrivers", { drivers: { ...DRIVERS, skill: [{ name, costUsd: 8 }] } });
+  assert.ok(allNodes(root).some((n) => n.textContent === name && n.cls.includes("nm")));
+  assert.ok(!allNodes(root).some((n) => n.tag === "b" || n.innerHTML));
+});
+
+test("phone Sessions: the page's eight columns and the same cells; a row is not clickable", () => {
+  const phone = phoneView("anSessions"), page = pageView("anSessions");
+  const pageTbl = tableOf(page.root.elements[1].elements[0]);
+  const tbl = nodesOf(phone.root, "table")[0];
+  assert.deepStrictEqual(cellsOf(tbl), [pageTbl.head.map((t) => t.textContent), ...pageTbl.rows.map((r) => r.map((c) => c.textContent))]);
+  assert.deepStrictEqual(tbl.elements[0].elements.map((t) => t.className), ["", "", "", "", "", "", "num", "num"]);
+  assert.deepStrictEqual(tbl.elements[1].elements.map((c) => c.textContent), ["3d6b98e8", "2026-10-31", "acme-api", "box · prd", "feat/370-rework", "mixed", "11", "$121"]);
+  const all = allNodes(phone.root);
+  assert.ok(!all.some((n) => n.cls.includes("an-live") || n.attrs.role === "button" || n.onclick), "no row opens anything on the phone");
+  assert.ok(!all.some((n) => /an-card|kpi-row|an-psec/.test(n.className)), "none of the page's nodes");
+  assert.ok(!/Fleet|Session shape|band/i.test(phone.root.textContent));
+});
+
+test("phone Models: the page's table, cell for cell", () => {
+  const phone = phoneView("anModels"), page = pageView("anModels");
+  const pageTbl = tableOf(page.root.elements[0].elements[0]);
+  const tbl = nodesOf(phone.root, "table")[0];
+  assert.deepStrictEqual(cellsOf(tbl), [pageTbl.head.map((t) => t.textContent), ...pageTbl.rows.map((r) => r.map((c) => c.textContent))]);
+  assert.deepStrictEqual(tbl.elements[0].elements.map((t) => t.className), ["", "num", "num", "num", "num", "num", "num", "num"]);
+  assert.strictEqual(tbl.elements[0].elements[3].attrs.title, "A session that used several models counts once in each.");
+  assert.ok(phone.root.textContent.endsWith("their tokens are counted, their value is not."));
+  assert.ok(!allNodes(phone.root).some((n) => /an-card|an-psec/.test(n.className)));
+});
+
+test("phone Where: a select on its own line under the range chips, the page's options, and a change filters like the page's", async () => {
+  const { run, el, page, calls } = analyticsEnv();
+  page(false);
+  run('AN.from = "2026-10-01"; AN.to = "2026-10-30"; AN.where = "host"; AN.whereOpts = [{ key: "", label: "All", costUsd: 4300 }, { key: "host", label: "Host", costUsd: 1200.5 }, { key: "box:prd", label: "Box · prd", costUsd: 3100 }];');
+  const strip = run("anControls()");
+  const last = strip.elements[strip.elements.length - 1];
+  assert.strictEqual(last.className, "an-pwhere", "its own line, after the chips and Compare");
+  const sel = nodesOf(strip, "select")[0];
+  assert.ok(sel && sel.parent === last);
+  assert.deepStrictEqual(sel.elements.map((o) => [o.value, o.textContent]), [["", "All · $4.3k"], ["host", "Host · $1.2k"], ["box:prd", "Box · prd · $3.1k"]]);
+  assert.deepStrictEqual(sel.elements.map((o) => o.textContent), [...run("anWhereOptions(AN.whereOpts, AN.where).map((o) => o.text)")], "the page's labels");
+  assert.strictEqual(sel.value, "host");
+  assert.strictEqual(sel.attrs["aria-label"], "Where");
+  assert.strictEqual(last.elements[0].textContent, "Where");
+  sel.value = "box:prd";
+  sel.onchange();
+  assert.strictEqual(run("AN.where"), "box:prd");
+  await settle();
+  assert.ok(calls.some((c) => c === "/api/analytics/summary?from=2026-10-01&to=2026-10-30&where=box%3Aprd"), "the window reloads with the page's query");
+  // A chosen key the window no longer lists stays selectable.
+  run('AN.where = "box:old"; AN.whereOpts = [];');
+  assert.deepStrictEqual(nodesOf(run("anControls()"), "select")[0].elements.map((o) => o.value), ["", "box:old"]);
+  assert.ok(!/innerHTML/.test(fnBody(stripJsComments(read("analytics.js")), "anControls")), "text only");
+  assert.ok(el("an-where"), "the page's own select is untouched");
+});
+
+test("the phone's Where line and bar rows have their CSS in app.css: a full row, four columns, muted and indented variants", () => {
+  assert.match(appDecls(".an-pwhere").get("flex") || "", /100%/);
+  assert.ok(parseRules(APP_CSS).some((r) => parts(r.selector).includes(".an-pwhere select")));
+  assert.ok(appDecls(".an-hbar.an-hpct").get("grid-template-columns"), "four columns: name, bar, value, %");
+  assert.ok(appDecls(".an-hbar.an-sub .nm").get("padding-left"));
+  assert.ok(appDecls(".an-hbar.an-mut .nm").get("color"));
+  for (const r of parseRules(APP_CSS)) if (parts(r.selector).some((s) => /an-pwhere|an-hpct/.test(s))) for (const [, v] of r.decls) assert.ok(!/color-mix|var\(--(?:red|amber|warn|danger)/.test(v), r.selector);
+});
+
+test("dead Compare, histogram and share-chart CSS is gone from both stylesheets", () => {
+  const dead = /\.an-divrow|\.an-divtrack|\.an-mixlabel|\.an-mixbar|\.an-mix\b|\.an-fleet|\.an-section > \.kpi-row|\.an-section > \.an-foot/;
+  for (const [name, css] of [["app.css", APP_CSS], ["desktop.css", DESK_CSS]]) {
+    assert.deepStrictEqual(parseRules(css).filter((r) => parts(r.selector).some((s) => dead.test(s))).map((r) => r.selector), [], name);
+  }
+  // The phone's own components are not drawn on the page, so the page has no rule for them.
+  const phoneOnly = /\.an-hbar|\.an-legend|\.an-box|\.an-section|\.an-hint|\.an-grid2|\.an-badge|\.an-bar\b/;
+  assert.deepStrictEqual(RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(ANP) && phoneOnly.test(s))).map((r) => r.selector), []);
+  assert.ok(!/Compare block|Compare: the diverging/.test(read("desktop.css") + read("app.css") + read("analytics.js")), "no stale Compare-block comment");
+  assert.ok(!/an-psec-head/.test(read("analytics.js")), "no page head class that nothing builds");
+  assert.ok(!/an-card \.card-head > h3 > \.ui-icon/.test(DESK_CSS), "the Tools glyph rule: no card passes a glyph any more");
 });

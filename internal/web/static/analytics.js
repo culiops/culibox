@@ -225,8 +225,8 @@ function anSessionKpis(d) {
 }
 
 // ---- what the Overview, Workspaces, Cost drivers, Sessions and Models views say: one preparation for both skins ----------------------
-// The phone's modal (anModels, anProjects, anSessions, anTools) and the desktop page (the an...Page builders) draw different DOM
-// from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
+// The phone's modal (anOverview, anWorkspaces, anDrivers, anSessions, anModels) and the desktop page (the an...Page builders) draw
+// different DOM from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
 
 const AN_COPY = {
   // The head and toolbar of every view (§3.0). {from} and {to} are the window's dates.
@@ -242,8 +242,6 @@ const AN_COPY = {
     kpis: ["API value", "Sessions", "Median per session", "Cache hit"],
     compareSuffix: " vs the {N} days before",
     byWorkspace: "Cost by workspace", byWorkspaceHint: "top 8 · bar split = host / box",
-    // The page only (digest-design §A2): the phone's own heading is "Cost by project (top)" and its note is anNote's boxed one.
-    byProject: "Cost by project", byProjectHint: "top 10 · bar split = model mix",
     note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.",
   },
   workspaces: {
@@ -278,13 +276,6 @@ const AN_COPY = {
     sessionsTitle: "A session that used several models counts once in each.",
     note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality. \"other (unpriced)\" are models with no published rate; their tokens are counted, their value is not.",
   },
-  projects: { title: "Cost by project", hint: "Bar split shows the model mix inside each project · window", detail: "Detail" },
-};
-// A table's columns and where its numbers start (anHead gives the th from there on .num; the page capitalises the labels).
-const AN_TABLES = {
-  models: [["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1],
-  projects: [["project", "cost", "tokens", "prompts"], 1],
-  sessions: [["session", "day", "project", "model", "tokens", "prompts", "cost"], 4],
 };
 
 // anPct: v as a whole percent of total, "59%".
@@ -301,31 +292,6 @@ function anModelFold(byModel) {
     maxTokens: Math.max(1, ...rows.map((x) => x.tokens)),
     maxCost: Math.max(1, ...rows.map((x) => x.cost)),
   };
-}
-
-// anModelCells: a model row's figures after its name, as the table prints them (a fold's row).
-function anModelCells(x, fold) {
-  return {
-    cost: usd(x.cost), pct: anPct(x.cost, fold.totalCost), tokens: fmtCompact(x.tokens), prompts: String(x.prompts),
-    outPerPrompt: fmtCompact(x.outPerPrompt), cache: (x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0) + "%",
-  };
-}
-
-// anProjectBars: byProject rows (project, cost, byModel) as the stacked bars: each project's name, cost and segments (dearest model first, coloured by
-// its place in `models`, titled "model $cost"), and the longest bar (never under 1).
-function anProjectBars(byProject, models) {
-  return {
-    max: Math.max(1, ...byProject.map((x) => x.cost)),
-    bars: byProject.map((p) => ({
-      name: projShort(p.project), cost: p.cost,
-      segs: Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(models, m), t: shortModel(m) + " " + usd(v) })),
-    })),
-  };
-}
-
-// anProjectRow: a project's detail row as text.
-function anProjectRow(p) {
-  return { name: projShort(p.project), cost: usd(p.cost), tokens: fmtCompact(p.tokens), prompts: String(p.prompts) };
 }
 
 // anSessionRow: a top session (topSessionsByCost) as text. `mixed` marks the several-model case, whose model is the word "mixed".
@@ -481,6 +447,24 @@ function anWorkspaceRows(resp) {
       children: (w.children || []).map((c) => ({ runtime: c.runtime, profile: c.profile, via: c.via, label: c.label, path: c.path, ...fig(c) })),
     };
   });
+}
+
+// How many workspaces the Overview's bars show (the copy says "top 8"), and how many the phone's Workspaces tab draws above its table.
+const AN_TOP_WORKSPACES = 8;
+const AN_PHONE_WORKSPACE_BARS = 14;
+
+// anWorkspaceBars: the "Cost by workspace" bars from anWorkspaceRows' rows (any list with name, cost, hostCost and boxCost):
+// the dearest `limit` first (all with no limit), each a name, its cost and two segments, host (--an-6) then box (--an-1), titled
+// "host $31.00", and the longest bar (never under 1, so no width divides by zero). The page and the phone draw the same bars.
+function anWorkspaceBars(rows, limit) {
+  const top = [...(rows || [])].sort((x, y) => y.cost - x.cost).slice(0, limit == null ? undefined : limit);
+  return {
+    max: Math.max(1, ...top.map((w) => w.cost)),
+    bars: top.map((w) => ({
+      name: w.name, cost: w.cost,
+      segs: [{ v: w.hostCost, c: "var(--an-6)", t: "host " + usd(w.hostCost) }, { v: w.boxCost, c: "var(--an-1)", t: "box " + usd(w.boxCost) }],
+    })),
+  };
 }
 
 // anDriverCards: /drivers → {empty, coverage, cards}. Four cards (agent, skill, plugin, mcp), each rows of {name, cost, pct, muted,
@@ -660,7 +644,7 @@ if (typeof module !== "undefined" && module.exports) {
     anCountText, anSessionKpis,
     median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
     anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText,
-    anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+    anModelFold, anPct, anWorkspaceBars, anSessionRow,
     anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
     anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };
@@ -784,7 +768,6 @@ async function anLoad() {
     to: summary ? summary.to : AN.to,
     costByDay: foldCostByDay(byDayModel),
     byModel: normModels((models && models.byModel) || []),
-    byProject: [], // the old per-project fold is gone; the phone's project sections stay empty until they read `workspaces`
     workspaces: anWorkspaceRows(workspaces),
     drivers: anDriverCards(drivers),
     driverTiles: anDriverTiles(drivers),
@@ -852,9 +835,8 @@ function anRender() {
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
-  // Workspaces and Cost drivers sit in the slots the phone's Projects and Tools views have (anProjects, anTools): on the page those hand over
-  // to anWorkspacesPage and anDriversPage; the phone keeps its own until its task replaces them.
-  const R = { overview: anOverview, workspaces: anProjects, drivers: anTools, sessions: anSessions, models: anModels };
+  // The five views are the phone's builders; on the page each hands over to its an...Page builder (anIsPage), both reading AN.data.
+  const R = { overview: anOverview, workspaces: anWorkspaces, drivers: anDrivers, sessions: anSessions, models: anModels };
   (R[AN.tab] || anOverview)(body);
   // Time-series charts read left→right oldest→newest; open scrolled to the most
   // recent day so a window with a leading empty gap doesn't render blank.
@@ -945,8 +927,8 @@ function anToggleCompare() {
   anLoad();
 }
 
-// control strip of the phone's modal: range presets + compare toggle, the Custom range's dates inline. (The desktop page
-// has no strip: its toolbar is static markup, anSyncPageControls.)
+// control strip of the phone's modal: range presets + compare toggle, the Custom range's dates inline, then the Where select on a
+// line of its own. (The desktop page has no strip: its toolbar is static markup, anSyncPageControls.)
 function anControls() {
   const wrap = el("div", "an-controls");
   const lbl = el("span", "an-clabel", "Range");
@@ -969,7 +951,21 @@ function anControls() {
   cmp.title = "Compare this window to the equal-length window immediately before it";
   cmp.onclick = anToggleCompare;
   wrap.appendChild(cmp);
+  wrap.appendChild(anPhoneWhere());
   return wrap;
+}
+
+// anPhoneWhere: the phone's Where select, on a line of its own under the range chips (the page's is static markup in its toolbar).
+// Its options and labels are the page's (anWhereOptions) and a change filters through the same action (anPickWhere). Text only.
+function anPhoneWhere() {
+  const line = el("div", "an-pwhere");
+  const sel = el("select");
+  sel.setAttribute("aria-label", AN_COPY.head.where);
+  for (const o of anWhereOptions(AN.whereOpts, AN.where)) { const op = el("option", null, o.text); op.value = o.key; sel.appendChild(op); }
+  sel.value = AN.where;
+  sel.onchange = () => anPickWhere(sel.value, sel);
+  line.append(el("span", "an-clabel", AN_COPY.head.where), sel);
+  return line;
 }
 
 // ---- the desktop page's head and toolbar (index.html .an-phead, .an-ptools, .an-pcustom) -----------------------
@@ -1049,16 +1045,10 @@ function anWirePage() {
 // ---- Overview ---------------------------------------------------------------
 function anOverview(root) {
   if (anIsPage()) return anOverviewPage(root);
-  const d = AN.data, t = d.costByDay.totals;
+  const d = AN.data;
+  // The page's four tiles (anOverviewKpis) in a 2×2 grid; each carries its change vs the window before while Compare is on.
   const kpis = el("div", "an-kpis");
-  const tiles = [
-    ["cost", usd(t.cost), "total cost"],
-    ["", fmtCompact(t.tokens), "tokens"],
-    ["", String(d.sessionCount), "sessions"],
-    ["", String(t.prompts), "prompts"],
-    ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
-  ];
-  for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
+  anOverviewKpis(d, AN.compare ? d.cmp : null).forEach((t, i) => kpis.appendChild(anKpi(i === 0 || i === 2 ? "cost" : "", t.value, t.label, t.delta)));
   root.appendChild(kpis);
 
   const sec = anSection(AN_COPY.overview.chart, AN_COPY.overview.chartHint);
@@ -1072,9 +1062,9 @@ function anOverview(root) {
   const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, AN_COPY.overview.byModel));
   const fold = anModelFold(d.byModel);
   for (const x of fold.rows) anHbar(b1, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), usd);
-  const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, "Cost by project (top)"));
-  const pb = anProjectBars(d.byProject, d.models);
-  for (const b of pb.bars.slice(0, 10)) anHbarSegs(b2, b.name, b.cost, pb.max, b.segs, usd);
+  // Cost by workspace: the page's top 8, each bar split host / box, with the key under it.
+  const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, AN_COPY.overview.byWorkspace + " (top " + AN_TOP_WORKSPACES + ")"));
+  anWorkspaceBarRows(b2, d.workspaces, AN_TOP_WORKSPACES);
   g.append(b1, b2);
   const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
   root.appendChild(sec2);
@@ -1085,7 +1075,7 @@ function anOverview(root) {
 // anOverviewPage: M3.1 (§3.1; the mockup's frame 1): the four tiles (anOverviewKpis: API value, Sessions, Median per session, Cache
 // hit; each carries its change vs the window before only while Compare is on); the cost chart's card, its head holding the title,
 // its caption and the legend; then cost by model and cost by workspace as two cards; the footnote last, a plain line. Compare shows
-// nothing else. The phone's anOverview above is its own code.
+// nothing else. The phone's anOverview above draws the same figures in its own components.
 function anOverviewPage(root) {
   const d = AN.data;
   const tiles = anOverviewKpis(d, AN.compare ? d.cmp : null);
@@ -1116,14 +1106,10 @@ function anOverviewPage(root) {
 
   // Cost by workspace: the top 8, each bar split into its host and box cost (the --an-6 and --an-1 slots), as a share of the window.
   const total = d.costByDay.totals.cost || 1;
-  const top = [...d.workspaces].sort((x, y) => y.cost - x.cost).slice(0, 8);
-  const maxWs = Math.max(1, ...top.map((w) => w.cost));
+  const wb = anWorkspaceBars(d.workspaces, AN_TOP_WORKSPACES);
   const wc = anCard(AN_COPY.overview.byWorkspace, AN_COPY.overview.byWorkspaceHint, "h2");
   const wrows = el("div", "an-hrows");
-  for (const w of top) {
-    const segs = [{ v: w.hostCost, c: "var(--an-6)", t: "host " + usd(w.hostCost) }, { v: w.boxCost, c: "var(--an-1)", t: "box " + usd(w.boxCost) }];
-    anHrow(wrows, w.name, true, w.cost, maxWs, segs, true, anPct(w.cost, total));
-  }
+  for (const b of wb.bars) anHrow(wrows, b.name, true, b.cost, wb.max, b.segs, true, anPct(b.cost, total));
   const wbody = anCardBody(wc);
   wbody.appendChild(wrows);
   wbody.appendChild(anWhereKey());
@@ -1152,73 +1138,128 @@ function anModels(root) {
   const fold = anModelFold(d.byModel); // $0 (unpriced) models are folded into "other"
   const box = el("div", "an-box");
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(...AN_TABLES.models));
+  tbl.appendChild(anColHead(AN_COPY.models.columns, 1, { 3: AN_COPY.models.sessionsTitle }));
   for (const x of fold.rows) {
+    const c = anModelTableRow(x, fold, d.modelMedians);
     const tr = el("tr");
-    const nm = el("td", "mono");
+    const nm = el("td", c.other ? "dim" : "mono");
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, document.createTextNode(shortModel(x.model)));
-    const c = anModelCells(x, fold);
-    tr.append(nm, anTd(c.cost, "num"), anTd(c.pct, "dim num"), anTd(c.tokens, "dim num"), anTd(c.prompts, "dim num"),
-      anTd(c.outPerPrompt, "dim num"), anTd(c.cache, "dim num"));
+    tr.append(nm, anTd(c.cost, "num"), anTd(c.pct, "dim num"), anTd(c.sessions, "dim num"), anTd(c.median, "dim num"),
+      anTd(c.perPrompt, "dim num"), anTd(c.cache, "dim num"), anTd(c.tokens, "dim num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
-
+  root.appendChild(anPhoneNote(AN_COPY.models.note));
 }
 
-// ---- Projects ---------------------------------------------------------------
-function anProjects(root) {
+// ---- Workspaces -------------------------------------------------------------
+// The bars (the page's top-of-Overview split, host / box) and the table: the page's columns less Model mix (a mini bar), a row a
+// plain line (no breakdown to open).
+function anWorkspaces(root) {
   if (anIsPage()) return anWorkspacesPage(root);
   const d = AN.data;
-  const sec = anSection(AN_COPY.projects.title, AN_COPY.projects.hint);
+  const sec = anSection(AN_COPY.workspaces.title);
   const box = el("div", "an-box");
-  const pb = anProjectBars(d.byProject, d.models);
-  for (const b of pb.bars) anHbarSegs(box, b.name, b.cost, pb.max, b.segs, usd);
-  anLegend(box, d.models);
-  sec.appendChild(box); root.appendChild(sec);
+  anWorkspaceBarRows(box, d.workspaces, AN_PHONE_WORKSPACE_BARS);
+  sec.appendChild(box);
 
-  const s2 = anSection(AN_COPY.projects.detail);
   const box2 = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(...AN_TABLES.projects));
-  for (const p of d.byProject) {
-    const r = anProjectRow(p);
+  const cols = AN_COPY.workspaces.columns.filter((_, i) => i !== 4);
+  const head = anColHead(cols, cols.length);
+  for (const i of [1, 2, 4, 5]) head.children[i].className = "num";
+  tbl.appendChild(head);
+  for (const row of d.workspaces) {
+    const c = anWorkspaceRowModel(row).cells;
+    const name = el("td");
+    const nm = el("span", "mono", c.name);
+    nm.setAttribute("title", c.name);
+    name.appendChild(nm);
+    if (c.unmatched) name.appendChild(el("span", "an-badge", AN_COPY.workspaces.unmatched));
     const tr = el("tr");
-    tr.append(anTd(r.name, "mono"), anTd(r.cost, "num"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"));
+    tr.append(name, anTd(c.cost, "num"), anTd(c.sessions, "num"), anTd(c.split), anTd(c.median, "num"), anTd(c.cache, "num"));
     tbl.appendChild(tr);
   }
-  box2.appendChild(anTableWrap(tbl)); s2.appendChild(box2); root.appendChild(s2);
+  box2.appendChild(anTableWrap(tbl)); sec.appendChild(box2);
+  root.appendChild(sec);
+  root.appendChild(anPhoneNote(AN_COPY.workspaces.note));
 }
 
 // ---- Sessions ---------------------------------------------------------------
+// The page's eight columns and cells. A row opens nothing here: the phone has no live-session action to share with it.
 function anSessions(root) {
   if (anIsPage()) return anSessionsPage(root);
   const d = AN.data;
   const sec = anSection(AN_COPY.sessions.title, "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(...AN_TABLES.sessions));
+  tbl.appendChild(anColHead(AN_COPY.sessions.columns, 6));
   for (const s of d.topSessions) {
     const r = anSessionRow(s);
+    const branch = anTd(r.branch || "—", r.branch ? "mono" : "dim");
+    if (r.branch) branch.setAttribute("title", r.branch);
     const tr = el("tr");
-    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), anTd(r.project, "mono"),
-      anTd(r.model, "dim"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"), anTd(r.cost, "num"));
+    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), anTd(r.workspace, "mono"), anTd(r.where), branch,
+      anTd(r.model, "dim"), anTd(r.prompts, "num"), anTd(r.cost, "num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 }
 
 // ---- Cost drivers -----------------------------------------------------------
-function anTools(root) {
+// Four sections in the bar style, each row name · bar · API value · % of the covered value; the muted last row has no bar. With
+// nothing covered the sentence alone.
+function anDrivers(root) {
   if (anIsPage()) return anDriversPage(root);
-  const sec = anSection(AN_COPY.drivers.title);
-  if (AN.data.drivers.empty) sec.appendChild(anEmpty(AN_COPY.drivers.empty));
-  root.appendChild(sec);
+  const dr = AN.data.drivers;
+  if (dr.empty) {
+    const sec = anSection(AN_COPY.drivers.title);
+    sec.appendChild(anEmpty(AN_COPY.drivers.empty));
+    root.appendChild(sec);
+    return;
+  }
+  const cov = anCoverageText(dr.coverage);
+  if (cov) root.appendChild(el("p", "an-hint", cov));
+  for (const card of dr.cards) {
+    const sec = anSection(card.title, card.caption || null);
+    const box = el("div", "an-box");
+    for (const row of card.rows) anDriverBar(box, row, card.max);
+    sec.appendChild(box);
+    root.appendChild(sec);
+  }
+  root.appendChild(anPhoneNote(AN_COPY.drivers.note));
 }
+
+// anDriverBar: a row of a Cost drivers section in the phone's bar style: the name, the track with one fill scaled to the card's
+// largest named row, the API value and the % (a fourth column, .an-hpct). The muted last row, and any row of a card with no named
+// row (max 0), has no fill: nothing is divided by 0. An MCP tool (sub) is indented by the stylesheet.
+function anDriverBar(parent, row, max) {
+  const r = el("div", "an-hbar an-hpct" + (row.muted ? " an-mut" : "") + (row.sub ? " an-sub" : ""));
+  const nm = el("div", "nm", row.name); nm.title = row.name;
+  const track = el("div", "track");
+  if (!row.muted && max > 0 && row.cost > 0) {
+    const f = el("div", "fill");
+    f.style.width = (row.cost / max * 100) + "%";
+    f.style.background = "var(--an-1)";
+    track.appendChild(f);
+  }
+  r.append(nm, track, el("div", "val", usd(row.cost)), el("div", "val", row.pct + "%"));
+  parent.appendChild(r);
+}
+
+// anWorkspaceBarRows: a box's host / box bars per workspace (anWorkspaceBars, the page's own figures) and the key to the two colours.
+function anWorkspaceBarRows(box, rows, limit) {
+  const wb = anWorkspaceBars(rows, limit);
+  for (const b of wb.bars) anHbarSegs(box, b.name, b.cost, wb.max, b.segs, usd);
+  anSwatchLegend(box, [{ name: "host", color: "var(--an-6)" }, { name: "box", color: "var(--an-1)" }]);
+}
+
+// anPhoneNote: the footnote under a phone view: one plain muted line (the phone's .an-hint).
+function anPhoneNote(text) { return el("p", "an-hint", text); }
 
 // ---- the desktop page's views (Models, Sessions, Workspaces, Cost drivers) ------------------------------------------------------
 // The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
-// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES,
-// anModelFold, anProjectBars, anSessionRow ...): only the DOM differs.
+// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, anModelFold, anModelTableRow,
+// anWorkspaceRowModel, anSessionRow, anWorkspaceBars ...): only the DOM differs.
 // The page's parts are the kit's: a KPI row, cards (.an-card: --panel and --r-card, a name of its own because app.css's `.card` is the
 // phone's amber session card) and the table look of §C9 on the same .an-table.
 
@@ -1454,7 +1495,13 @@ function anSection(title, hint) {
   if (hint) s.appendChild(el("p", "an-hint", hint));
   return s;
 }
-function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
+// anKpi: the phone's tile. `delta` (kpiDelta's {text, dir}, with Compare on) adds the change line under the label, as the page's tile has.
+function anKpi(cls, v, l, delta) {
+  const c = el("div", "an-kpi");
+  c.append(el("div", "v " + (cls || ""), v), el("div", "l", l));
+  if (delta) c.appendChild(anDeltaLine(delta));
+  return c;
+}
 // The desktop page's parts (callers are the page's views, behind anIsPage()). anKpiRow and anCard are general: every view builds on them.
 // anKpiRow: the kit's KPI row, the one Audit draws too: div.kpi-row > div.kpi > span.kpi-value + span.kpi-label. The label
 // ellipsizes (desktop.css), so it carries its full text in title: the tile's own, else the label.
@@ -1481,18 +1528,13 @@ function anDeltaLine(delta) {
   return line;
 }
 // anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
-// it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the Overview's cards are the frame's
+// it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the views' cards are the frame's
 // h2). Content goes in anCardBody (padded) or, for a table, straight in.
-function anCard(title, caption, level, glyph) {
+function anCard(title, caption, level) {
   const card = el("div", "an-card");
   if (title || caption) {
     const head = el("div", "card-head");
-    if (title && glyph) {
-      // `glyph` is an icon name (the Tools heads, #168): it sits inside the heading, before the words, so the two wrap as one.
-      const h = el(level || "h3", "t-md w-600");
-      h.append(uiIcon(glyph, { size: 16 }), document.createTextNode(title));
-      head.appendChild(h);
-    } else if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
+    if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
     if (caption) head.appendChild(el("span", "t-sm muted", caption));
     card.appendChild(head);
   }
@@ -1502,17 +1544,9 @@ function anCardBody(card) { const b = el("div", "an-card-body"); card.appendChil
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
 // anFootnote (the page): the note under a card as one plain muted line (§A2: no box, no border, no italics). Plain text only.
 function anFootnote(text) { return el("p", "an-foot t-sm muted", text); }
-// anHead: the header row. Columns from firstNum on hold numbers: their header gets
-// "num" like their cells (anTd(text, "num")), so desktop.css can right-align both.
-// The page writes the labels in sentence case (§A3: Session, Day, …); the phone's stay as given.
-function anHead(cols, firstNum) {
-  const page = anIsPage();
-  const tr = el("tr");
-  cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, page ? c.charAt(0).toUpperCase() + c.slice(1) : c)));
-  return tr;
-}
-// anColHead (the page): the header row of a table whose labels AN_COPY already writes in full. Columns from firstNum on hold numbers
-// (th.num, like their cells). `titles` maps a column's index to its tooltip.
+// anColHead: the header row of a table whose labels AN_COPY writes in full (both skins; the phone's CSS sets them in capitals).
+// Columns from firstNum on hold numbers: their header gets "num" like their cells (anTd(text, "num")), so both stylesheets can
+// right-align both. `titles` maps a column's index to its tooltip.
 function anColHead(cols, firstNum, titles) {
   const tr = el("tr");
   cols.forEach((c, i) => {
@@ -1531,9 +1565,11 @@ function anIdTd(text, cls) { const td = el("td", cls); td.appendChild(el("span",
 // anLegend shows `models`, but colours each by its index in `colorModels` (the
 // canonical list) so legend swatches match chart/bar colours even when the
 // legend displays only a subset (e.g. priced models).
-function anLegend(parent, models, colorModels) {
+function anLegend(parent, models, colorModels) { anSwatchLegend(parent, anLegendItems(models, colorModels)); }
+// anSwatchLegend: the phone's key, a swatch and a name per item ({name, color}).
+function anSwatchLegend(parent, items) {
   const lg = el("div", "an-legend");
-  for (const it of anLegendItems(models, colorModels)) { const s = el("span"); const i = el("i"); i.style.background = it.color; s.append(i, el("span", null, it.name)); lg.appendChild(s); }
+  for (const it of items) { const s = el("span"); const i = el("i"); i.style.background = it.color; s.append(i, el("span", null, it.name)); lg.appendChild(s); }
   parent.appendChild(lg);
 }
 // anPLegend (the page): the cost chart's legend for a card head (§A2, §D1): an 8px square swatch and the model id in mono, per

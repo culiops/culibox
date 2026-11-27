@@ -7,11 +7,11 @@ const {
   topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, modelColor, collapseZeroCost, pricedModelIds,
   daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
-  anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+  anModelFold, anPct, anSessionRow,
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
   anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
-  anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText,
+  anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText, anWorkspaceBars,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -212,24 +212,10 @@ const SESS_ROWS = [
   { sessionId: "2cf1c405bbbb", project: "-home-dev-acme-web-frontend", day: "2026-10-30", model: "claude-opus-5-5", input: 100, output: 20, cacheRead: 500, cacheCreation: 0, prompts: 4, costUsd: 90 },
   { sessionId: "9d3dc2afcccc", project: "-home-dev-acme-web-frontend", day: "2026-10-26", model: "claude-opus-5-5", input: 1, output: 1, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 70.14 },
 ];
-// byProject rows (project, cost, tokens, prompts, byModel) folded from session rows: the shape anProjectBars and anSessionKpis read.
-function projectsOf(rows) {
-  const m = new Map();
-  for (const r of rows) {
-    const p = m.get(r.project) || { project: r.project, cost: 0, tokens: 0, prompts: 0, byModel: {} };
-    p.cost += r.costUsd || 0;
-    p.tokens += (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
-    p.prompts += r.prompts || 0;
-    p.byModel[r.model] = (p.byModel[r.model] || 0) + (r.costUsd || 0);
-    m.set(r.project, p);
-  }
-  return [...m.values()].sort((a, b) => b.cost - a.cost);
-}
-// The data the view reads (topSessions, byProject, sessionCount).
+// The data the view reads (topSessions, sessionCount).
 const sessionData = (rows) => ({
   sessionCount: distinctSessions(rows),
   topSessions: topSessionsByCost(rows, 18),
-  byProject: projectsOf(rows),
 });
 
 test("anSessionKpis: sessions in the window, the costliest session by its workspace, the median per session", () => {
@@ -262,7 +248,7 @@ test("anSessionKpis: no sessions gives a dash and the plain label; a nameless se
 
 // ---- the data both builders share (the phone's modal and the desktop page): one preparation, two sets of DOM ----
 
-test("anModelFold, anModelCells and anPct: the Models figures", () => {
+test("anModelFold and anPct: the Models figures", () => {
   const rows = normModels([
     { model: "claude-opus-5-5", input: 4100, output: 200, cacheRead: 6100, cacheCreation: 0, prompts: 4, sessions: 4, costUsd: 4300 },
     { model: "<synthetic>", prompts: 41, sessions: 3 },
@@ -274,8 +260,6 @@ test("anModelFold, anModelCells and anPct: the Models figures", () => {
   assert.equal(f.totalTokens, 10400);
   assert.equal(f.maxTokens, 10400);
   assert.equal(f.maxCost, 4300);
-  assert.deepEqual({ ...anModelCells(f.rows[0], f) }, { cost: "$4.3k", pct: "100%", tokens: "10k", prompts: "4", outPerPrompt: "50", cache: "59%" });
-  assert.deepEqual({ ...anModelCells(f.rows[1], f) }, { cost: "$0.00", pct: "0%", tokens: "0", prompts: "68", outPerPrompt: "0", cache: "0%" }, "no tokens: a 0% cache share, not NaN");
   assert.equal(anPct(1, 3), "33%");
   assert.equal(anPct(2, 3), "67%");
   // Nothing priced and nothing counted: totals and maxima stay at 1, so no bar or share divides by zero.
@@ -283,22 +267,36 @@ test("anModelFold, anModelCells and anPct: the Models figures", () => {
   assert.deepEqual([none.rows.length, none.totalCost, none.totalTokens, none.maxTokens, none.maxCost], [0, 1, 1, 1, 1]);
 });
 
-test("anProjectBars and anProjectRow: the stacked bars' segments (dearest model first) and the detail row", () => {
-  const byProject = projectsOf([
-    { project: "-home-dev-acme-api", model: "a", input: 10, prompts: 2, costUsd: 1 },
-    { project: "-home-dev-acme-api", model: "b", input: 5, prompts: 1, costUsd: 3 },
-    { project: "-home-dev-acme-web", model: "a", input: 1500, prompts: 7, costUsd: 2 },
+test("anWorkspaceBars: the top workspaces by cost, each bar split host then box in the --an-6 and --an-1 slots, scaled to the longest", () => {
+  const rows = [
+    { name: "small", cost: 10, hostCost: 10, boxCost: 0 },
+    { name: "big", cost: 100, hostCost: 31, boxCost: 69 },
+    { name: "mid", cost: 50, hostCost: 0, boxCost: 50 },
+  ];
+  const b = anWorkspaceBars(rows, 2);
+  assert.equal(b.max, 100);
+  assert.deepEqual(b.bars.map((x) => [x.name, x.cost]), [["big", 100], ["mid", 50]], "dearest first, capped");
+  assert.deepEqual(b.bars[0].segs.map((g) => ({ ...g })), [
+    { v: 31, c: "var(--an-6)", t: "host $31.00" },
+    { v: 69, c: "var(--an-1)", t: "box $69.00" },
   ]);
-  const bars = anProjectBars(byProject, ["a", "b"]);
-  assert.equal(bars.max, 4);
-  assert.deepEqual(bars.bars.map((b) => [b.name, b.cost]), [["acme-api", 4], ["acme-web", 2]]);
-  assert.deepEqual(bars.bars[0].segs.map((g) => ({ ...g })), [
-    { v: 3, c: "var(--an-2)", t: "b $3.00" },
-    { v: 1, c: "var(--an-1)", t: "a $1.00" },
-  ]);
-  assert.deepEqual({ ...anProjectRow(byProject[1]) }, { name: "acme-web", cost: "$2.00", tokens: "2k", prompts: "7" });
-  assert.deepEqual(anProjectBars([], []).bars, []);
-  assert.equal(anProjectBars([], []).max, 1);
+  assert.deepEqual(rows.map((r) => r.name), ["small", "big", "mid"], "the input is not reordered");
+  assert.equal(anWorkspaceBars(rows).bars.length, 3, "no limit shows them all");
+  // Nothing at all: no bars, and a longest bar of 1 so no width divides by zero.
+  assert.deepEqual([anWorkspaceBars([]).bars, anWorkspaceBars([]).max], [[], 1]);
+  assert.equal(anWorkspaceBars([{ name: "free", cost: 0, hostCost: 0, boxCost: 0 }]).max, 1);
+});
+
+test("the phone's tab strip is Overview · Workspaces · Drivers · Sessions · Models, keyed like the page's views", () => {
+  const html = readStatic("index.html");
+  const strip = /<div class="dlg-tabs" id="an-tabs">([\s\S]*?)<\/div>/.exec(html)[1];
+  const tabs = [...strip.matchAll(/<button type="button" data-antab="(\w+)"[^>]*>([^<]*)<\/button>/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(tabs, [["overview", "Overview"], ["workspaces", "Workspaces"], ["drivers", "Drivers"], ["sessions", "Sessions"], ["models", "Models"]]);
+  assert.deepEqual(tabs.map((t) => t[0]), ["overview", "workspaces", "drivers", "sessions", "models"]);
+  assert.deepEqual(tabs.map((t) => anTabKey(t[0])), tabs.map((t) => t[0]), "each key is its own view");
+  // The page's seg carries the same keys in the same order.
+  const seg = /<div class="seg" id="an-pview"[^>]*>([\s\S]*?)<\/div>/.exec(html)[1];
+  assert.deepEqual([...seg.matchAll(/data-antab="(\w+)"/g)].map((m) => m[1]), tabs.map((t) => t[0]));
 });
 
 test("anSessionRow: one session's cells as text; mixed is flagged, a single model is short", () => {
@@ -417,14 +415,10 @@ function anPage(page) {
   new vm.Script(ICON_SRC + "\n" + readStatic("analytics.js"), { filename: "analytics.js" }).runInContext(ctx);
   return { ctx, doc };
 }
-test("the Tools glyph is 6px from its word: a margin on the h3's glyph, in the desktop page's rules", () => {
-  const css = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.match(css, /#page-host > #analytics-modal\.as-page \.an-card \.card-head > h3 > \.ui-icon \{ margin-right: 6px; \}/);
-});
 
 test("card titles stay plain: a titled card (the Overview's h2s) has no glyph", () => {
   const { ctx } = anPage(true);
-  for (const t of ["Cost over time", "Cost by model", "Cost by project"]) {
+  for (const t of ["Cost over time", "Cost by model", "Cost by workspace"]) {
     const card = ctx.anCard(t, "", "h2");
     assert.equal(card.querySelectorAll("svg").length, 0, t);
   }
