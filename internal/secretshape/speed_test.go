@@ -204,10 +204,11 @@ func TestFindSpeedFoldRunes(t *testing.T) {
 			}
 		}
 		took := time.Since(start)
-		// 4 ms a head: TestFindSpeed's 2 ms, doubled for heads built to be
-		// the worst case (the rules' regexps took about 25 ms, the first
-		// version of this search 1 s).
-		limit := 100 * time.Millisecond * slowFactor
+		// 20 ms a head, loose for a slow CI runner or a busy test binary
+		// (74 ms for 25 heads was measured against a 4 ms bound), and still
+		// about 50x under the 0.96 s a head this test exists to catch (the
+		// first version of this search; the rules' regexps took about 25 ms).
+		limit := 500 * time.Millisecond * slowFactor
 		t.Logf("25 heads of 64 KiB of %s: %v (limit %v)", name, took, limit)
 		if took > limit {
 			t.Fatalf("25 heads of 64 KiB of %s took %v, want under %v", name, took, limit)
