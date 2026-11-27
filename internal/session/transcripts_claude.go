@@ -50,6 +50,20 @@ func boxTranscriptKey(boxes Boxes, name string) string {
 	return ""
 }
 
+// takeKeptNews asks the box layer which folders kept for the store key (the
+// key of the conversations folder the box mounts) are new, and marks them told.
+// nil for a host spawn (no key), or a box layer that cannot tell.
+func takeKeptNews(boxes Boxes, key string) []string {
+	if key == "" || boxes == nil {
+		return nil
+	}
+	kn, ok := boxes.(interface{ TakeKeptNews(string) []string })
+	if !ok {
+		return nil
+	}
+	return kn.TakeKeptNews(key)
+}
+
 // derivedTranscriptKey is the conversations folder key of a boxed session
 // record from before #330, which kept none: the box layer's key for the
 // record's workspace (real path), account and profile, the inputs and

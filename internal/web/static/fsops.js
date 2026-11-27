@@ -53,10 +53,30 @@ async function fsAlternates(base, rel) {
   }
 }
 
+// keptBoxId is the "box" a viewer of a kept folder's file carries (keptview.js): the same read-only
+// viewers show it, and boxFileURL reads it through the profile's kept route instead of a session's.
+// Not a session id: those are never "kept:..." (hex and dashes).
+function keptBoxId(profile, key) {
+  return "kept:" + encodeURIComponent(profile) + ":" + key;
+}
+
+function keptBoxParse(id) {
+  if (typeof id !== "string" || id.indexOf("kept:") !== 0) return null;
+  const rest = id.slice(5);
+  const i = rest.lastIndexOf(":");
+  if (i <= 0) return null;
+  try { return { profile: decodeURIComponent(rest.slice(0, i)), key: rest.slice(i + 1) }; } catch (_) { return null; }
+}
+
 // boxFileURL is the read-only route for a file inside a session's box (see
 // boxfile.go): same response shapes as /api/fs/read, `download` for the save.
 // Keyed on the session id because the client never learns box names.
 function boxFileURL(sessionId, path, download) {
+  const k = keptBoxParse(sessionId);
+  if (k) {
+    return "/api/profiles/" + encodeURIComponent(k.profile) + "/kept/file?key=" + encodeURIComponent(k.key) +
+      "&path=" + encodeURIComponent(path) + (download ? "&download=1" : "");
+  }
   return "/api/sessions/" + encodeURIComponent(sessionId) + "/boxfile?path=" + encodeURIComponent(path) +
     (download ? "&download=1" : "");
 }
@@ -174,5 +194,5 @@ function relativeTo(root, path, home) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath, relativeTo, boxFileURL };
+  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath, relativeTo, boxFileURL, keptBoxId };
 }

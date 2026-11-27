@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // View bounds. Variables so tests can lower them.
@@ -695,4 +696,53 @@ func keptRemoveOne(ctx context.Context, parent *os.Root, name string) error {
 	makeRemovable(ctx, sub, ".")
 	sub.Close()
 	return parent.RemoveAll(name)
+}
+
+// keptNewsWait is how long a spawn waits for a store's lock to tell what is
+// new: a forget holds it through a big removal, and a spawn must not stall
+// behind that.
+const keptNewsWait = 2 * time.Second
+
+// TakeKeptNews returns the paths kept in store key that no spawn has told the
+// person about yet, and marks them told. It takes the store's lock like the
+// other writers of state.json, and never opMu (the lock order is store lock
+// first). It answers none, and marks nothing, for a bad key, an unknown or
+// unreadable store, a store busy for keptNewsWait, or a state that cannot be
+// saved: the news then waits for the next spawn.
+func (m *Manager) TakeKeptNews(key string) []string {
+	if !ValidConversationsKey(key) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), keptNewsWait)
+	defer cancel()
+	mu := m.keptStoreLock(key)
+	if err := lockWithin(ctx, mu); err != nil {
+		return nil
+	}
+	defer mu.Unlock()
+	store, err := keptOpenStore(m.opts.StateRoot, key)
+	if err != nil {
+		return nil
+	}
+	defer store.Close()
+	st, err := loadKeptState(store)
+	if err != nil {
+		return nil
+	}
+	next := keptCopy(st)
+	var news []string
+	for i := range next.Kept {
+		if !next.Kept[i].Announced {
+			next.Kept[i].Announced = true
+			news = append(news, next.Kept[i].Path)
+		}
+	}
+	if len(news) == 0 {
+		return nil
+	}
+	if err := saveKeptState(store, next); err != nil {
+		log.Printf("box: kept store %s: marking the news told: %v", key, err)
+		return nil
+	}
+	return news
 }

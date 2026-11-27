@@ -68,7 +68,7 @@ function world() {
     document: doc, console, Promise, JSON, Math, Array, Object, Set, Map, String, Number, Date, setTimeout, clearTimeout,
     tabIcon: icon, dockIcon: icon, pageLeaveHook: null, window: { HOME_DIR: "/home/you" },
   });
-  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "keptview.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The two things a menu row hands over to (profilepage.js's own, replaced so the click is what is measured).
   // Where focus is at the moment each runs: Delete… opens a confirm that hands focus back to whatever had it when it opened.
   const focusAt = [];

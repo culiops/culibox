@@ -154,6 +154,8 @@ function page(over) {
     CRED_D4_REMEDY: "Use a role without write access as the base and put this one under Elevate.",
     api: async (p, opt) => {
       const method = (opt && opt.method) || "GET";
+      // What boxes keep for the profile (keptview.js): nothing here, and not a call these tests count.
+      if (method === "GET" && /^\/api\/profiles\/[^/]+\/kept$/.test(p)) return { stores: [] };
       calls.push(method + " " + p);
       if (box.apiFail) throw box.apiFail;
       const m = /^\/api\/profiles\/([^/]+)$/.exec(p);
@@ -204,7 +206,7 @@ function page(over) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
-  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js", "pfv-new.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of ["keptview.js", "profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js", "pfv-new.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   return { box, els, calls, doc, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 

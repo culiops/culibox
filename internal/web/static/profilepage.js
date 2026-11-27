@@ -605,6 +605,8 @@ function pfvRender() {
   // Right after Create: what the new profile may need next (pfv-new.js).
   if (pfvState.created !== "" && pfvState.created === pfvState.name) kids.push(pfvNextSteps(rv));
   kids.push(heading, ...pfvDrawSheets(rv, known));
+  // What boxes keep for this profile (keptview.js): drawn from what was last fetched, refreshed by pfvShow.
+  kids.push(keptHost(pfvState.name));
   root.replaceChildren(...kids);
   pfvMenu = null;
   pfvDrawn = pfvKey();
@@ -738,6 +740,7 @@ async function pfvShow(name) {
   pfvState.errors = [];
   if (same) pfvRefresh();
   else pfvRender();
+  keptReload(pick);
 }
 
 // pfvNextAfter: the profile to show once `name` is gone: the one after it in list order,

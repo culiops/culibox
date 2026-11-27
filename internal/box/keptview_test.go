@@ -503,3 +503,62 @@ func TestKeptForgetRefusesBadRel(t *testing.T) {
 		}
 	}
 }
+
+// TakeKeptNews hands each newly kept folder out once: the first call returns
+// the paths not yet announced and marks them, the second returns none.
+func TestTakeKeptNewsOnce(t *testing.T) {
+	m := newTestManager(t)
+	seen := keptViewEntry(".old", 1)
+	seen.Announced = true
+	keptSeedStore(t, m.opts.StateRoot, keptTestKey, KeptState{Profile: "p", Workspace: "/w",
+		Kept: []KeptEntry{keptViewEntry(".culiops", 100), seen, keptViewEntry(".local/share/culiops", 5)}})
+
+	got := m.TakeKeptNews(keptTestKey)
+	if !slices.Equal(got, []string{".culiops", ".local/share/culiops"}) {
+		t.Fatalf("first TakeKeptNews = %v, want the two unannounced paths", got)
+	}
+	if again := m.TakeKeptNews(keptTestKey); len(again) != 0 {
+		t.Fatalf("second TakeKeptNews = %v, want none", again)
+	}
+	// The marks are on disk, not only in memory.
+	store, err := keptOpenStore(m.opts.StateRoot, keptTestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	st, err := loadKeptState(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range st.Kept {
+		if !e.Announced {
+			t.Errorf("%s still not announced after TakeKeptNews", e.Path)
+		}
+	}
+	// A bad key or an unknown store answers none and creates nothing.
+	if got := m.TakeKeptNews("nope"); len(got) != 0 {
+		t.Fatalf("bad key: %v", got)
+	}
+	if got := m.TakeKeptNews(ConversationsKey("TEST", "/none", "", "p")); len(got) != 0 {
+		t.Fatalf("unknown store: %v", got)
+	}
+}
+
+// It never waits for a forget that holds the store's lock: a spawn must not
+// stall behind a big removal. The news stays for the next spawn.
+func TestTakeKeptNewsDoesNotWaitOnStoreLock(t *testing.T) {
+	m := newTestManager(t)
+	keptSeedStore(t, m.opts.StateRoot, keptTestKey, KeptState{Profile: "p", Workspace: "/w",
+		Kept: []KeptEntry{keptViewEntry(".culiops", 100)}})
+	mu := m.keptStoreLock(keptTestKey)
+	mu.Lock()
+	start := time.Now()
+	got := m.TakeKeptNews(keptTestKey)
+	mu.Unlock()
+	if len(got) != 0 || time.Since(start) > 5*time.Second {
+		t.Fatalf("got %v after %v with the lock held", got, time.Since(start))
+	}
+	if got := m.TakeKeptNews(keptTestKey); !slices.Equal(got, []string{".culiops"}) {
+		t.Fatalf("after the lock is free: %v, want the news still there", got)
+	}
+}

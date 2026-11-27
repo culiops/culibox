@@ -63,8 +63,10 @@ type fakeBoxes struct {
 	nameCalls  int
 	prepares   int
 	prepareErr error
-	order      *callLog // optional: shared with fakeBundles to pin call order
-	conv       string   // ConversationsKeyOf's answer
+	order      *callLog                  // optional: shared with fakeBundles to pin call order
+	conv       string                    // ConversationsKeyOf's answer
+	keptNews   func(key string) []string // TakeKeptNews's answer, when set
+	keptAsked  []string                  // the keys TakeKeptNews was asked about
 }
 
 // ConversationsKeyFor is the box layer's: the key under instance "TEST".
@@ -73,6 +75,18 @@ func (f *fakeBoxes) ConversationsKeyFor(workspace, account, profile string) stri
 		return ""
 	}
 	return box.ConversationsKey("TEST", workspace, account, profile)
+}
+
+// TakeKeptNews is the box layer's: the kept folders not yet announced for a store key.
+func (f *fakeBoxes) TakeKeptNews(key string) []string {
+	f.mu.Lock()
+	f.keptAsked = append(f.keptAsked, key)
+	fn := f.keptNews
+	f.mu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(key)
 }
 
 func (f *fakeBoxes) ConversationsKeyOf(string) string {
