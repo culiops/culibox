@@ -60,6 +60,18 @@ func (w Where) source(table string) (from, and string, args []any) {
 	if c == "" {
 		return table + " r", "", nil
 	}
-	return table + " r LEFT JOIN session_dim d ON d.session_id = r.session_id AND d.project = r.project",
-		" AND (" + c + ")", args
+	return table + dimJoin, " AND (" + c + ")", args
+}
+
+// dimJoin is the LEFT JOIN of the rollup table (alias r) to session_dim (alias d).
+const dimJoin = " r LEFT JOIN session_dim d ON d.session_id = r.session_id AND d.project = r.project"
+
+// joined is source for a query that reads session_dim columns: the dim table is
+// always joined, and the where condition (if any) is the one source adds.
+func (w Where) joined(table string) (from, and string, args []any) {
+	c, args := w.clause()
+	if c == "" {
+		return table + dimJoin, "", nil
+	}
+	return table + dimJoin, " AND (" + c + ")", args
 }

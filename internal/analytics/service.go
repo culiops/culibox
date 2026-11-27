@@ -250,6 +250,18 @@ func (s *Service) Sessions(from, to string, limit int, w Where) ([]SessionRow, e
 func (s *Service) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
 	return s.store.SessionCosts(from, to, w)
 }
+func (s *Service) SessionModelCosts(from, to string, w Where) ([]SessionModelCost, error) {
+	return s.store.SessionModelCosts(from, to, w)
+}
+func (s *Service) Workspaces(from, to string, w Where) ([]WorkspaceRow, error) {
+	return s.store.Workspaces(from, to, w)
+}
+func (s *Service) Drivers(from, to string, w Where) (DriversResp, error) {
+	return s.store.Drivers(from, to, w)
+}
+func (s *Service) WhereOptions(from, to string) ([]WhereOption, error) {
+	return s.store.WhereOptions(from, to)
+}
 func (s *Service) Tools(from, to string, limit int, w Where) ([]ToolRow, error) {
 	return s.store.Tools(from, to, limit, w)
 }

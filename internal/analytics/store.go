@@ -784,6 +784,21 @@ type SessionAggRow struct {
 	CacheCreation int64   `json:"cacheCreation"`
 	Prompts       int64   `json:"prompts"`
 	Cost          float64 `json:"costUsd"`
+	// From session_dim; empty when the session has no dim row. Workspace is the
+	// project slug for a session no workspace explains, as Workspaces files it.
+	Workspace string `json:"workspace"`
+	Runtime   string `json:"runtime"`
+	Profile   string `json:"profile"`
+	Branch    string `json:"branch"`
+}
+
+// SessionModelCost is one model's cost within one session over the window: the
+// grouped row SessionCosts sees before it folds a multi-model session to "mixed".
+type SessionModelCost struct {
+	SessionID string  `json:"sessionId"`
+	Project   string  `json:"project"`
+	Model     string  `json:"model"`
+	Cost      float64 `json:"costUsd"`
 }
 
 // ToolRow is one attribution aggregate across the window.
@@ -908,12 +923,13 @@ LIMIT ?`, append(append([]any{from, to}, wargs...), limit)...)
 // and top-by-cost list stay correct on wide windows. Bounded by fleet size
 // (one grouped row per session/model), so it does not need a cap.
 func (s *Store) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
-	src, and, wargs := w.source("session_rollup")
+	src, and, wargs := w.joined("session_rollup")
 	rows, err := s.db.Query(`
 SELECT r.session_id, r.project, r.model, MAX(r.day),
-  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd),
+  COALESCE(d.workspace,''), COALESCE(d.runtime,''), COALESCE(d.profile,''), COALESCE(d.branch,'')
 FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
-GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...)
+GROUP BY r.session_id, r.project, r.model, d.workspace, d.runtime, d.profile, d.branch`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -925,16 +941,19 @@ GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...
 	byKey := make(map[string]*acc)
 	order := []string{}
 	for rows.Next() {
-		var sid, project, model, day string
+		var sid, project, model, day, ws, runtime, profile, branch string
 		var in, out, cr, cc, prompts int64
 		var cost float64
-		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts, &cost); err != nil {
+		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts, &cost,
+			&ws, &runtime, &profile, &branch); err != nil {
 			return nil, err
 		}
+		ws, _ = workspaceOf(project, ws, false)
 		k := sid + "\x1f" + project
 		a := byKey[k]
 		if a == nil {
-			a = &acc{row: SessionAggRow{SessionID: sid, Project: project}, models: map[string]struct{}{}}
+			a = &acc{row: SessionAggRow{SessionID: sid, Project: project,
+				Workspace: ws, Runtime: runtime, Profile: profile, Branch: branch}, models: map[string]struct{}{}}
 			byKey[k] = a
 			order = append(order, k)
 		}
@@ -965,6 +984,45 @@ GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...
 		out = append(out, a.row)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cost > out[j].Cost })
+	return out, nil
+}
+
+// SessionModelCosts returns one row per (session, model) over the window, the
+// grouped rows SessionCosts folds. Bounded by sessions x models. Costliest first.
+func (s *Store) SessionModelCosts(from, to string, w Where) ([]SessionModelCost, error) {
+	src, and, wargs := w.source("session_rollup")
+	rows, err := s.db.Query(`
+SELECT r.session_id, r.project, r.model, SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SessionModelCost{}
+	for rows.Next() {
+		var r SessionModelCost
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Model, &r.Cost); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Cost != b.Cost {
+			return a.Cost > b.Cost
+		}
+		if a.SessionID != b.SessionID {
+			return a.SessionID < b.SessionID
+		}
+		if a.Project != b.Project {
+			return a.Project < b.Project
+		}
+		return a.Model < b.Model
+	})
 	return out, nil
 }
 
