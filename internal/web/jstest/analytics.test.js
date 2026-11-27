@@ -313,7 +313,8 @@ test("anSessionRow: one session's cells as text; mixed is flagged, a single mode
 test("anWsName: a session's workspace shows as its folder's name, and the Costliest session tile names it the same way", () => {
   assert.equal(anWsName("/home/u/box-clones/culiops-agent-box-prd"), "culiops-agent-box-prd");
   assert.equal(anWsName("/home/u/work/"), "work");
-  assert.equal(anWsName("home-claude-old-proj"), "home-claude-old-proj"); // an unmatched row keeps its folder slug
+  assert.equal(anWsName("-home-claude-box-clones-old-proj"), "box-clones-old-proj"); // an unmatched row: its slug, as the Workspaces row names it
+  assert.equal(anWsName("acme-ledger"), "acme-ledger");
   assert.equal(anWsName(""), "");
   const row = anSessionRow({ sid: "a1c3e507", day: "2026-11-12", project: "-x-y", workspace: "/home/u/work/acme-ledger", cost: 5, model: "claude-opus-5-5", runtime: "host" });
   assert.equal(row.workspace, "acme-ledger");

@@ -202,11 +202,11 @@ function projShort(p) {
   return p.replace(/^-home-[^-]+-/, "").replace(/^-/, "");
 }
 // anWsName: a workspace's name for a cell or a label: the last element of its folder path (the server's workspaceName), or the text
-// itself when it has no "/" (an unmatched row's folder slug). The full path stays in the cell's title.
+// folder slug as the Workspaces row names it (projShort) when it has no "/" (an unmatched row). The full path stays in the title.
 function anWsName(ws) {
   const t = String(ws || "").replace(/\/+$/, "");
   const i = t.lastIndexOf("/");
-  return i >= 0 && i < t.length - 1 ? t.slice(i + 1) : t;
+  return i >= 0 && i < t.length - 1 ? t.slice(i + 1) : projShort(t);
 }
 
 // ---- the desktop page's KPI figures -------------------------------------------------------------------------------
