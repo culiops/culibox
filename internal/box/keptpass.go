@@ -292,9 +292,11 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 		return 0, err
 	}
 	p := &keptPass{m: m, box: box, key: rec.Key, opts: o, home: home, store: store, shome: shome, now: time.Now(), st: keptCopy(before)}
+	keptAttribute(&p.st, m.opts.Instance, rec)
 	if err := p.plan(rec.Mounts); err != nil {
 		return 0, err
 	}
+	p.mountRows(rec.Refused)
 	p.screenHome(ctx, start.Add(keptPassBudget/2))
 	if keptPassLockHook != nil {
 		keptPassLockHook(box)
@@ -317,6 +319,21 @@ func keptStateAttribution(instance, key string, st KeptState) (profile, workspac
 		return "", "", "", false
 	}
 	return st.Profile, st.Workspace, st.Account, true
+}
+
+// keptAttribute names in st whom store rec.Key belongs to, from the box record
+// (whose spawn created the box: ensure writes it, as ensure cannot take the
+// store's lock to write the state), unless st names it already. The record is
+// believed only as the state is, when it hashes to the key
+// (keptStateAttribution): on macOS the VM can write both.
+func keptAttribute(st *KeptState, instance string, rec keptBoxRecord) {
+	if _, _, _, ok := keptStateAttribution(instance, rec.Key, *st); ok {
+		return
+	}
+	from := KeptState{Profile: rec.Profile, Workspace: rec.Workspace, Account: rec.Account}
+	if _, _, _, ok := keptStateAttribution(instance, rec.Key, from); ok {
+		st.Profile, st.Workspace, st.Account = rec.Profile, rec.Workspace, rec.Account
+	}
 }
 
 // keptOpenHome opens box's home as a root: a real directory in boxstate,
@@ -459,6 +476,18 @@ func (p *keptPass) plan(mounts []string) error {
 		}
 	}
 	return nil
+}
+
+// mountRows adds the kept folders the box's create left out (prepareKept: a
+// link in the store, a mountpoint the box rigged, a folder holding a CuliBox
+// mount) as not-kept rows of the box, seen when the box was created. A row
+// this pass makes for the same path is newer and wins (cleanKeptRows).
+func (p *keptPass) mountRows(rows []KeptRefusalRow) {
+	for _, r := range rows {
+		if r.Path != "" && !keptFoldIn(r.Path, p.st.Forgotten) {
+			p.rows = append(p.rows, KeptRefusalRow{Path: r.Path, Reason: r.Reason, Box: p.box, SeenAt: r.SeenAt})
+		}
+	}
 }
 
 // notChecked records the home folders left unscreened: they stay in the home.

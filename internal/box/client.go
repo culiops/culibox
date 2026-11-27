@@ -197,6 +197,25 @@ func (c CLIClient) BindSource(ctx context.Context, name, dst string) (string, er
 	return "", nil
 }
 
+// BindSources is the host path of each of the named box's bind mounts, by
+// in-box destination, from one docker inspect.
+func (c CLIClient) BindSources(ctx context.Context, name string) (map[string]string, error) {
+	out, err := c.Stdout(ctx, []string{"inspect", "--type", "container", "--format", bindSourcesFormat, name})
+	if err != nil {
+		return nil, err
+	}
+	srcs := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "|", 3)
+		if len(parts) == 3 && parts[0] == "bind" && parts[1] != "" {
+			if _, dup := srcs[parts[1]]; !dup {
+				srcs[parts[1]] = parts[2]
+			}
+		}
+	}
+	return srcs, nil
+}
+
 // bindSourcesFormat prints one "type|destination|source" line per mount.
 const bindSourcesFormat = `{{range .Mounts}}{{.Type}}|{{.Destination}}|{{.Source}}{{"\n"}}{{end}}`
 

@@ -91,10 +91,19 @@ type KeptRefusalRow struct {
 }
 
 // keptBoxRecord is .kept/.boxes/<box>: the store key of the box and the
-// targets of the mounts CuliBox adds to it, home-relative.
+// targets of the mounts CuliBox adds to it, home-relative, as ensure found them
+// when it created the box (prepareKept). Profile, Workspace and Account are
+// whose spawn that was, for the store's state (keptAttribute: believed only
+// when they hash to Key); Refused are the kept folders that create left out, as
+// not-kept rows (keptPass.mountRows). Those four are display data: a record is
+// valid without them.
 type keptBoxRecord struct {
-	Key    string   `json:"key"`
-	Mounts []string `json:"mounts,omitempty"`
+	Key       string           `json:"key"`
+	Mounts    []string         `json:"mounts,omitempty"`
+	Profile   string           `json:"profile,omitempty"`
+	Workspace string           `json:"workspace,omitempty"`
+	Account   string           `json:"account,omitempty"`
+	Refused   []KeptRefusalRow `json:"refused,omitempty"`
 }
 
 // KeptStoreDir is the store of key under stateRoot. key must pass

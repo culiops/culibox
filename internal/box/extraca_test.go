@@ -165,7 +165,7 @@ func TestRunArgsUnchangedWithoutCA(t *testing.T) {
 		"--mount", "type=bind,src=/h,dst=/b,readonly",
 		"culiops/agent-box:base", "sleep", "infinity",
 	}
-	got := m.runArgs("ab-box-abc", "/w", []Mount{{Host: "/h", Box: "/b"}}, false, false, "", DefaultMemory, "")
+	got := m.runArgs("ab-box-abc", "/w", []Mount{{Host: "/h", Box: "/b"}}, false, false, "", DefaultMemory, "", nil)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("runArgs changed with CAs off:\n got %q\nwant %q", got, want)
 	}
@@ -174,7 +174,7 @@ func TestRunArgsUnchangedWithoutCA(t *testing.T) {
 func TestRunArgsAddsCABundleAndLabel(t *testing.T) {
 	set := testCASet(t, "Corp Inspection Root")
 	m, _ := newCAManager(t, set, nil)
-	got := m.runArgs("ab-box-abc", "/w", []Mount{{Host: "/h", Box: "/b"}}, false, false, "/state/ca/bundle-x.pem", DefaultMemory, "")
+	got := m.runArgs("ab-box-abc", "/w", []Mount{{Host: "/h", Box: "/b"}}, false, false, "/state/ca/bundle-x.pem", DefaultMemory, "", nil)
 	if !containsPair(got, "--label", extraca.Label+"="+set.Hash()) {
 		t.Fatalf("missing CA label: %q", got)
 	}

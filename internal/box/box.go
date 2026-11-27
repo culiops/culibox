@@ -275,6 +275,10 @@ type Client interface {
 	// destination dst ("" when it has none). Only the broker's mount is read this
 	// way (reuseBrokerDir), so a box pays the extra call only when it has one.
 	BindSource(ctx context.Context, name, dst string) (string, error)
+	// BindSources is BindSource for every bind of the running box at once (in-box
+	// destination → host path), for a check that needs several: whether the
+	// mounts reuseMounts did not ask for are all kept folders (keptOnly).
+	BindSources(ctx context.Context, name string) (map[string]string, error)
 }
 
 // Options configures a Manager.
@@ -1316,7 +1320,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	// The profile's conversations folder, from the same resolution as the name
 	// (#330). Not identity: the name above does not hash it.
 	conv := m.ConversationsKeyFor(ws.Path, key.Account, key.Profile)
-	if err := m.ensure(ctx, name, ws, extraRO, conv, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
+	if err := m.ensure(ctx, name, ws, extraRO, conv, keptOwner{Profile: key.Profile, Account: key.Account}, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		if key.Session != "" {
 			m.mu.Lock()
 			if !m.exclusive[name] { // no box of this session counted: nothing to own
@@ -1391,8 +1395,10 @@ func withoutNames(env, names []string) []string {
 // conv is the key of the conversations folder the spawn asks for ("" none): a
 // box created here mounts it; a running one is judged by reuseConversations.
 // Either way the key of the folder the box ends up mounting is remembered for
-// ConversationsKeyOf.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, conv string, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
+// ConversationsKeyOf. conv is also the key of the profile's kept-folder store:
+// a box created here mounts its kept folders (prepareKept), and owner is whose
+// spawn it is, for the box's record.
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, conv string, owner keptOwner, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1620,6 +1626,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			// into the folder before the mount hides it.
 			m.adoptConversations(ctx, name, convDir)
 		}
+		// The profile's kept folders, as its store holds them now: checked, their
+		// mountpoints made in the home, and the box's record written (with no
+		// profile, one left from a profile's spawn removed), all before the box
+		// exists. After the mountpoints above, so a kept folder that would hold
+		// one of them is left out.
+		var kept []Mount
+		if kept, err = m.prepareKept(name, conv, owner, wsm, extraRO); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 		if preAcceptBypass {
 			// Best effort, like the trust entry: without it the agent just asks.
 			if err := m.preAcceptBypass(name); err != nil {
@@ -1653,7 +1669,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory, convDir)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory, convDir, kept)); err != nil {
 			// A box that never came to be holds no lock. One docker may have left
 			// behind keeps it until it is removed.
 			if m.locks != nil {
@@ -1730,7 +1746,10 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 // is the norm, absent is a missing OPTIONAL mount (a box from before it existed
 // still runs; its screenshots just stay inside it). The conversations folder
 // (ConversationsBox, wantConv) is judged the same way: never an extra mount,
-// and a missing OPTIONAL one when the spawn asks for it.
+// and a missing OPTIONAL one when the spawn asks for it. A profile's kept
+// folders are neither asked for nor extra: they are applied at create only, so
+// a mount at a kept folder's path whose source is a kept store's folder
+// (keptOnly, the one host source read here) is left out of the comparison.
 //
 //   - Exactly what this spawn would create: reuse.
 //   - Idle (no session of this process uses it): removed and recreated, for a
@@ -1785,15 +1804,19 @@ func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []stri
 			required = append(required, d)
 		}
 	}
-	extra := false
+	// A mount the spawn did not ask for is an extra one, unless it is a kept
+	// folder's: those are applied at create only (keptMounts), so a box is never
+	// recreated because its profile's store changed since. Asked of docker only
+	// when it decides the answer.
+	var unasked []string
 	for d := range got {
-		if partial {
-			break
+		if !partial && !want[d] {
+			unasked = append(unasked, d)
 		}
-		if !want[d] {
-			extra = true
-			break
-		}
+	}
+	extra := len(unasked) > 0
+	if extra && len(missing) == 0 {
+		extra = !m.keptOnly(ctx, name, unasked)
 	}
 	if len(missing) == 0 && !extra {
 		return StateRunning, nil

@@ -137,7 +137,7 @@ func convKey(profile string) BoxKey { return BoxKey{Profile: profile} }
 func TestRunArgsMountsTheConversationsFolderReadWrite(t *testing.T) {
 	m := newTestManager(t)
 	conv := ConversationsDir(m.opts.StateRoot, "0123456789ab")
-	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, conv)
+	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, conv, nil)
 	home := slices.Index(got, "type=bind,src="+m.stateDir("ab-box-abc")+",dst="+boxHome)
 	at := slices.Index(got, "type=bind,src="+conv+",dst=/home/agent/.claude/projects")
 	if at < 0 || home < 0 || at < home {
@@ -147,7 +147,7 @@ func TestRunArgsMountsTheConversationsFolderReadWrite(t *testing.T) {
 		t.Fatalf("want 4 mounts, got %d: %q", n, got)
 	}
 	// "" leaves the argv exactly as before.
-	if plain := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, ""); hasDst(plain, ConversationsBox) {
+	if plain := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, "", nil); hasDst(plain, ConversationsBox) {
 		t.Fatalf("no folder, no mount: %q", plain)
 	}
 }

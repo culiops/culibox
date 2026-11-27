@@ -313,6 +313,19 @@ func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, er
 	return f.sources[name][dst], nil
 }
 
+func (f *fakeClient) BindSources(_ context.Context, name string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bindErr != nil {
+		return nil, f.bindErr
+	}
+	out := map[string]string{}
+	for d, s := range f.sources[name] {
+		out[d] = s
+	}
+	return out, nil
+}
+
 func (f *fakeClient) HasRuntime(ctx context.Context, name string) (bool, error) {
 	f.mu.Lock()
 	f.runtimeCalls++
@@ -394,6 +407,10 @@ func newTestManagerWithFakeTTL(t *testing.T, ttl time.Duration) (*Manager, *fake
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A box a test stops runs its keep pass in the background, which writes in
+	// the state root once the box has a kept-folder record (any spawn with a
+	// profile). Registered after the state root's TempDir, so it runs first.
+	t.Cleanup(m.WaitKeptPasses)
 	return m, f
 }
 

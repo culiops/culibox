@@ -48,7 +48,7 @@ func TestDefaultMemoryIsValid(t *testing.T) {
 func TestRunArgsUseConfiguredLimits(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	m.opts.PidsLimit, m.opts.TmpSize = 2048, "2g"
-	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", "3g", "")
+	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", "3g", "", nil)
 	if !containsPair(got, "--pids-limit", "2048") {
 		t.Errorf("pids limit not applied: %q", got)
 	}
@@ -63,7 +63,7 @@ func TestRunArgsUseConfiguredLimits(t *testing.T) {
 	}
 
 	m.opts.PidsLimit, m.opts.TmpSize = 0, ""
-	got = m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, "")
+	got = m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, "", nil)
 	if !containsPair(got, "--pids-limit", "512") || !containsPair(got, "--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m") {
 		t.Errorf("zero values must give the defaults: %q", got)
 	}
@@ -76,7 +76,7 @@ func TestRunArgsCPUs(t *testing.T) {
 		want string
 	}{{2, "2"}, {0.5, "0.5"}, {1.25, "1.25"}, {1.1, "1.1"}, {1024, "1024"}} {
 		m.opts.CPUs = c.in
-		if got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", "4g", ""); !containsPair(got, "--cpus", c.want) {
+		if got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", "4g", "", nil); !containsPair(got, "--cpus", c.want) {
 			t.Errorf("CPUs %v: want --cpus %s in %q", c.in, c.want, got)
 		}
 	}
@@ -228,7 +228,7 @@ func TestMemoryCapMaxFailsClosed(t *testing.T) {
 // A deleted pinned tag must fail the spawn, not be fetched from Docker Hub.
 func TestBoxRunsNeverPull(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, "")
+	got := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory, "", nil)
 	p := slices.Index(got, "--pull=never")
 	if p < 0 {
 		t.Fatalf("box run does not carry --pull=never: %q", got)
