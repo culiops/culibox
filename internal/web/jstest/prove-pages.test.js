@@ -2208,6 +2208,10 @@ test("Sessions on the phone: one section with its hint, the page's heads; the Se
   assert.deepStrictEqual(text("an-fleet"), [], "the Session shape and Fleet at a glance boxes are gone");
   assert.deepStrictEqual(all.filter((n) => n.tag === "th").map((n) => n.textContent), ["Session", "Last day", "Workspace", "Where", "Branch", "Model", "Prompts", "API value"]);
   assert.ok(!all.some((n) => /kpi-row|an-card|an-psec|an-split|section-title/.test(n.className)), "none of the page's nodes");
+  // The workspace cell ellipsizes in a narrow table; its title carries the whole name.
+  const wsCells = all.filter((n) => n.tag === "tr" && n.elements.length === 8 && n.elements[0].tag === "td").map((tr) => tr.elements[2]);
+  assert.ok(wsCells.length > 0, "the table has rows");
+  for (const c of wsCells) assert.ok(c.attrs.title && c.attrs.title.length >= c.textContent.length, "a workspace cell has its full text as title: " + c.textContent);
 });
 
 test("the Sessions table's columns are fixed and let go below 1020px of body; the split and the cost bands are gone", () => {

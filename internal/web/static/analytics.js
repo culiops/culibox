@@ -1204,8 +1204,10 @@ function anSessions(root) {
     const r = anSessionRow(s);
     const branch = anTd(r.branch || "—", r.branch ? "mono" : "dim");
     if (r.branch) branch.setAttribute("title", r.branch);
+    const wsTd = anTd(r.workspace, "mono");
+    wsTd.setAttribute("title", r.workspacePath || r.workspace);
     const tr = el("tr");
-    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), anTd(r.workspace, "mono"), anTd(r.where), branch,
+    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), wsTd, anTd(r.where), branch,
       anTd(r.model, "dim"), anTd(r.prompts, "num"), anTd(r.cost, "num"));
     tbl.appendChild(tr);
   }
