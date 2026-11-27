@@ -2379,6 +2379,11 @@ test("the Workspaces table's first column shrinks to what the other six leave, a
   assert.match(child[1], /white-space:\s*nowrap/);
 });
 
+test("the phone's muted Cost drivers row has no track and its name spans the bar's column, so 'outside any skill' is not cut", () => {
+  assert.match(APP_CSS, /\.an-hbar\.an-hpct\.an-mut \.nm\s*\{[^}]*grid-column:\s*1 \/ 3/);
+  assert.match(APP_CSS, /\.an-hbar\.an-hpct\.an-mut \.track\s*\{[^}]*display:\s*none/);
+});
+
 test("Model cells are nowrap cells: only Project wraps, so Model keeps its word width in a narrow body", () => {
   const env = analyticsEnv();
   env.page(true);

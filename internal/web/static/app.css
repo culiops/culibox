@@ -1235,6 +1235,9 @@
        MCP tool row (indented) are variants of it. */
     .an-hbar.an-hpct { grid-template-columns: 104px 1fr 56px 38px; }
     .an-hbar.an-mut .nm, .an-hbar.an-mut .val { color: var(--muted); }
+    /* The muted last row has no bar, so its name takes the bar's column too and "outside any skill" is not cut to "outside any sk…". */
+    .an-hbar.an-hpct.an-mut .nm { grid-column: 1 / 3; }
+    .an-hbar.an-hpct.an-mut .track { display: none; }
     .an-hbar.an-sub .nm { padding-left: 12px; }
     .an-cmpnote { font-size: 10.5px; color: var(--muted); border-left: 2px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); margin: 14px 0 0; border-radius: var(--radius); }
     .an-svgwrap { overflow-x: auto; }
