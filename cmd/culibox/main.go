@@ -1088,6 +1088,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// transcript roots are walked through os.Root, never followed out.
 			svc.SetBoxState(filepath.Join(dataDir, "boxstate"))
 			svc.SetHome(home)
+			// Which repo a session belongs to is judged against the live config,
+			// read on every pass. The method value is bound only on a real manager.
+			var convKey func(workspace, account, profile string) string
+			if boxes != nil {
+				convKey = boxes.ConversationsKeyFor
+			}
+			svc.SetResolveEnv(analyticsResolveEnv(pm.All, h.recorded, convKey, runtime.GOOS == "darwin"))
 			analyticsSvc = svc
 			srv.Analytics = svc
 			// Only a live service: a nil *Service must never reach the manager.

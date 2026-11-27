@@ -27,6 +27,9 @@ type Service struct {
 	seeded   bool       // SeedLegacyDims has run in this process
 	mu       sync.Mutex // held for the duration of one Ingest pass
 
+	// resolveEnv reads the live profiles and clone dirs; nil resolves from a zero env.
+	resolveEnv func() ResolveEnv
+
 	// costs is the all-days cost per conversation id, rebuilt after every
 	// ingest pass (see refreshCosts) so a session list reads a map, not SQL.
 	// costMu guards only the map pointer; it is never held across a query and
@@ -88,6 +91,49 @@ func (s *Service) SetBoxState(dir string) { s.boxState = filepath.Clean(dir) }
 // SetHome names the user's home directory, so a transcript under
 // <home>/.claude/projects is known to be host usage. Call it before Start.
 func (s *Service) SetHome(home string) { s.home = filepath.Clean(home) }
+
+// SetResolveEnv names the source of the live config that files a session under
+// its workspace. It is called on every pass that has a session to resolve, so a
+// profile saved after boot counts. Without it a zero env is used. Call it before
+// Start.
+func (s *Service) SetResolveEnv(f func() ResolveEnv) { s.resolveEnv = f }
+
+// resolvePending files every session that has no workspace yet, or that none
+// explained, from the config as it is now. A session that has a workspace is a
+// snapshot and is not looked at again. It runs inside the pass, after the walk
+// has added this pass's sessions. A failure is logged and does not fail the pass:
+// the rows stay pending and the next pass retries them.
+func (s *Service) resolvePending() {
+	rows, err := s.store.PendingDims()
+	if err != nil {
+		log.Printf("analytics: listing sessions to file: %v", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	known, err := s.store.KnownPaths()
+	if err != nil {
+		log.Printf("analytics: listing known folders: %v", err)
+		return
+	}
+	var env ResolveEnv
+	if s.resolveEnv != nil {
+		env = s.resolveEnv()
+	}
+	failed := 0
+	for _, r := range rows {
+		if err := s.store.SetResolved(r.SessionID, r.Project, Resolve(r.DimIn, env, known)); err != nil {
+			if failed == 0 {
+				log.Printf("analytics: filing session %s: %v", r.SessionID, err)
+			}
+			failed++
+		}
+	}
+	if failed > 1 {
+		log.Printf("analytics: %d more sessions could not be filed", failed-1)
+	}
+}
 
 // classify says where a transcript path ran, from the root it sits under. The
 // data dir is the parent of the box-state dir. Pure string work, no stat.
@@ -153,6 +199,7 @@ func (s *Service) Ingest() (IngestStats, error) {
 			ingestRoot(s.store, root, s.classify, &st)
 		}
 	}
+	s.resolvePending()
 	s.refreshCosts()
 	return st, nil
 }

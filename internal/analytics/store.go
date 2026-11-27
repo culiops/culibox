@@ -651,6 +651,70 @@ func (s *Store) SeedLegacyDims(classify func(path string) (RootInfo, string, boo
 	return n, nil
 }
 
+// DimRow is a session_dim row waiting for its workspace: the key and what
+// Resolve reads.
+type DimRow struct {
+	SessionID, Project string
+	DimIn
+}
+
+// PendingDims is every session with no workspace yet (an empty one) or one no
+// workspace explained (unmatched = 1). A resolved row is a snapshot and is never
+// listed again.
+func (s *Store) PendingDims() ([]DimRow, error) {
+	rows, err := s.db.Query(`SELECT session_id,project,cwd,runtime,root_key FROM session_dim
+WHERE workspace='' OR unmatched=1 ORDER BY session_id,project`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DimRow
+	for rows.Next() {
+		var r DimRow
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Cwd, &r.Runtime, &r.RootKey); err != nil {
+			return nil, err
+		}
+		r.DimIn.Project = r.Project
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// KnownPaths is every folder earlier sessions point at, for the slug match of a
+// session that carries no cwd: the workspace of each matched row and the cwd of
+// each parsed one. An unmatched row's workspace is only its slug, so it is left
+// out.
+func (s *Store) KnownPaths() ([]string, error) {
+	rows, err := s.db.Query(`SELECT workspace FROM session_dim WHERE workspace<>'' AND unmatched=0
+UNION
+SELECT cwd FROM session_dim WHERE cwd<>'' AND parsed=1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// SetResolved writes the resolution of one session: workspace, unmatched,
+// profile, via and via_path, and nothing else. The WHERE clause skips a row that
+// already holds exactly these values, so an unmatched session retried every pass
+// costs a read, not a write.
+func (s *Store) SetResolved(sessionID, project string, r Resolved) error {
+	_, err := s.db.Exec(`UPDATE session_dim SET workspace=?,unmatched=?,profile=?,via=?,via_path=?
+WHERE session_id=? AND project=? AND (workspace<>? OR unmatched<>? OR profile<>? OR via<>? OR via_path<>?)`,
+		r.Workspace, boolInt(r.Unmatched), r.Profile, r.Via, r.ViaPath, sessionID, project,
+		r.Workspace, boolInt(r.Unmatched), r.Profile, r.Via, r.ViaPath)
+	return err
+}
+
 // --- query types --------------------------------------------------------------
 
 // DayModelRow is one (day, model) aggregate across all sessions/projects.
