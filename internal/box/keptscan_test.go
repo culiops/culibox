@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"slices"
@@ -458,6 +459,27 @@ func TestScreenCapEntries(t *testing.T) {
 	}
 }
 
+// A folder of data files (the spec's own example: Parquet data) is screened
+// within the time cap: 300 files of 64 KiB of random bytes each.
+func TestScreenDataFolderInTime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes 19 MiB")
+	}
+	dir, root := keptHome(t)
+	r := mathrand.New(mathrand.NewSource(3))
+	b := make([]byte, 64<<10)
+	for i := range 300 {
+		r.Read(b)
+		keptWrite(t, dir, ".local/share/culiops/data/part-"+strconv.Itoa(i)+".parquet", string(b))
+	}
+	start := time.Now()
+	got := screen(t, root, ".local/share/culiops")
+	if got.Reason != "" || got.Files != 300 {
+		t.Fatalf("after %v: %+v, want a pass over 300 files", time.Since(start), got)
+	}
+	t.Logf("300 files of 64 KiB screened in %v", time.Since(start))
+}
+
 func TestScreenDepth(t *testing.T) {
 	dir, root := keptHome(t)
 	keptWrite(t, dir, ".culiops/1/2/3/4/5/6/7/f", "x") // f is at depth 8
@@ -474,8 +496,8 @@ func TestScreenTimeout(t *testing.T) {
 	dir, root := keptHome(t)
 	keptWrite(t, dir, ".culiops/a", "x")
 	setCap(t, &keptScreenTimeout, time.Duration(0))
-	if got := screen(t, root, ".culiops"); got.Reason != "too many files to check" || !got.Timeout {
-		t.Fatalf("past the deadline: %+v, want too many files to check, on the time cap", got)
+	if got := screen(t, root, ".culiops"); got.Reason != "too slow to check" || !got.Timeout {
+		t.Fatalf("past the deadline: %+v, want too slow to check, on the time cap", got)
 	}
 	setCap(t, &keptScreenTimeout, time.Minute)
 	setCap(t, &keptScreenMaxEntries, 0)

@@ -73,7 +73,8 @@ var (
 const (
 	keptReasonCredentials = "credentials"
 	keptReasonLooksSecret = "looks like credentials: "
-	keptReasonTooMany     = "too many files to check"
+	keptReasonTooMany     = "too many files to check" // the entry or depth cap
+	keptReasonTooSlow     = "too slow to check"       // the screen's own time cap
 	keptReasonUnreadable  = "could not read"
 	keptReasonLink        = "is a link"
 	keptReasonMount       = "holds a file CuliBox mounts from the host"
@@ -346,14 +347,15 @@ func (w *keptWalk) stop(reason string) {
 }
 
 // expired stops the walk once its context is done: the screen's own deadline is
-// a cap (too many files to check), the caller's cancel or deadline is not.
+// a cap (too slow to check), the caller's cancel or deadline is not (could not
+// read).
 func (w *keptWalk) expired() bool {
 	if w.ctx.Err() == nil {
 		return false
 	}
 	if errors.Is(context.Cause(w.ctx), errKeptScreenTimeout) {
 		w.res.Timeout = w.res.Reason == ""
-		w.stop(keptReasonTooMany)
+		w.stop(keptReasonTooSlow)
 	} else {
 		w.stop(keptReasonUnreadable)
 	}

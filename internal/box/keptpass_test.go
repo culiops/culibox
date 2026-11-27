@@ -860,8 +860,8 @@ func TestReclaimScreenTimeCapKeepsHome(t *testing.T) {
 	if _, err := m.keepPass(context.Background(), keptTestBox); err != nil {
 		t.Fatalf("stop pass: %v", err)
 	}
-	if r, ok := keptRow(keptLoad(t, m), ".culiops"); !ok || r.Reason != keptReasonTooMany {
-		t.Fatalf("row = %+v %v", r, ok)
+	if r, ok := keptRow(keptLoad(t, m), ".culiops"); !ok || r.Reason != "too slow to check" {
+		t.Fatalf("row = %+v %v, want too slow to check", r, ok)
 	}
 }
 
