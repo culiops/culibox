@@ -2248,7 +2248,7 @@ test("the Sessions table's columns are fixed and let go below 1020px of body; th
   assert.ok(!RULES.some((r) => parts(r.selector).some((x) => /\.an-stbl/.test(x) && !/\.an-live/.test(x) && /cursor/.test([...r.decls.keys()].join(" ")))), "no cursor on a plain row");
 });
 
-test("the page's cards and sections: a panel with the kit's radius, a title row on one baseline, 16px apart", () => {
+test("the page's cards and sections: a panel with the kit's radius, 16px apart", () => {
   const card = decls(ANP + " .an-card");
   assert.strictEqual(card.get("background"), "var(--panel)");
   assert.strictEqual(card.get("border-radius"), "var(--r-card)");
@@ -2256,11 +2256,6 @@ test("the page's cards and sections: a panel with the kit's radius, a title row 
   assert.strictEqual(decls(ANP + " .an-card > .an-tablewrap").get("border-radius"), "var(--r-card)", "a table card clips its row hover to the corners");
   assert.strictEqual(decls(ANP + " .an-card-body").get("padding"), "var(--sp-3) var(--sp-4) var(--sp-4)", "§D1 .m3-cardbody: 12px 16px 16px");
   assert.strictEqual(decls(ANP + " .an-card .card-head > :is(h2, h3)").get("margin"), "0");
-  const head = decls(ANP + " .an-psec-head");
-  assert.strictEqual(head.get("display"), "flex");
-  assert.strictEqual(head.get("align-items"), "baseline");
-  assert.strictEqual(head.get("gap"), "10px");
-  assert.strictEqual(head.get("flex-wrap"), "wrap", "a long caption drops under the title instead of overflowing");
   const sec = decls(ANP + " .an-psec");
   assert.strictEqual(sec.get("display"), "flex");
   assert.strictEqual(sec.get("flex-direction"), "column");
@@ -2278,7 +2273,7 @@ test("the page's cards and sections: a panel with the kit's radius, a title row 
   assert.ok(!WEARS_CARD.test(stripAnalytics(read("analytics.js"))), "no element of analytics.js wears .card");
 });
 
-test("Models, Projects and Cost drivers on the page: cards, kit tables and section titles", () => {
+test("Models, Workspaces and Cost drivers on the page: cards and kit tables", () => {
   const env = analyticsEnv();
   env.page(true);
   loadWindow(env);
@@ -2303,22 +2298,18 @@ test("Models, Projects and Cost drivers on the page: cards, kit tables and secti
   assert.deepStrictEqual(m.rows.map((r) => r[7].className), ["num sub", "num sub"], "Tokens is muted");
   assert.ok(models.textContent.endsWith("their tokens are counted, their value is not."), "the footnote says what other (unpriced) is");
 
-  const projects = view(env, "anProjects");
-  assert.deepStrictEqual(projects.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
-  assert.deepStrictEqual(head(projects.elements[0]), [["h2", "section-title", "Cost by project"], ["span", "t-sm muted", "Bar split shows the model mix inside each project"]]);
-  assert.deepStrictEqual(head(projects.elements[1]), [["h2", "section-title", "Detail"]]);
-  const p = tableOf(cards(projects.elements[1])[0]);
-  assert.deepStrictEqual(p.head.map((t) => t.textContent), ["Project", "Cost", "Tokens", "Prompts"]);
-  assert.deepStrictEqual(p.rows.map((r) => r[0].textContent), ["acme-terraform-course-eu-west", "acme-api", "acme-docs"]);
-  assert.deepStrictEqual(p.rows[0][0].elements.map((c) => [c.tag, c.className]), [["span", "mono t-sm"]]);
-  assert.strictEqual(p.rows[0][0].className, "an-wrap", "a long project wraps, never clips");
-  assert.deepStrictEqual(p.rows.map((r) => r[1].textContent), ["$160", "$121", "$4.20"]);
+  // Workspaces (the page's anProjects slot): three tiles, one card holding the table, the footnote under it (its figures: analytics.test.js).
+  const workspaces = view(env, "anProjects");
+  assert.deepStrictEqual(workspaces.elements.map((n) => n.tag + "." + n.className), ["div.kpi-row", "section.an-psec"]);
+  assert.deepStrictEqual(workspaces.elements[1].elements.map((n) => n.tag + "." + n.className), ["div.an-card", "p.an-foot t-sm muted"]);
+  const w = tableOf(cards(workspaces.elements[1])[0]);
+  assert.deepStrictEqual(w.head.map((t) => t.textContent), ["Workspace", "API value", "Sessions", "Host · Box", "Model mix", "Median / session", "Cache hit"]);
+  assert.deepStrictEqual(w.head.map((t) => t.className), ["", "num", "num", "", "", "num", "num"]);
 
-  // Cost drivers: the old kinds are gone; with no driver data the section says why.
+  // Cost drivers: the old kinds are gone; with no driver data the page says why and draws nothing else.
   const drivers = view(env, "anTools");
-  assert.deepStrictEqual(drivers.elements.map((n) => n.tag + "." + n.className), ["section.an-psec"]);
-  assert.deepStrictEqual(head(drivers.elements[0]), [["h2", "section-title", "Cost drivers"]]);
-  assert.strictEqual(drivers.textContent.endsWith("No cost-driver data in this window: these sessions' transcripts are no longer on disk."), true);
+  assert.deepStrictEqual(drivers.elements.map((n) => n.tag + "." + n.className), ["p.an-empty"]);
+  assert.strictEqual(drivers.textContent, "No cost-driver data in this window: these sessions' transcripts are no longer on disk.");
 });
 
 test("no off-scale analytics text on desktop", () => {
@@ -2351,8 +2342,23 @@ test("every class the Analytics views build has a rule or is a named hook", () =
   loadWindow(env);
   const used = new Set();
   const walk = (n) => { n.cls.forEach((c) => used.add(c)); n.elements.forEach(walk); };
+  // Cost drivers with data, and a workspace with breakdown rows, so every class those two views build is walked (the open state itself is
+  // pinned in analytics.test.js: this fake element has no after()).
+  env.run(`(function () {
+    const r = { total: 100, coveredTotal: 50, agent: [{ name: "a", costUsd: 20 }], skill: [], plugin: [{ name: "p", costUsd: 5 }], mcp: [{ server: "s", costUsd: 9, tools: [{ name: "t", costUsd: 4 }] }] };
+    AN.data.drivers = anDriverCards(r);
+    AN.data.driverTiles = anDriverTiles(r);
+    const kid = (label, runtime, path) => ({ runtime, profile: "", via: "", label, path, costUsd: 5, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [5] });
+    AN.data.workspaces = anWorkspaceRows({ workspaces: [{ workspace: "/w", name: "w", unmatched: true, costUsd: 10, sessions: 2, hostCost: 5, boxCost: 5, byModel: { m: 10 }, cacheRead: 0, cacheDenom: 0, sessionCosts: [5, 5],
+      children: [kid("host", "host", "/w"), kid("box · p", "box", "/c")] }] });
+  })();`);
   for (const fn of ["anOverview", "anModels", "anProjects", "anSessions", "anTools"]) walk(view(env, fn));
-  for (const c of ["kpi-row", "kpi", "kpi-value", "kpi-label", "an-card", "an-card-body", "an-psec", "an-psec-head", "an-stbl", "an-wrap", "an-pgrid", "section-title", "card-head", "meter"]) assert.ok(used.has(c), c + " is built");
+  const kroot = new El("div");
+  env.ctx.ROOT = kroot;
+  env.run("ROOT.appendChild(anWsChildRow(anWorkspaceRowModel(AN.data.workspaces[0]).children[1]));");
+  walk(kroot);
+  for (const c of ["kpi-row", "kpi", "kpi-value", "kpi-label", "an-card", "an-card-body", "an-psec", "an-stbl", "an-wrap", "an-pgrid", "card-head", "meter",
+    "an-wtbl", "an-wcell", "an-exp", "an-wtext", "an-wtop", "an-wname", "an-wpath", "an-wtag", "an-child", "an-mini", "an-dgrid", "an-hrow", "an-drow", "an-mut", "an-sub", "an-cov"]) assert.ok(used.has(c), c + " is built");
   const hooks = new Set(["an-timewrap"]);
   const css = DESK_CSS + APP_CSS + stripComments(read("primitives.css"));
   const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
@@ -2405,17 +2411,6 @@ test("the page and the phone say the same thing: figures, colours, caps and word
     return [collect(view(phone, fn)), collect(view(page, fn))];
   };
   const lower = (rows) => rows.map((r, i) => (i ? r : r.map((t) => t.toLowerCase())));
-  for (const fn of ["anProjects", "anTools"]) {
-    const [ph, pg] = both(fn);
-    assert.ok(ph.titles.length >= 1, fn);
-    assert.deepStrictEqual(pg.titles, ph.titles, fn + ": section titles");
-    // The window is in the page's head, so the phone's " · window" (a word that pointed at the date range beside it) is not on the page.
-    assert.deepStrictEqual(pg.hints, ph.hints.map((h) => h.replace(/ · window$/, "")), fn + ": captions, without the dangling window");
-    assert.ok(!pg.hints.some((h) => /·\s*window\s*$/.test(h)), fn + ": no dangling separator on the page");
-    assert.deepStrictEqual(pg.cardTitles, ph.cardTitles, fn + ": card titles");
-    assert.deepStrictEqual(pg.bars, ph.bars, fn + ": bars (names, values, widths, colours)");
-    assert.deepStrictEqual(pg.tables.map(lower), ph.tables.map(lower), fn + ": table rows (the page capitalises the heads)");
-  }
   // Sessions and Models: the page's tables have the columns of §3.4 and §3.5 (the phone moves to them in its own task), so the
   // two skins are compared on what they share: the same rows, in the same order, under the same ids.
   const [ph, pg] = both("anSessions");
@@ -2429,7 +2424,7 @@ test("the page and the phone say the same thing: figures, colours, caps and word
 
   // One definition each: the words of the views are written once in analytics.js.
   const src = stripAnalytics(read("analytics.js"));
-  assert.ok(src.includes("function anModelsPage") && src.includes("function anToolsPage"), "the strip kept the whole file");
+  assert.ok(src.includes("function anModelsPage") && src.includes("function anDriversPage"), "the strip kept the whole file");
   const once = (lit) => assert.strictEqual(src.split(lit).length - 1, 1, lit + " is written once");
   for (const lit of ["No cost-driver data in this window", "Per-model breakdown", "Cost, volume & efficiency",
     "Bar split shows the model mix", "\"model\", \"cost\", \"% cost\"", "\"project\", \"cost\", \"tokens\", \"prompts\"", "\"session\", \"day\", \"project\", \"model\""]) once(lit);

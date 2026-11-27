@@ -11,6 +11,7 @@ const {
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
   anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
+  anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -772,4 +773,256 @@ test("anModelTableRow: a model's cells; other (unpriced) has dashes for every va
 test("anWorkspaceRows keeps the host and box costs the Overview's split bars draw", () => {
   const a = anWorkspaceRows(WS_RESP)[0];
   assert.deepEqual([a.hostCost, a.boxCost], [31, 69]);
+});
+
+// ---- Analytics v3, Task 11: the desktop Workspaces and Cost drivers views ----
+
+const kid = (o) => ({ runtime: "host", profile: "", via: "", label: "host", path: "/w/acme", cost: 1, sessions: 1, median: 1, cacheHit: 0.5, ...o });
+const wsRow = (children, o) => ({ name: "acme", path: "/w/acme", unmatched: false, cost: 10, sessions: 3, hostPct: 20, boxPct: 80, mix: [], median: 2, cacheHit: 0.9, children, ...o });
+
+test("anWorkspaceRowModel: a row with several children is expandable, one with a single child (or none) is not", () => {
+  const three = anWorkspaceRowModel(wsRow([kid(), kid({ label: "box · prd", runtime: "box", path: "/b/acme" }), kid({ label: "worktrees (2)", path: "/w/acme/.claude/worktrees/*" })]));
+  assert.equal(three.expandable, true);
+  assert.equal(three.children.length, 3);
+  assert.equal(anWorkspaceRowModel(wsRow([kid()])).expandable, false);
+  assert.equal(anWorkspaceRowModel(wsRow([])).expandable, false);
+  assert.equal(anWorkspaceRowModel(wsRow([kid(), kid()])).expandable, true);
+});
+
+test("anWorkspaceRowModel: the row's cells are the strings the table prints", () => {
+  const c = anWorkspaceRowModel(wsRow([], { cost: 1210, sessions: 1420, hostPct: 22, boxPct: 78, median: 1.92, cacheHit: 0.958 })).cells;
+  assert.deepEqual([c.name, c.path, c.cost, c.sessions, c.split, c.median, c.cache], ["acme", "/w/acme", "$1.2k", "1,420", "22% · 78%", "$1.92", "95.8%"]);
+  assert.equal(c.unmatched, false);
+  const none = anWorkspaceRowModel(wsRow([], { cost: 0, sessions: 1, hostPct: 0, boxPct: 0, median: null, cacheHit: null })).cells;
+  assert.deepEqual([none.split, none.median, none.cache], ["—", "—", "—"]);
+  const un = anWorkspaceRowModel(wsRow([], { unmatched: true, path: "unmatched · folder no longer known" })).cells;
+  assert.equal(un.unmatched, true);
+  assert.equal(un.path, "unmatched · folder no longer known");
+});
+
+test("anWorkspaceRowModel: a box child says 'clone · {path}' whenever its path is not the workspace's, whatever its via says", () => {
+  const m = anWorkspaceRowModel(wsRow([
+    kid(),
+    kid({ runtime: "box", label: "box · prd", via: "inplace", path: "/home/agent/acme-clone" }),
+    kid({ runtime: "box", label: "box · unnamed", via: "clone", path: "/w/acme" }),
+    kid({ label: "worktrees (2)", path: "/w/acme/.claude/worktrees/*" }),
+  ]));
+  assert.deepEqual(m.children.map((x) => [x.label, x.line, x.kind]), [
+    ["host", "/w/acme", "host"],
+    ["box · prd", "clone · /home/agent/acme-clone", "box"],
+    ["box · unnamed", "", "box"],
+    ["worktrees (2)", "/w/acme/.claude/worktrees/*", "other"],
+  ]);
+  const c = m.children[0];
+  assert.deepEqual([c.cost, c.sessions, c.median, c.cache], ["$1.00", "1", "$1.00", "50.0%"]);
+});
+
+test("anWorkspaceTiles: count, host / box share of the API value, the costliest workspace", () => {
+  const rows = [wsRow([], { name: "a", cost: 100, hostCost: 31, boxCost: 69 }), wsRow([], { name: "b", cost: 300, hostCost: 300, boxCost: 0 })];
+  const t = anWorkspaceTiles(rows);
+  assert.deepEqual(t.map((x) => x.label), ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace · b"]);
+  assert.deepEqual(t.map((x) => x.value), ["2", "83% · 17%", "$300"]);
+  const none = anWorkspaceTiles([]);
+  assert.deepEqual(none.map((x) => x.value), ["0", "—", "—"]);
+  assert.equal(none[2].label, "Costliest workspace");
+});
+
+const DRV = {
+  total: 5000, coveredTotal: 4000,
+  agent: [{ name: "general-purpose", costUsd: 3080 }],
+  skill: [{ name: "s:one", costUsd: 100 }],
+  plugin: [{ name: "culiops", costUsd: 61 }, { name: "superpowers", costUsd: 405 }],
+  mcp: [{ server: "claude-design", costUsd: 61, tools: [] }, { server: "playwright", costUsd: 323, tools: [{ name: "browser_close", costUsd: 57 }] }],
+};
+
+test("anDriverTiles: the share of API value that ran in subagents, the costliest plugin and the costliest MCP server", () => {
+  const t = anDriverTiles(DRV);
+  assert.deepEqual(t.map((x) => x.value), ["77%", "$405", "$323"]);
+  assert.deepEqual(t.map((x) => x.label), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · playwright"]);
+});
+
+test("anDriverTiles: a kind with no rows has a dash; with no covered value every tile is a dash and nothing is NaN", () => {
+  const t = anDriverTiles({ ...DRV, plugin: [] });
+  assert.equal(t[1].value, "—");
+  assert.equal(t[1].label, "Costliest plugin");
+  assert.deepEqual(anDriverTiles({ ...DRV, agent: [] }).map((x) => x.value), ["—", "$405", "$323"]);
+  const e = anDriverTiles({ total: 10, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] });
+  assert.deepEqual(e.map((x) => x.value), ["—", "—", "—"]);
+  assert.deepEqual(anDriverTiles(null).map((x) => x.value), ["—", "—", "—"]);
+  assert.ok(!JSON.stringify(e).includes("NaN"));
+});
+
+test("anCoverageText: whole percent floored (never 100 for 0.996), '<1' for a sliver, nothing at full or no coverage", () => {
+  assert.equal(anCoverageText(0.996), "Based on 99% of this window's API value: sessions whose transcripts are still on disk.");
+  assert.match(anCoverageText(0.5), /^Based on 50% of/);
+  assert.match(anCoverageText(0.29), /^Based on 29% of/, "0.29 * 100 is 28.999999999999996 in floating point");
+  assert.match(anCoverageText(0.0004), /^Based on <1% of/);
+  assert.match(anCoverageText(0.01), /^Based on 1% of/);
+  assert.equal(anCoverageText(null), "");
+  assert.equal(anCoverageText(1), "");
+  assert.equal(anCoverageText(0), "");
+});
+
+// The two page builders on a fake document.
+function anDraw(fn, data) {
+  const { ctx, doc } = anPage(true);
+  vm.runInContext("AN.data = " + JSON.stringify(data), ctx);
+  const root = new Node("div", doc);
+  ctx[fn](root);
+  return { ctx, doc, root };
+}
+const allNodes = (n, out = []) => { for (const c of n.children) { out.push(c); allNodes(c, out); } return out; };
+const trText = (tr) => tr.querySelectorAll("td").map((td) => td.textContent);
+
+const WS_PAGE = () => ({
+  models: ["opus", "haiku"],
+  workspaces: anWorkspaceRows(WS_RESP),
+});
+
+test("anWorkspacesPage: tiles, the seven columns, a row per workspace, the footnote", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  assert.deepEqual(root.querySelectorAll(".kpi-label").map((n) => n.textContent), ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace · acme"]);
+  assert.deepEqual(root.querySelectorAll("th").map((n) => n.textContent), AN_COPY.workspaces.columns);
+  assert.deepEqual(root.querySelectorAll("th").map((n) => n.className), ["", "num", "num", "", "", "num", "num"]);
+  assert.equal(root.querySelectorAll("tr").length - 1, 2, "acme and old (children are not drawn closed)");
+  assert.equal(root.querySelector(".an-foot").textContent, AN_COPY.workspaces.note);
+});
+
+test("anWorkspacesPage: the workspace cell is the name in mono with its path muted under it; an unmatched row is tagged and says why", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  const rows = root.querySelectorAll("tr").slice(1);
+  const a = rows[0], old = rows[1];
+  assert.equal(a.querySelector(".an-wname").textContent, "acme");
+  assert.ok(a.querySelector(".an-wname").className.includes("mono"));
+  assert.equal(a.querySelector(".an-wpath").textContent, "/home/u2/acme");
+  assert.equal(a.querySelector(".an-wtag"), null);
+  assert.equal(old.querySelector(".an-wname").textContent, "old");
+  assert.equal(old.querySelector(".an-wtag").textContent, "unmatched");
+  assert.equal(old.querySelector(".an-wpath").textContent, "unmatched · folder no longer known");
+  assert.deepEqual(trText(a).slice(1), ["$100", "4", "31% · 69%", "", "$25.00", "90.0%"]);
+});
+
+test("anWorkspacesPage: Host · Box and Model mix are mini bars: host --an-6 then box --an-1, models from the --an palette", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  const a = root.querySelectorAll("tr")[1];
+  const [split, mix] = a.querySelectorAll(".an-mini");
+  assert.deepEqual(split.children.map((i) => [i.style.width, i.style.background]), [["31%", "var(--an-6)"], ["69%", "var(--an-1)"]]);
+  assert.deepEqual(mix.children.map((i) => i.style.width), ["75%", "25%"]);
+  assert.ok(mix.children.every((i) => /^var\(--an-[1-7]\)$/.test(i.style.background)), mix.children.map((i) => i.style.background).join());
+  // a row with no cost draws an empty track
+  const old = root.querySelectorAll("tr")[2];
+  assert.equal(old.querySelectorAll(".an-mini").every((m) => m.children.length === 0), true);
+});
+
+test("anWorkspacesPage: the expand button is aria-expanded with ▸/▾, child rows follow its row, focus stays on it, a second press closes", () => {
+  const { root, doc } = anDraw("anWorkspacesPage", WS_PAGE());
+  const btn = root.querySelector("button");
+  assert.equal(btn.getAttribute("aria-expanded"), "false");
+  assert.equal(btn.textContent, "▸");
+  assert.equal(root.querySelectorAll("button").length, 1, "only the row with two or more children has one");
+  btn.focus();
+  btn.click();
+  assert.equal(btn.getAttribute("aria-expanded"), "true");
+  assert.equal(btn.textContent, "▾");
+  assert.equal(doc.activeElement, btn);
+  const rows = root.querySelectorAll("tr");
+  assert.equal(rows.length, 1 + 1 + 2 + 1, "head, acme, its two children, old");
+  assert.ok(rows[2].className.includes("an-child") && rows[3].className.includes("an-child"));
+  assert.deepEqual(trText(rows[2]), ["host/home/u2/acme", "$31.00", "1", "", "", "$31.00", "90.0%"]);
+  assert.deepEqual(trText(rows[3]), ["box · workclone · /home/agent/acme", "$69.00", "3", "", "", "$19.00", "—"]);
+  assert.equal(rows[4].querySelector(".an-wname").textContent, "old");
+  btn.click();
+  assert.equal(btn.getAttribute("aria-expanded"), "false");
+  assert.equal(btn.textContent, "▸");
+  assert.equal(root.querySelectorAll("tr").length, 3);
+  assert.equal(doc.activeElement, btn);
+});
+
+test("anWorkspacesPage: names and paths are text, whatever they hold (a newline stays one text node, markup stays markup)", () => {
+  const resp = { workspaces: [{ workspace: "/p/<img src=x onerror=1>", name: "a\nb<b>x</b>", unmatched: false, costUsd: 5, sessions: 1, hostCost: 5, boxCost: 0, byModel: { m: 5 }, cacheRead: 0, cacheDenom: 0, sessionCosts: [5],
+    children: [{ runtime: "box", profile: "p\n<i>", via: "clone", label: "box · p\n<i>", path: "/c/<u>", costUsd: 2, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [2] }, { runtime: "host", profile: "", via: "", label: "host", path: "/p/<img src=x onerror=1>", costUsd: 3, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [3] }] }] };
+  const { root } = anDraw("anWorkspacesPage", { models: ["m"], workspaces: anWorkspaceRows(resp) });
+  root.querySelector("button").click();
+  const nm = root.querySelector(".an-wname");
+  assert.equal(nm.textContent, "a\nb<b>x</b>");
+  assert.equal(nm.children.length, 0, "one text value, no child elements");
+  assert.equal(root.querySelector(".an-wpath").textContent, "/p/<img src=x onerror=1>");
+  assert.equal(allNodes(root).filter((n) => ["img", "b", "u"].includes(n.tag)).length, 0);
+  const child = root.querySelectorAll(".an-child")[0];
+  assert.equal(child.querySelector(".chip").textContent, "box · p\n<i>");
+  assert.equal(child.querySelector(".an-wpath").textContent, "clone · /c/<u>");
+});
+
+test("the Workspaces and Cost drivers builders never use innerHTML", () => {
+  const src = readStatic("analytics.js");
+  for (const fn of ["anWorkspacesPage", "anDriversPage", "anDriverRow", "anWsChildRow"]) {
+    const at = src.indexOf("function " + fn);
+    assert.ok(at >= 0, fn);
+    const end = src.indexOf("\n}\n", at);
+    assert.ok(!/innerHTML|insertAdjacentHTML/.test(src.slice(at, end)), fn);
+  }
+});
+
+const DRV_PAGE = (resp) => ({ drivers: anDriverCards(resp), driverTiles: anDriverTiles(resp) });
+
+test("anDriversPage: three tiles, four cards in order with their captions, the footnote; no coverage line at full coverage", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 }));
+  assert.deepEqual(root.querySelectorAll(".kpi-label").map((n) => n.textContent), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · playwright"]);
+  assert.deepEqual(root.querySelectorAll(".kpi-value").map((n) => n.textContent), ["77%", "$405", "$323"]);
+  assert.equal(root.querySelector(".an-cov"), null);
+  assert.deepEqual(root.querySelectorAll(".an-card h2").map((n) => n.textContent), ["Subagents", "Skills", "Plugins", "MCP"]);
+  assert.deepEqual(root.querySelectorAll(".an-card .card-head .muted").map((n) => n.textContent), ["main agent vs subagents", "server → its tools"]);
+  assert.equal(root.querySelectorAll(".an-dgrid .an-card").length, 4);
+  assert.equal(root.querySelector(".an-foot").textContent, AN_COPY.drivers.note);
+});
+
+test("anDriversPage: under 100% coverage one muted line says so, floored (0.996 is 99%)", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 / 0.996 }));
+  assert.equal(root.querySelector(".an-cov").textContent, "Based on 99% of this window's API value: sessions whose transcripts are still on disk.");
+  const { root: r2 } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 / 0.4 }));
+  assert.match(r2.querySelector(".an-cov").textContent, /^Based on 40% of/);
+});
+
+test("anDriversPage: rows are name · bar · value · %; the muted last row has no bar fill; MCP tool rows are indented", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE(DRV));
+  const cards = root.querySelectorAll(".an-dgrid .an-card");
+  const agent = cards[0].querySelectorAll(".an-hrow");
+  assert.equal(agent.length, 2);
+  assert.deepEqual(agent[0].children.map((c) => c.textContent), ["general-purpose", "", "$3.1k", "77%"]);
+  assert.equal(agent[0].querySelectorAll(".meter i").length, 1);
+  assert.equal(agent[0].querySelector(".meter i").style.width, "100%");
+  assert.deepEqual(agent[1].children.map((c) => c.textContent), ["main agent (no subagent)", "", "$920", "23%"]);
+  assert.equal(agent[1].querySelectorAll(".meter i").length, 0);
+  assert.ok(agent[1].className.includes("an-mut"));
+  const mcp = cards[3].querySelectorAll(".an-hrow");
+  assert.deepEqual(mcp.map((r) => r.children[0].textContent), ["claude-design", "playwright", "browser_close", "outside any MCP tool"]);
+  assert.deepEqual(mcp.map((r) => r.className.includes("an-sub")), [false, false, true, false]);
+  assert.equal(mcp[1].querySelector(".meter i").style.width, "100%");
+  assert.equal(mcp[0].querySelector(".meter i").style.width.slice(0, 4), "18.8");
+});
+
+test("anDriversPage: a card with only its muted row draws no bar and divides by nothing", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ total: 10, coveredTotal: 10, agent: [], skill: [], plugin: [], mcp: [] }));
+  const nodes = allNodes(root);
+  assert.equal(nodes.filter((n) => n.tag === "i").length, 0);
+  assert.ok(!nodes.some((n) => /NaN|Infinity/.test(JSON.stringify(n.style) + n.textContent)));
+  assert.deepEqual(root.querySelectorAll(".kpi-value").map((n) => n.textContent), ["—", "—", "—"]);
+});
+
+test("anDriversPage: names are text, a newline stays one text node", () => {
+  const resp = { total: 10, coveredTotal: 10, agent: [{ name: "a\nb<b>", costUsd: 4 }], skill: [], plugin: [], mcp: [{ server: "s<i>", costUsd: 1, tools: [{ name: "t\n<u>", costUsd: 1 }] }] };
+  const { root } = anDraw("anDriversPage", DRV_PAGE(resp));
+  const names = root.querySelectorAll(".an-hrow").map((r) => r.children[0]);
+  assert.ok(names.some((n) => n.textContent === "a\nb<b>" && n.children.length === 0));
+  assert.ok(names.some((n) => n.textContent === "t\n<u>" && n.children.length === 0));
+  assert.equal(allNodes(root).filter((n) => ["b", "u"].includes(n.tag)).length, 0);
+});
+
+test("anDriversPage: no covered value shows the empty-state sentence and no tiles, bars or percentages", () => {
+  const resp = { total: 10, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] };
+  const { root } = anDraw("anDriversPage", DRV_PAGE(resp));
+  assert.equal(root.querySelector(".an-empty").textContent, AN_COPY.drivers.empty);
+  assert.equal(root.querySelector(".kpi-row"), null);
+  assert.equal(root.querySelector(".an-card"), null);
+  assert.ok(!/NaN|0%/.test(root.textContent));
 });

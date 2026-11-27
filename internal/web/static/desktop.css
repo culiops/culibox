@@ -3810,7 +3810,6 @@
 
   /* A section: the title and its caption on one baseline, then the card (§B8 .m3-sec, .m3-row). */
   #page-host > #analytics-modal.as-page .an-psec { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0 0 var(--sp-4); }
-  #page-host > #analytics-modal.as-page .an-psec-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-width: 0; }
   /* A card is --panel at --r-card with no outline (§C8 .card). Its name is ours: app.css's `.card` is the phone's amber session card. */
   #page-host > #analytics-modal.as-page .an-card { background: var(--panel); border-radius: var(--r-card); min-width: 0; }
   /* A card's head holds a title, a caption and (the cost chart) a legend: the title and its caption keep their one line at their own width
@@ -3902,6 +3901,42 @@
   #page-host > #analytics-modal.as-page .an-hp { text-align: right; }
   /* What the two colours of the workspace bars are: the chart legend's items, under the rows. */
   #page-host > #analytics-modal.as-page .an-wkey { margin-top: var(--sp-3); }
+
+  /* --- Analytics Workspaces and Cost drivers (Analytics v3 Task 11; the mockup's frames 2 and 3, Plan 5 kit) --- */
+  /* The Workspace cell: an expand button (or its blank twin, so the names line up), then the name in mono with its path muted under it.
+     The cell is two lines tall, so it takes 8px above and below instead of the row's fixed 32px; a long name or path ellipsizes. */
+  #page-host > #analytics-modal.as-page .an-wtbl td.an-wcell { height: auto; padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+  #page-host > #analytics-modal.as-page .an-wcell > :is(.an-exp, .an-wtext) { display: inline-block; vertical-align: top; }
+  #page-host > #analytics-modal.as-page .an-exp { width: 20px; height: 20px; margin: 0 2px 0 0; padding: 0; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font: inherit; line-height: 20px; text-align: center; }
+  #page-host > #analytics-modal.as-page button.an-exp { cursor: pointer; }
+  #page-host > #analytics-modal.as-page button.an-exp:hover { color: var(--fg); }
+  #page-host > #analytics-modal.as-page button.an-exp:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  #page-host > #analytics-modal.as-page .an-wtop { display: flex; align-items: center; gap: var(--sp-2); }
+  #page-host > #analytics-modal.as-page .an-wtag { flex: none; }
+  #page-host > #analytics-modal.as-page .an-wname { min-width: 0; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  #page-host > #analytics-modal.as-page .an-wtext > .an-wpath { display: block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; line-height: 14px; }
+  /* An open row is one step lighter than its card (the hover step); its breakdown rows sit under it, their label indented to the name's text
+     (12px cell padding + the 20px button + its 2px margin), the muted line beside the label chip. */
+  #page-host > #analytics-modal.as-page .an-wtbl tr.an-open td { background: var(--hover); }
+  #page-host > #analytics-modal.as-page .an-wtbl tr.an-child td.an-wcell { padding-top: 0; padding-bottom: 0; padding-left: calc(var(--sp-3) + 22px); }
+  #page-host > #analytics-modal.as-page .an-child .an-wpath { display: inline-block; max-width: 420px; margin-left: var(--sp-2); overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+  /* A mini bar is 70px wide (the kit .meter's 4px height and 2px radius, on its --line track) beside the figures it draws; its parts are
+     placed by the script. */
+  #page-host > #analytics-modal.as-page .an-mini { display: inline-flex; width: 70px; height: 4px; margin-right: var(--sp-2); border-radius: 2px; overflow: hidden; background: var(--line); vertical-align: middle; }
+  #page-host > #analytics-modal.as-page .an-mini > i { display: block; flex: none; height: 100%; }
+  /* Cost drivers: the coverage line sits 8px under the tiles (their 16px margin less 8px), 16px above the cards. The four cards are a 2x2
+     grid; under 1000px of body they stack, as Plan 5's split does (the grid's cards need about 500px each to keep a bar). */
+  #page-host > #analytics-modal.as-page .an-cov { margin: calc(var(--sp-2) * -1) 0 var(--sp-4); }
+  #page-host > #analytics-modal.as-page .an-dgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+  #page-host > #analytics-modal.as-page #analytics-body > .an-dgrid { margin-bottom: var(--sp-4); }
+  @container an-body (max-width: 999px) {
+    #page-host > #analytics-modal.as-page .an-dgrid { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* A driver row is the cost card's four columns with a 210px name. An MCP tool row is indented 16px; the muted last row (outside / main
+     agent) has no bar, only its value and %. */
+  #page-host > #analytics-modal.as-page .an-hrow.an-drow { grid-template-columns: 210px minmax(0, 1fr) 64px 44px; }
+  #page-host > #analytics-modal.as-page .an-drow.an-sub > :first-child { padding-left: 16px; }
+  #page-host > #analytics-modal.as-page .an-drow.an-mut > .meter { background: transparent; }
 
   /* Text app.css sets in raw px for the phone gets a kit step here (Plan 1 follow-up 1). */
   #page-host > #analytics-modal.as-page .an-empty { font-size: var(--t-md); line-height: var(--lh-md); }

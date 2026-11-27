@@ -514,6 +514,85 @@ function anDriverCards(resp) {
   return { empty: false, coverage: total > 0 && covered / total < 1 ? covered / total : null, cards };
 }
 
+// anWorkspaceTiles: the three tiles of the Workspaces view (§3.2) from anWorkspaceRows' rows: how many, the host / box share of
+// their API value in whole percents that add to 100, and the costliest, whose name goes in the label. A dash with no workspace or
+// no cost; a nameless one leaves no dangling " · ".
+function anWorkspaceTiles(rows) {
+  const L = AN_COPY.workspaces.kpis;
+  rows = rows || [];
+  let host = 0, box = 0, top = null;
+  for (const r of rows) {
+    host += r.hostCost || 0; box += r.boxCost || 0;
+    if (!top || r.cost > top.cost) top = r;
+  }
+  const hp = host + box > 0 ? Math.round(host / (host + box) * 100) : null;
+  return [
+    { value: anCountText(rows.length), label: L[0] },
+    { value: hp == null ? "—" : hp + "% · " + (100 - hp) + "%", label: L[1] },
+    { value: top ? usd(top.cost) : "—", label: top && top.name ? L[2] + " · " + top.name : L[2] },
+  ];
+}
+
+// anWorkspaceRowModel: one workspace row as the table prints it: {cells, children, expandable}. `cells` are the strings of the row
+// (a missing median or cache hit is a dash) beside the shares the mini bars draw; `children` are the rows beneath it, each with its
+// label, the muted line under the label and the same figures. `expandable` is true when there is more than one child (one child
+// says nothing the row does not). The muted line: a host child shows the host path, a worktrees child its path; a box child shows
+// "clone · {path}" whenever its path is not the workspace's own. The child's `via` is never read: a box child folds the clone and
+// in-place sessions of one profile, so its path alone says whether it is a clone.
+function anWorkspaceRowModel(row) {
+  const W = AN_COPY.workspaces;
+  const figs = (x) => ({
+    cost: usd(x.cost), sessions: anCountText(x.sessions),
+    median: x.median == null ? "—" : usd(x.median),
+    cache: x.cacheHit == null ? "—" : (x.cacheHit * 100).toFixed(1) + "%",
+  });
+  const line = (c, kind) => {
+    const p = c.path || "";
+    if (kind === "box") return p && p !== row.path ? W.clone.replace("{dir}", p) : "";
+    return p;
+  };
+  const children = (row.children || []).map((c) => {
+    const kind = c.label === "host" ? "host" : /^box( |$)/.test(c.label || "") ? "box" : "other";
+    return { label: c.label, kind, line: line(c, kind), ...figs(c) };
+  });
+  const split = row.hostPct + row.boxPct > 0 ? row.hostPct + "% · " + row.boxPct + "%" : "—";
+  return {
+    cells: { name: row.name, path: row.path, unmatched: !!row.unmatched, ...figs(row), split, hostPct: row.hostPct, boxPct: row.boxPct, mix: row.mix || [] },
+    children,
+    expandable: children.length > 1,
+  };
+}
+
+// anDriverTiles: the three tiles of the Cost drivers view (§3.3) from the /drivers response: the share of the covered API value that
+// ran in subagents, the costliest plugin and the costliest MCP server (a server's own row, not one of its tools), the name of the
+// last two in the label. A kind with no rows, or no covered value at all, is a dash and carries no name.
+function anDriverTiles(resp) {
+  const L = AN_COPY.drivers.kpis;
+  const r = anDriverCards(resp);
+  const named = (kind) => {
+    const card = r.cards.find((c) => c.kind === kind);
+    return card ? card.rows.filter((x) => !x.muted && !x.sub) : [];
+  };
+  const top = (rows) => rows.reduce((t, x) => (!t || x.cost > t.cost ? x : t), null);
+  const agents = named("agent");
+  const sub = agents.reduce((s, x) => s + x.cost, 0);
+  const plugin = top(named("plugin")), mcp = top(named("mcp"));
+  return [
+    { value: agents.length ? Math.min(100, Math.round(sub / resp.coveredTotal * 100)) + "%" : "—", label: L[0] },
+    { value: plugin ? usd(plugin.cost) : "—", label: plugin ? L[1] + " · " + plugin.name : L[1] },
+    { value: mcp ? usd(mcp.cost) : "—", label: mcp ? L[2] + " · " + mcp.name : L[2] },
+  ];
+}
+
+// anCoverageText: the muted line under the Cost drivers tiles when only part of the window has driver data. `coverage` is
+// anDriverCards' ratio (null at full coverage). The percent is floored so a coverage that rounds to 100 never reads "100%" while
+// some is missing, and a sliver reads "<1%", never "0%". The tiny epsilon keeps 0.29 (28.999999999999996 as a float) at 29.
+function anCoverageText(coverage) {
+  if (!(coverage > 0 && coverage < 1)) return "";
+  const n = Math.floor(coverage * 100 + 1e-9);
+  return AN_COPY.drivers.coverage.replace("{N}", n < 1 ? "<1" : String(n));
+}
+
 // anModelMedians: /session-costs modelCosts rows ({sessionId, project, model, costUsd}) → {model: median}, over each model's own
 // per-session cost (a session's rows of one model add up first), not the whole session's.
 function anModelMedians(modelCosts) {
@@ -578,6 +657,7 @@ if (typeof module !== "undefined" && module.exports) {
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
     median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
+    anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText,
     anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
     anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
     anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
@@ -705,6 +785,7 @@ async function anLoad() {
     byProject: [], // the old per-project fold is gone; the phone's project sections stay empty until they read `workspaces`
     workspaces: anWorkspaceRows(workspaces),
     drivers: anDriverCards(drivers),
+    driverTiles: anDriverTiles(drivers),
     modelMedians: anModelMedians(sessions && sessions.modelCosts),
     sessions: sessRows,
     topSessions: topSessionsByCost(sessRows, 18),
@@ -769,7 +850,8 @@ function anRender() {
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
-  // Workspaces and Cost drivers draw through the builders the old Projects and Tools views had until their own views replace them.
+  // Workspaces and Cost drivers sit in the slots the phone's Projects and Tools views have (anProjects, anTools): on the page those hand over
+  // to anWorkspacesPage and anDriversPage; the phone keeps its own until its task replaces them.
   const R = { overview: anOverview, workspaces: anProjects, drivers: anTools, sessions: anSessions, models: anModels };
   (R[AN.tab] || anOverview)(body);
   // Time-series charts read left→right oldest→newest; open scrolled to the most
@@ -1085,7 +1167,7 @@ function anModels(root) {
 
 // ---- Projects ---------------------------------------------------------------
 function anProjects(root) {
-  if (anIsPage()) return anProjectsPage(root);
+  if (anIsPage()) return anWorkspacesPage(root);
   const d = AN.data;
   const sec = anSection(AN_COPY.projects.title, AN_COPY.projects.hint);
   const box = el("div", "an-box");
@@ -1125,23 +1207,18 @@ function anSessions(root) {
 
 // ---- Cost drivers -----------------------------------------------------------
 function anTools(root) {
-  if (anIsPage()) return anToolsPage(root);
+  if (anIsPage()) return anDriversPage(root);
   const sec = anSection(AN_COPY.drivers.title);
   if (AN.data.drivers.empty) sec.appendChild(anEmpty(AN_COPY.drivers.empty));
   root.appendChild(sec);
 }
 
-// ---- the desktop page's views (Models, Projects, Sessions, Cost drivers) ------------------------------------------------------
+// ---- the desktop page's views (Models, Sessions, Workspaces, Cost drivers) ------------------------------------------------------
 // The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
 // The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES,
 // anModelFold, anProjectBars, anSessionRow ...): only the DOM differs.
-// The page's parts are the kit's: a KPI row, h2.section-title with its caption, cards (.an-card: --panel and --r-card, a name
-// of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
-// Models, Projects and Tools have no frame: they carry today's content in those parts (plan call 13).
-
-// anPageHint: a section caption on the page. The phone's two captions end in " · window", a word that pointed at the date range
-// beside it; the page's head names the window, so the word goes.
-function anPageHint(hint) { return hint.replace(/ · window$/, ""); }
+// The page's parts are the kit's: a KPI row, cards (.an-card: --panel and --r-card, a name of its own because app.css's `.card` is the
+// phone's amber session card) and the table look of §C9 on the same .an-table.
 
 // anModelsPage: §3.5 (the mockup's frame 5): the one table in a card, then the footnote. Its eight columns are AN_COPY.models.columns;
 // the Sessions header says in a tooltip that a session which used several models counts once in each.
@@ -1166,33 +1243,6 @@ function anModelsPage(root) {
   card.appendChild(anTableWrap(tbl));
   sec.append(card, anFootnote(AN_COPY.models.note));
   root.appendChild(sec);
-}
-
-// anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
-function anProjectsPage(root) {
-  const d = AN.data;
-  const sec = anPSection(AN_COPY.projects.title, anPageHint(AN_COPY.projects.hint));
-  const card = anCard();
-  const body = anCardBody(card);
-  const pb = anProjectBars(d.byProject, d.models);
-  for (const b of pb.bars) anHbarSegs(body, b.name, b.cost, pb.max, b.segs, usd);
-  anLegend(body, d.models);
-  sec.appendChild(card);
-  root.appendChild(sec);
-
-  const s2 = anPSection(AN_COPY.projects.detail);
-  const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(...AN_TABLES.projects));
-  for (const p of d.byProject) {
-    const r = anProjectRow(p);
-    const tr = el("tr");
-    tr.append(anIdTd(r.name, "an-wrap"), anTd(r.cost, "num w-500"), anTd(r.tokens, "num"), anTd(r.prompts, "num"));
-    tbl.appendChild(tr);
-  }
-  const card2 = anCard();
-  card2.appendChild(anTableWrap(tbl));
-  s2.appendChild(card2);
-  root.appendChild(s2);
 }
 
 // anSessionsPage: §3.4 (the mockup's frame 4). Three KPI tiles, then the top sessions in a card whose head says a row opens its session.
@@ -1249,11 +1299,148 @@ function anOpenLive(id) {
   sessionRowAction(live, isNestedShell(live, lastSessions));
 }
 
-// anToolsPage: as the phone's, until the four cards are drawn.
-function anToolsPage(root) {
-  const sec = anPSection(AN_COPY.drivers.title);
-  if (AN.data.drivers.empty) sec.appendChild(anEmpty(AN_COPY.drivers.empty));
+// anOpenWs: the workspaces whose breakdown is open. It outlives a redraw (a Where or range change), so a row the user opened stays open.
+const anOpenWs = new Set();
+
+// anMini: a 70px mini bar of coloured parts ({pct, color, title}); a part with no share draws nothing, so no share is an empty track.
+function anMini(parts) {
+  const bar = el("span", "an-mini");
+  for (const p of parts) {
+    if (!(p.pct > 0)) continue;
+    const f = el("i");
+    f.style.width = p.pct + "%";
+    f.style.background = p.color;
+    if (p.title) f.setAttribute("title", p.title);
+    bar.appendChild(f);
+  }
+  return bar;
+}
+
+// anWsChildRow: a breakdown row (host, box · profile, worktrees (N)): the label as a chip, the muted line after it, then its API value,
+// sessions, median and cache hit. Host · Box and Model mix are empty: a child is one side of the split.
+function anWsChildRow(c) {
+  const tr = el("tr", "an-child");
+  const td = el("td", "an-wcell");
+  td.appendChild(el("span", c.kind === "box" ? "chip chip-box an-wbox" : c.kind === "host" ? "chip chip-host" : "chip", c.label));
+  if (c.line) {
+    const line = el("span", "an-wpath mono t-xs muted", c.line);
+    line.setAttribute("title", c.line);
+    td.appendChild(line);
+  }
+  tr.append(td, anTd(c.cost, "num"), anTd(c.sessions, "num"), el("td"), el("td"), anTd(c.median, "num"), anTd(c.cache, "num"));
+  return tr;
+}
+
+// anWsRow: a workspace's row in `tbl` and, while it is open, its child rows right after it. The open state is the button's
+// aria-expanded; pressing it only changes the button's glyph and adds or removes the child rows, so focus is never lost.
+function anWsRow(tbl, models, row) {
+  const m = anWorkspaceRowModel(row), c = m.cells;
+  const key = (row.unmatched ? "u" : "w") + "\n" + row.name + "\n" + row.path;
+  const tr = el("tr");
+  const kids = [];
+  const name = el("td", "an-wcell");
+  let btn = null;
+  if (m.expandable) {
+    btn = el("button", "an-exp", "▸");
+    btn.setAttribute("type", "button");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-label", c.name);
+    name.appendChild(btn);
+  } else {
+    const sp = el("span", "an-exp");
+    sp.setAttribute("aria-hidden", "true");
+    name.appendChild(sp);
+  }
+  const text = el("div", "an-wtext");
+  const top = el("div", "an-wtop");
+  const nm = el("span", "an-wname mono t-sm", c.name);
+  nm.setAttribute("title", c.name);
+  top.appendChild(nm);
+  if (c.unmatched) top.appendChild(el("span", "chip an-wtag", AN_COPY.workspaces.unmatched));
+  const path = el("div", "an-wpath mono t-xs muted", c.path);
+  path.setAttribute("title", c.path);
+  text.append(top, path);
+  name.appendChild(text);
+
+  const where = el("td", "tnum");
+  where.append(anMini([{ pct: c.hostPct, color: "var(--an-6)", title: "host " + c.hostPct + "%" }, { pct: c.boxPct, color: "var(--an-1)", title: "box " + c.boxPct + "%" }]),
+    document.createTextNode(c.split));
+  const mix = el("td");
+  mix.appendChild(anMini(c.mix.map((x) => ({ pct: x.share * 100, color: anModelColor(models, x.model), title: shortModel(x.model) + " " + Math.round(x.share * 100) + "%" }))));
+  tr.append(name, anTd(c.cost, "num w-500"), anTd(c.sessions, "num"), where, mix, anTd(c.median, "num"), anTd(c.cache, "num"));
+  tbl.appendChild(tr);
+
+  const set = (on) => {
+    btn.setAttribute("aria-expanded", on ? "true" : "false");
+    btn.textContent = on ? "▾" : "▸";
+    tr.classList.toggle("an-open", on);
+    for (const k of kids) k.remove();
+    kids.length = 0;
+    let prev = tr;
+    if (on) for (const ch of m.children) { const k = anWsChildRow(ch); kids.push(k); prev.after(k); prev = k; }
+    if (on) anOpenWs.add(key); else anOpenWs.delete(key);
+  };
+  if (btn) {
+    btn.onclick = () => set(btn.getAttribute("aria-expanded") !== "true");
+    if (anOpenWs.has(key)) set(true);
+  }
+}
+
+// anWorkspacesPage: §3.2 (the mockup's frame 2): three tiles, then one kit table in a card, a row per repo with the breakdown a button
+// opens beneath it, then the footnote. Host · Box and Model mix are 70px mini bars (host --an-6, box --an-1, models by their --an
+// slot) beside the figures; the numbers are right-aligned under their headers.
+function anWorkspacesPage(root) {
+  const d = AN.data;
+  root.appendChild(anKpiRow(anWorkspaceTiles(d.workspaces)));
+  const tbl = el("table", "an-table an-wtbl");
+  const head = anColHead(AN_COPY.workspaces.columns, AN_COPY.workspaces.columns.length);
+  for (const i of [1, 2, 5, 6]) head.children[i].className = "num";
+  tbl.appendChild(head);
+  for (const row of d.workspaces) anWsRow(tbl, d.models, row);
+  const sec = el("section", "an-psec");
+  const card = anCard();
+  card.appendChild(anTableWrap(tbl));
+  sec.append(card, anFootnote(AN_COPY.workspaces.note));
   root.appendChild(sec);
+}
+
+// anDriverRow: a row of a Cost drivers card: the name, the track (the kit's .meter) with one fill scaled to the card's largest named
+// row, the API value, and the row's % of the covered value. The muted last row (outside / main agent) has no fill, and a card with
+// no named row (max 0) draws no fill at all: nothing is divided by it. An MCP tool row (sub) is indented by the stylesheet.
+function anDriverRow(parent, row, max) {
+  const r = el("div", "an-hrow an-drow an-pct" + (row.muted ? " an-mut" : "") + (row.sub ? " an-sub" : ""));
+  const nm = el("span", "mono t-sm ellipsis" + (row.muted ? " muted" : ""), row.name);
+  nm.setAttribute("title", row.name);
+  const meter = el("span", "meter");
+  if (!row.muted && max > 0 && row.cost > 0) {
+    const f = el("i");
+    f.style.width = (row.cost / max * 100) + "%";
+    f.style.background = "var(--an-1)";
+    meter.appendChild(f);
+  }
+  r.append(nm, meter, el("span", "t-sm tnum an-hv" + (row.muted ? " muted" : ""), usd(row.cost)), el("span", "t-sm tnum muted an-hp", row.pct + "%"));
+  parent.appendChild(r);
+}
+
+// anDriversPage: §3.3 (the mockup's frame 3): three tiles, one muted coverage line when driver data covers only part of the window,
+// four cards in a 2×2 grid (one column under 1000px of body, as Plan 5's split), then the footnote. With nothing covered there is
+// nothing to divide by: the sentence alone, no tiles.
+function anDriversPage(root) {
+  const d = AN.data, dr = d.drivers;
+  if (dr.empty) { root.appendChild(anEmpty(AN_COPY.drivers.empty)); return; }
+  root.appendChild(anKpiRow(d.driverTiles));
+  const cov = anCoverageText(dr.coverage);
+  if (cov) root.appendChild(el("p", "an-cov t-sm muted", cov));
+  const grid = el("div", "an-dgrid");
+  for (const card of dr.cards) {
+    const c = anCard(card.title, card.caption || null, "h2");
+    const rows = el("div", "an-hrows");
+    for (const row of card.rows) anDriverRow(rows, row, card.max);
+    anCardBody(c).appendChild(rows);
+    grid.appendChild(c);
+  }
+  root.appendChild(grid);
+  root.appendChild(anFootnote(AN_COPY.drivers.note));
 }
 
 // ---- small builders ---------------------------------------------------------
@@ -1266,8 +1453,7 @@ function anSection(title, hint) {
   return s;
 }
 function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
-// The desktop page's parts (callers are the page's views, behind anIsPage()). anKpiRow, anCard and anPSection are general: the
-// Overview builds on them too.
+// The desktop page's parts (callers are the page's views, behind anIsPage()). anKpiRow and anCard are general: every view builds on them.
 // anKpiRow: the kit's KPI row, the one Audit draws too: div.kpi-row > div.kpi > span.kpi-value + span.kpi-label. The label
 // ellipsizes (desktop.css), so it carries its full text in title: the tile's own, else the label.
 function anKpiRow(tiles) {
@@ -1291,15 +1477,6 @@ function anDeltaLine(delta) {
   line.appendChild(el("span", "an-dlead an-d" + (delta.dir === "up" || delta.dir === "down" ? delta.dir : "flat"), parts.lead));
   if (parts.rest) line.appendChild(document.createTextNode(parts.rest));
   return line;
-}
-// anPSection: a section of the page: the kit's h2.section-title and, on its baseline, a muted caption (M3.2's title row).
-function anPSection(title, caption) {
-  const sec = el("section", "an-psec");
-  const head = el("div", "an-psec-head");
-  head.appendChild(el("h2", "section-title", title));
-  if (caption) head.appendChild(el("span", "t-sm muted", caption));
-  sec.appendChild(head);
-  return sec;
 }
 // anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
 // it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the Overview's cards are the frame's
