@@ -113,47 +113,6 @@ function pricedModelIds(rows) {
   return (rows || []).filter((r) => r.cost > 0).map((r) => r.model);
 }
 
-// foldProjects: /projects per-(project,model) rows → per-project totals + model
-// mix, cost-descending, capped at topN (0 = all).
-function foldProjects(rows, topN) {
-  const byProj = new Map();
-  for (const r of rows || []) {
-    let p = byProj.get(r.project);
-    if (!p) { p = { project: r.project, cost: 0, tokens: 0, prompts: 0, byModel: {} }; byProj.set(r.project, p); }
-    const tok = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
-    p.cost += r.costUsd || 0;
-    p.tokens += tok;
-    p.prompts += r.prompts || 0;
-    p.byModel[r.model] = (p.byModel[r.model] || 0) + (r.costUsd || 0);
-  }
-  let list = [...byProj.values()].sort((a, b) => b.cost - a.cost);
-  if (topN && list.length > topN) list = list.slice(0, topN);
-  return list;
-}
-
-// sessionCostBuckets: /sessions rows → a fixed cost histogram (one row per
-// distinct session, summed across its day/model rows).
-function sessionCostBuckets(rows) {
-  const perSession = new Map();
-  for (const r of rows || []) {
-    const k = (r.sessionId || "") + String.fromCharCode(31) + (r.project || "");
-    perSession.set(k, (perSession.get(k) || 0) + (r.costUsd || 0));
-  }
-  const buckets = [
-    { label: "<$1", lo: 0, hi: 1 },
-    { label: "$1–5", lo: 1, hi: 5 },
-    { label: "$5–15", lo: 5, hi: 15 },
-    { label: "$15–40", lo: 15, hi: 40 },
-    { label: "$40+", lo: 40, hi: Infinity },
-  ];
-  const out = buckets.map((b) => ({ label: b.label, count: 0 }));
-  for (const cost of perSession.values()) {
-    const i = buckets.findIndex((b) => cost >= b.lo && cost < b.hi);
-    if (i >= 0) out[i].count++;
-  }
-  return out;
-}
-
 // topSessionsByCost: /sessions rows → sessions aggregated across their day/model
 // rows, most expensive first, limited to `limit`.
 function topSessionsByCost(rows, limit) {
@@ -224,17 +183,6 @@ function pctDelta(cur, prev) {
   return Math.round((cur - prev) / prev * 100);
 }
 
-// dowBuckets: /summary byDayModel rows → cost per weekday, Mon..Sun (index 0..6).
-function dowBuckets(rows) {
-  const out = [0, 0, 0, 0, 0, 0, 0];
-  for (const r of rows || []) {
-    const d = new Date(r.day + "T00:00:00Z").getUTCDay(); // 0=Sun..6=Sat
-    const idx = (d + 6) % 7; // → 0=Mon..6=Sun
-    out[idx] += r.costUsd || 0;
-  }
-  return out;
-}
-
 // ---- model colour (categorical, stable per index) --------------------------
 // The hues live in CSS as --an-1..7: app.css keeps the Catppuccin set on mobile,
 // desktop.css swaps in a palette with no green, amber or red (those are status
@@ -274,25 +222,61 @@ function anSessionKpis(d) {
   ];
 }
 
-// ---- what the Models, Projects, Sessions and Tools views say: one preparation for both skins ----------------------
+// ---- what the Overview, Workspaces, Cost drivers, Sessions and Models views say: one preparation for both skins ----------------------
 // The phone's modal (anModels, anProjects, anSessions, anTools) and the desktop page (the an...Page builders) draw different DOM
 // from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
 
 const AN_COPY = {
+  // The head and toolbar of every view (§3.0). {from} and {to} are the window's dates.
+  head: {
+    title: "Analytics",
+    line: "API value of your Claude Code usage at list rates, not what a subscription bills · {from} → {to} (UTC)",
+    rescan: "Re-scan", close: "Esc ✕", where: "Where", whereAll: "All", compare: "Compare",
+    views: ["Overview", "Workspaces", "Cost drivers", "Sessions", "Models"],
+    ranges: ["7d", "30d", "90d", "All", "Custom…"],
+  },
   overview: {
     chart: "Cost over time", chartHint: "Stacked by model · daily", byModel: "Cost by model",
+    kpis: ["API value", "Sessions", "Median per session", "Cache hit"],
+    compareSuffix: " vs the {N} days before",
+    byWorkspace: "Cost by workspace", byWorkspaceHint: "top 8 · bar split = host / box",
     // The page only (digest-design §A2): the phone's own heading is "Cost by project (top)" and its note is anNote's boxed one.
     byProject: "Cost by project", byProjectHint: "top 10 · bar split = model mix",
     note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.",
   },
+  workspaces: {
+    title: "Workspaces",
+    kpis: ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace"],
+    columns: ["Workspace", "API value", "Sessions", "Host", "Box", "Model mix", "Median / session", "Cache hit"],
+    unmatched: "unmatched", unmatchedPath: "unmatched · folder no longer known",
+    host: "host", box: "box · {profile}", clone: "clone · {dir}", worktrees: "worktrees ({N})",
+    note: "A box clone counts toward the repo it was cloned from, and a Claude Code worktree toward its repo. Older usage whose folder can't be matched any more keeps its folder name and is marked unmatched.",
+  },
+  drivers: {
+    title: "Cost drivers",
+    kpis: ["Of API value ran in subagents", "Costliest plugin", "Costliest MCP server"],
+    cards: {
+      agent: { title: "Subagents", caption: "main agent vs subagents", rest: "main agent (no subagent)" },
+      skill: { title: "Skills", caption: "", rest: "outside any skill" },
+      plugin: { title: "Plugins", caption: "", rest: "outside any plugin" },
+      mcp: { title: "MCP", caption: "server → its tools", rest: "outside any MCP tool" },
+    },
+    coverage: "Based on {N}% of this window's API value: sessions whose transcripts are still on disk.",
+    note: "A turn counts toward the subagent, skill, plugin and MCP tool it ran under, so one turn can appear in several cards and the cards do not add up across. An MCP tool keeps the turns that read its result. Transcripts older than Claude Code's labels count as \"outside\".",
+    empty: "No cost-driver data in this window: these sessions' transcripts are no longer on disk.",
+  },
+  sessions: {
+    title: "Top sessions by cost", hint: "click a row to open the session",
+    kpis: ["Sessions in this window", "Costliest session", "Median per session"],
+    columns: ["Session", "Last day", "Workspace", "Where", "Branch", "Model", "Prompts", "API value"],
+  },
   models: {
     title: "Per-model breakdown", hint: "Cost, volume & efficiency · window",
-    shareTitle: "Why $ ≠ token count", shareHint: "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree",
-    tokens: "Share of tokens", cost: "Share of cost",
+    columns: ["Model", "API value", "% of value", "Sessions", "Median / session", "Per prompt", "Cache hit", "Tokens"],
+    sessionsTitle: "A session that used two models counts in both rows, so this column does not add up to the Sessions total.",
+    note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality. \"other (unpriced)\" are models with no published rate; their tokens are counted, their value is not.",
   },
   projects: { title: "Cost by project", hint: "Bar split shows the model mix inside each project · window", detail: "Detail" },
-  sessions: { title: "Top sessions by cost" },
-  tools: { title: "Skills · plugins · MCP", hint: "What the agents actually invoked · by records", none: "No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)." },
 };
 // A table's columns and where its numbers start (anHead gives the th from there on .num; the page capitalises the labels).
 const AN_TABLES = {
@@ -300,18 +284,6 @@ const AN_TABLES = {
   projects: [["project", "cost", "tokens", "prompts"], 1],
   sessions: [["session", "day", "project", "model", "tokens", "prompts", "cost"], 4],
 };
-const AN_TOOL_COLORS = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
-
-// anToolGroups: tools rows ({kind, name, records}) as one group per kind, in the order the kinds are met: its colour (the accent
-// for a kind not listed), its first ten rows and the longest bar among them (never under 1).
-function anToolGroups(tools) {
-  const kinds = Object.create(null); // a kind such as "constructor" or "__proto__" is a plain key here, not an inherited one
-  for (const t of tools || []) (kinds[t.kind] = kinds[t.kind] || []).push(t);
-  return Object.keys(kinds).map((kind) => {
-    const items = kinds[kind].slice(0, 10);
-    return { kind, color: Object.prototype.hasOwnProperty.call(AN_TOOL_COLORS, kind) ? AN_TOOL_COLORS[kind] : "var(--accent)", items, max: Math.max(1, ...items.map((t) => t.records)) };
-  });
-}
 
 // anPct: v as a whole percent of total, "59%".
 function anPct(v, total) { return Math.round(v / total * 100) + "%"; }
@@ -337,7 +309,7 @@ function anModelCells(x, fold) {
   };
 }
 
-// anProjectBars: foldProjects rows as the stacked bars: each project's name, cost and segments (dearest model first, coloured by
+// anProjectBars: byProject rows (project, cost, byModel) as the stacked bars: each project's name, cost and segments (dearest model first, coloured by
 // its place in `models`, titled "model $cost"), and the longest bar (never under 1).
 function anProjectBars(byProject, models) {
   return {
@@ -360,6 +332,126 @@ function anSessionRow(s) {
     sid: s.sid, day: s.day, project: projShort(s.project), model: shortModel(s.model), mixed: s.model === "mixed",
     tokens: fmtCompact(s.tokens), prompts: String(s.prompts), cost: usd(s.cost),
   };
+}
+
+// ---- Analytics v3: workspaces, cost drivers, medians and cache hit (both skins) ------------------------------------------
+// Names (a workspace, a skill, an MCP server) come from the box and are kept as data here: nothing in this section builds HTML,
+// the builders draw them with textContent.
+
+// median: the middle of a list of numbers, the mean of the two middle ones for an even count; null for none. The list is not reordered.
+function median(nums) {
+  const a = (nums || []).filter((n) => typeof n === "number" && !isNaN(n)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+// cacheHit: cache_read / (input + cache_read + cache_creation) as a ratio. `r` carries {cacheRead, input, cacheCreation} or the
+// API's {cacheRead, cacheDenom}; null when the denominator is 0 (nothing was read, so there is no rate to show).
+function cacheHit(r) {
+  if (!r) return null;
+  const denom = r.cacheDenom != null ? r.cacheDenom : (r.input || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+  return denom > 0 ? (r.cacheRead || 0) / denom : null;
+}
+
+// kpiDelta: a tile's change vs the window before: {text, dir} with dir "up", "down" or "flat". `unit` "pct" is a percent change
+// ("▲ 12%"; null with no baseline: prev null or 0); "pt" is the change of a ratio in percentage points ("▼ 0.4 pt"). null when
+// either figure is missing.
+function kpiDelta(cur, prev, unit) {
+  if (cur == null || prev == null || isNaN(cur) || isNaN(prev)) return null;
+  let n, word;
+  if (unit === "pt") {
+    n = Math.round((cur - prev) * 1000) / 10;
+    word = Math.abs(n).toFixed(1) + " pt";
+  } else {
+    if (prev === 0) return null;
+    n = Math.round((cur - prev) / prev * 100);
+    word = Math.abs(n) + "%";
+  }
+  if (n === 0) return { text: word, dir: "flat" };
+  return { text: (n > 0 ? "▲ " : "▼ ") + word, dir: n > 0 ? "up" : "down" };
+}
+
+// anOverviewKpis: the Overview's four tiles (§3.1) from the loaded window `d` and, with Compare on, `cmp` ({days, prev:
+// {cost, sessions, median, cache}}). Each tile is {value, label, delta}: delta is kpiDelta's {text, dir} or null; the first
+// tile's text says which window it is against.
+function anOverviewKpis(d, cmp) {
+  const cost = d.costByDay.totals.cost, p = cmp ? cmp.prev : null;
+  const L = AN_COPY.overview.kpis;
+  const first = p ? kpiDelta(cost, p.cost, "pct") : null;
+  if (first) first.text += AN_COPY.overview.compareSuffix.replace("{N}", String(cmp.days));
+  return [
+    { value: usd(cost), label: L[0], delta: first },
+    { value: anCountText(d.sessionCount), label: L[1], delta: p ? kpiDelta(d.sessionCount, p.sessions, "pct") : null },
+    { value: d.median == null ? "—" : usd(d.median), label: L[2], delta: p ? kpiDelta(d.median, p.median, "pct") : null },
+    { value: d.cache == null ? "—" : (d.cache * 100).toFixed(1) + "%", label: L[3], delta: p ? kpiDelta(d.cache, p.cache, "pt") : null },
+  ];
+}
+
+// anWorkspaceRows: /workspaces → one row per workspace, as the table prints it: the name and its full path (an unmatched row's
+// path says it is unmatched), API value, sessions, the host / box split in whole percents that add to 100 (0 / 0 with no cost),
+// the model mix (dearest first, as shares of the row's cost), the median per session, the cache hit and the children.
+function anWorkspaceRows(resp) {
+  const fig = (w) => ({ cost: w.costUsd || 0, sessions: w.sessions || 0, median: median(w.sessionCosts), cacheHit: cacheHit(w) });
+  return ((resp && resp.workspaces) || []).map((w) => {
+    const host = w.hostCost || 0, box = w.boxCost || 0, split = host + box;
+    const hostPct = split > 0 ? Math.round(host / split * 100) : 0;
+    const models = Object.entries(w.byModel || {}).sort((a, b) => b[1] - a[1]);
+    const modelTotal = models.reduce((t, e) => t + e[1], 0);
+    return {
+      name: w.name, path: w.unmatched ? AN_COPY.workspaces.unmatchedPath : w.workspace, unmatched: !!w.unmatched,
+      ...fig(w),
+      hostPct, boxPct: split > 0 ? 100 - hostPct : 0,
+      mix: modelTotal > 0 ? models.map(([model, v]) => ({ model, share: v / modelTotal })) : [],
+      children: (w.children || []).map((c) => ({ runtime: c.runtime, profile: c.profile, via: c.via, label: c.label, path: c.path, ...fig(c) })),
+    };
+  });
+}
+
+// anDriverCards: /drivers → {empty, coverage, cards}. Four cards (agent, skill, plugin, mcp), each rows of {name, cost, pct, muted,
+// sub} and `max`, the largest named row (0 when none, so no bar is drawn). Percentages are whole percents of CoveredTotal, the API
+// value of the sessions that have driver data, so usage that exists only in rollups never counts as "main agent" or "outside".
+// The muted last row is the rest: CoveredTotal minus the kind's rows, never below 0. An MCP server's tools follow it as `sub`
+// rows. `coverage` is CoveredTotal / Total when under 1, else null. With no covered value there is nothing to divide by:
+// {empty: true, coverage: null, cards: []}.
+function anDriverCards(resp) {
+  const total = (resp && resp.total) || 0, covered = (resp && resp.coveredTotal) || 0;
+  if (!(covered > 0)) return { empty: true, coverage: null, cards: [] };
+  const pct = (v) => Math.round(v / covered * 100);
+  const row = (name, cost, muted, sub) => ({ name, cost, pct: pct(cost), muted, sub });
+  const cards = ["agent", "skill", "plugin", "mcp"].map((kind) => {
+    const C = AN_COPY.drivers.cards[kind];
+    const rows = [];
+    let sum = 0;
+    if (kind === "mcp") {
+      for (const s of resp.mcp || []) {
+        sum += s.costUsd || 0;
+        rows.push(row(s.server, s.costUsd || 0, false, false));
+        for (const t of s.tools || []) rows.push(row(t.name, t.costUsd || 0, false, true));
+      }
+    } else {
+      for (const x of resp[kind] || []) { sum += x.costUsd || 0; rows.push(row(x.name, x.costUsd || 0, false, false)); }
+    }
+    const max = rows.reduce((m, r) => Math.max(m, r.cost), 0);
+    rows.push(row(C.rest, Math.max(0, covered - sum), true, false));
+    return { kind, title: C.title, caption: C.caption, rows, max };
+  });
+  return { empty: false, coverage: total > 0 && covered / total < 1 ? covered / total : null, cards };
+}
+
+// anModelMedians: /session-costs modelCosts rows ({sessionId, project, model, costUsd}) → {model: median}, over each model's own
+// per-session cost (a session's rows of one model add up first), not the whole session's.
+function anModelMedians(modelCosts) {
+  const per = new Map(); // model → Map(session → cost)
+  for (const r of modelCosts || []) {
+    let m = per.get(r.model);
+    if (!m) { m = new Map(); per.set(r.model, m); }
+    const k = (r.sessionId || "") + String.fromCharCode(31) + (r.project || "");
+    m.set(k, (m.get(k) || 0) + (r.costUsd || 0));
+  }
+  const out = Object.create(null); // a model named "constructor" or "__proto__" is a plain key
+  for (const [model, m] of per) out[model] = median([...m.values()]);
+  return out;
 }
 
 // ---- the cost chart's scale, geometry and legend ------------------------------------------------------------------------
@@ -406,22 +498,21 @@ function anLegendItems(models, colorModels) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, AN_API_VALUE_TITLE, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
-    foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
-    prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
+    topSessionsByCost, distinctSessions,
+    prevWindow, pctDelta, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
-    anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+    median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians,
+    anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
     anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };
 }
 
 // ---- rendering (browser only) -----------------------------------------------
 
-const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, customOpen: false, data: null };
-
-// summaryRowsCache holds the current window's byDayModel rows so the compare pass
-// can bucket the current period by day-of-week without re-fetching.
-let summaryRowsCache = [];
+// where: the Where select's key ("" is All: host, box, "box:{profile}"; the API ignores a key it does not know). whereOpts: the
+// select's options for the window, [{key, label, costUsd}].
+const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, customOpen: false, data: null, where: "", whereOpts: [] };
 
 const RANGES = { "7d": 6, "30d": 29, "90d": 89, all: null };
 
@@ -438,6 +529,7 @@ async function openAnalytics() {
   AN.range = "30d";
   AN.compare = false;
   AN.customOpen = false;
+  AN.where = "";
   AN.tab = "overview";
   AN.to = anTodayUTC();
   AN.from = anRangeFrom("30d");
@@ -486,96 +578,87 @@ async function anRescan(btn) {
   }
 }
 
+// anCacheOfModels: the cache hit of normModels rows taken together (null when they read nothing).
+function anCacheOfModels(rows) {
+  const t = { cacheRead: 0, input: 0, cacheCreation: 0 };
+  for (const r of rows || []) { t.cacheRead += r.cacheRead || 0; t.input += r.input || 0; t.cacheCreation += r.cacheCreation || 0; }
+  return cacheHit(t);
+}
+
+// anSessionMedian: the median cost of a window's sessions, each taken whole (its day and model rows added up); null for none.
+function anSessionMedian(rows) {
+  return median(topSessionsByCost(rows, Infinity).map((x) => x.cost));
+}
+
 async function anLoad() {
   const body = document.getElementById("analytics-body");
   if (!body) return;
   body.replaceChildren(anEmpty("Loading…"));
-  const q = `from=${AN.from}&to=${AN.to}`;
-  let summary, models, projects, sessions, tools;
+  const win = `from=${AN.from}&to=${AN.to}`;
+  const q = `${win}&where=${encodeURIComponent(AN.where)}`; // one code path: an empty where is "All"
+  let summary, models, workspaces, sessions, drivers, where;
   try {
-    [summary, models, projects, sessions, tools] = await Promise.all([
+    [summary, models, workspaces, sessions, drivers, where] = await Promise.all([
       api(`/api/analytics/summary?${q}`),
       api(`/api/analytics/models?${q}`),
-      api(`/api/analytics/projects?${q}`),
+      api(`/api/analytics/workspaces?${q}`),
       api(`/api/analytics/session-costs?${q}`),
-      api(`/api/analytics/tools?${q}`),
+      api(`/api/analytics/drivers?${q}`),
+      api(`/api/analytics/where?${win}`),
     ]);
   } catch (_) {
     body.replaceChildren(anEmpty("Could not load analytics."));
     return;
   }
   const byDayModel = (summary && summary.byDayModel) || [];
-  summaryRowsCache = byDayModel; // current window rows, for the compare pass's day-of-week
   const sessRows = (sessions && sessions.sessions) || [];
+  AN.whereOpts = (where && where.options) || [];
   AN.data = {
     from: summary ? summary.from : AN.from,
     to: summary ? summary.to : AN.to,
     costByDay: foldCostByDay(byDayModel),
     byModel: normModels((models && models.byModel) || []),
-    byProject: foldProjects((projects && projects.byProject) || [], 14),
+    byProject: [], // the old per-project fold is gone; the phone's project sections stay empty until they read `workspaces`
+    workspaces: anWorkspaceRows(workspaces),
+    drivers: anDriverCards(drivers),
+    modelMedians: anModelMedians(sessions && sessions.modelCosts),
     sessions: sessRows,
-    sessionHist: sessionCostBuckets(sessRows),
     topSessions: topSessionsByCost(sessRows, 18),
     sessionCount: distinctSessions(sessRows),
-    tools: (tools && tools.tools) || [],
+    median: anSessionMedian(sessRows),
     cmp: null,
   };
+  AN.data.cache = anCacheOfModels(AN.data.byModel);
   AN.data.models = AN.data.costByDay.models;
   AN.data.pricedModels = pricedModelIds(AN.data.byModel); // for legends: drop $0 models
   if (AN.compare) await anLoadCompare();
   anRender();
 }
 
+// anLoadCompare: the window before this one (equal length), only what the Overview's four tiles need: its API value, sessions,
+// median per session and cache hit, kept as AN.data.cmp = {days, prev} for anOverviewKpis.
 async function anLoadCompare() {
   const pw = prevWindow(AN.from, AN.to);
-  const q = `from=${pw.from}&to=${pw.to}`;
-  let ps, pm, pp, psess;
+  const q = `from=${pw.from}&to=${pw.to}&where=${encodeURIComponent(AN.where)}`;
+  let ps, pm, psess;
   try {
-    [ps, pm, pp, psess] = await Promise.all([
+    [ps, pm, psess] = await Promise.all([
       api(`/api/analytics/summary?${q}`),
       api(`/api/analytics/models?${q}`),
-      api(`/api/analytics/projects?${q}`),
       api(`/api/analytics/session-costs?${q}`),
     ]);
   } catch (_) {
     return; // comparison is best-effort; leave cmp null
   }
-  const curTotals = AN.data.costByDay.totals;
-  const prevFold = foldCostByDay((ps && ps.byDayModel) || []);
-  const curModels = new Map(AN.data.byModel.map((m) => [m.model, m]));
-  const prevModels = normModels((pm && pm.byModel) || []);
-  const prevModelMap = new Map(prevModels.map((m) => [m.model, m]));
-  const allModels = AN.data.models.slice();
-  for (const m of prevModels) if (!allModels.includes(m.model)) allModels.push(m.model);
-  const byModel = allModels.map((m) => {
-    const c = curModels.get(m), p = prevModelMap.get(m);
-    return {
-      model: m,
-      curCost: c ? c.cost : 0, prevCost: p ? p.cost : 0,
-      curTok: c ? c.tokens : 0, prevTok: p ? p.tokens : 0,
-    };
-  });
-  const curProj = new Map(AN.data.byProject.map((x) => [x.project, x.cost]));
-  const prevProjList = foldProjects((pp && pp.byProject) || [], 0);
-  const prevProj = new Map(prevProjList.map((x) => [x.project, x.cost]));
-  const projKeys = new Set([...curProj.keys(), ...prevProj.keys()]);
-  const byProject = [...projKeys]
-    .map((k) => ({ project: k, curCost: curProj.get(k) || 0, prevCost: prevProj.get(k) || 0 }))
-    .sort((a, b) => (b.curCost + b.prevCost) - (a.curCost + a.prevCost))
-    .slice(0, 12);
-  const curDow = dowBuckets(summaryRowsCache);
-  const prevDow = dowBuckets((ps && ps.byDayModel) || []);
-  const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const dow = DOW.map((d, i) => ({ day: d, cur: curDow[i], prev: prevDow[i] }));
+  const sessRows = (psess && psess.sessions) || [];
   AN.data.cmp = {
-    curFrom: AN.from, curTo: AN.to, prevFrom: pw.from, prevTo: pw.to,
-    models: allModels, // union of current+previous, so prev-only models get a distinct colour
-    cur: { cost: curTotals.cost, tokens: curTotals.tokens, prompts: curTotals.prompts, sessions: AN.data.sessionCount },
+    days: daysBetween(AN.from, AN.to),
     prev: {
-      cost: prevFold.totals.cost, tokens: prevFold.totals.tokens, prompts: prevFold.totals.prompts,
-      sessions: psess ? distinctSessions(psess.sessions || []) : 0,
+      cost: foldCostByDay((ps && ps.byDayModel) || []).totals.cost,
+      sessions: distinctSessions(sessRows),
+      median: anSessionMedian(sessRows),
+      cache: anCacheOfModels(normModels((pm && pm.byModel) || [])),
     },
-    byModel, byProject, dow,
   };
 }
 
@@ -790,8 +873,6 @@ function anOverview(root) {
   const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
   root.appendChild(sec2);
 
-  if (d.cmp) root.appendChild(anCompareBlock());
-
   root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
 }
 
@@ -838,8 +919,6 @@ function anOverviewPage(root) {
   anCardBody(pc).appendChild(prows);
   grid.append(mc, pc);
   root.appendChild(grid);
-
-  if (d.cmp) root.appendChild(anCompareBlock());
 }
 
 // ---- Models -----------------------------------------------------------------
@@ -863,14 +942,6 @@ function anModels(root) {
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 
-  const g = el("div", "an-grid2");
-  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, AN_COPY.models.tokens));
-  for (const x of fold.rows) anHbar(bt, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
-  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, AN_COPY.models.cost));
-  for (const x of fold.rows) anHbar(bc, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
-  g.append(bt, bc);
-  const s2 = anSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
-  s2.appendChild(g); root.appendChild(s2);
 }
 
 // ---- Projects ---------------------------------------------------------------
@@ -900,29 +971,6 @@ function anProjects(root) {
 function anSessions(root) {
   if (anIsPage()) return anSessionsPage(root);
   const d = AN.data;
-  const g = el("div", "an-grid2");
-  const bh = el("div", "an-box"); bh.appendChild(el("h4", null, "Session cost distribution"));
-  const maxH = Math.max(1, ...d.sessionHist.map((b) => b.count));
-  for (const b of d.sessionHist) anHbar(bh, b.label, b.count, maxH, "var(--accent)", (v) => String(v));
-  const bk = el("div", "an-box"); bk.appendChild(el("h4", null, "Fleet at a glance"));
-  const heavy = d.topSessions[0];
-  const info = el("div", "an-fleet");
-  // Build with textContent (project names are filesystem-derived — never innerHTML).
-  const fleetLine = (label, value) => {
-    const row = el("div"); row.append(document.createTextNode(label + " "));
-    const b = el("b", null, value); row.appendChild(b); return row;
-  };
-  info.appendChild(fleetLine("Sessions (window):", String(d.sessionCount)));
-  if (heavy) {
-    const row = fleetLine("Costliest session:", usd(heavy.cost));
-    row.append(document.createTextNode(" (" + projShort(heavy.project) + ")"));
-    info.appendChild(row);
-  }
-  if (d.byProject[0]) info.appendChild(fleetLine("Costliest project:", projShort(d.byProject[0].project)));
-  bk.appendChild(info);
-  g.append(bh, bk);
-  const s1 = anSection("Session shape"); s1.appendChild(g); root.appendChild(s1);
-
   const sec = anSection(AN_COPY.sessions.title, "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
   tbl.appendChild(anHead(...AN_TABLES.sessions));
@@ -936,27 +984,17 @@ function anSessions(root) {
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 }
 
-// ---- Tools ------------------------------------------------------------------
+// ---- Cost drivers -----------------------------------------------------------
 function anTools(root) {
   if (anIsPage()) return anToolsPage(root);
-  const d = AN.data;
-  const sec = anSection(AN_COPY.tools.title, AN_COPY.tools.hint);
-  if (!d.tools.length) {
-    sec.appendChild(anEmpty(AN_COPY.tools.none));
-    root.appendChild(sec); return;
-  }
-  const g = el("div", "an-grid2");
-  for (const grp of anToolGroups(d.tools)) {
-    const box = el("div", "an-box"); box.appendChild(el("h4", null, grp.kind));
-    for (const t of grp.items) anHbar(box, t.name, t.records, grp.max, grp.color, fmtCompact);
-    g.appendChild(box);
-  }
-  sec.appendChild(g); root.appendChild(sec);
+  const sec = anSection(AN_COPY.drivers.title);
+  if (AN.data.drivers.empty) sec.appendChild(anEmpty(AN_COPY.drivers.empty));
+  root.appendChild(sec);
 }
 
-// ---- the desktop page's views (Models, Projects, Sessions, Tools) ------------------------------------------------------
+// ---- the desktop page's views (Models, Projects, Sessions, Cost drivers) ------------------------------------------------------
 // The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
-// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES, anToolGroups,
+// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES,
 // anModelFold, anProjectBars, anSessionRow ...): only the DOM differs.
 // The page's parts are the kit's: a KPI row, h2.section-title with its caption, cards (.an-card: --panel and --r-card, a name
 // of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
@@ -988,16 +1026,6 @@ function anModelsPage(root) {
   card.appendChild(anTableWrap(tbl));
   sec.appendChild(card);
   root.appendChild(sec);
-
-  const bt = anCard(AN_COPY.models.tokens), bc = anCard(AN_COPY.models.cost);
-  const bodyT = anCardBody(bt), bodyC = anCardBody(bc);
-  for (const x of fold.rows) anHbar(bodyT, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
-  for (const x of fold.rows) anHbar(bodyC, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
-  const g = el("div", "an-pgrid");
-  g.append(bt, bc);
-  const s2 = anPSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
-  s2.appendChild(g);
-  root.appendChild(s2);
 }
 
 // anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
@@ -1027,12 +1055,10 @@ function anProjectsPage(root) {
   root.appendChild(s2);
 }
 
-// anSessionsPage: M3.2 (digest-design §B8). Three KPI tiles, then a split: the top-sessions table in a card, and "Session cost"
-// (the cost bands) beside it. The split is one column below 1000px of body (desktop.css).
+// anSessionsPage: M3.2 (digest-design §B8). Three KPI tiles, then the top-sessions table in a card.
 function anSessionsPage(root) {
   const d = AN.data;
   root.appendChild(anKpiRow(anSessionKpis(d)));
-  const split = el("div", "an-split");
 
   const left = anPSection(AN_COPY.sessions.title, "Spot the runaway session. Counts include subagent and synthetic transcripts.");
   const tbl = el("table", "an-table an-stbl");
@@ -1051,197 +1077,14 @@ function anSessionsPage(root) {
   card.appendChild(anTableWrap(tbl));
   left.appendChild(card);
 
-  const right = anPSection("Session cost");
-  const bands = anCard(null, "Sessions per cost band");
-  const rows = el("div", "an-bands");
-  const maxH = Math.max(1, ...d.sessionHist.map((b) => b.count));
-  for (const b of d.sessionHist) {
-    const row = el("div", "an-band");
-    const meter = el("span", "meter");
-    const fill = el("i"); fill.style.width = (b.count / maxH * 100) + "%"; // no colour: the meter's own accent
-    meter.appendChild(fill);
-    row.append(el("span", "t-sm tnum", b.label), meter, el("span", "t-sm tnum an-band-n", anCountText(b.count)));
-    rows.appendChild(row);
-  }
-  anCardBody(bands).appendChild(rows);
-  right.appendChild(bands);
-
-  split.append(left, right);
-  root.appendChild(split);
+  root.appendChild(left);
 }
 
-// anToolsPage: one card per kind, as today's boxes.
+// anToolsPage: as the phone's, until the four cards are drawn.
 function anToolsPage(root) {
-  const d = AN.data;
-  const sec = anPSection(AN_COPY.tools.title, AN_COPY.tools.hint);
-  if (!d.tools.length) {
-    sec.appendChild(anEmpty(AN_COPY.tools.none));
-    root.appendChild(sec); return;
-  }
-  const g = el("div", "an-pgrid");
-  for (const grp of anToolGroups(d.tools)) {
-    // The head names the tool kind and its glyph is read off that declared kind, so a kind this build does not know keeps its words only.
-    const card = anCard(grp.kind, null, null, iconOf(ICON_TOOL_KIND, grp.kind));
-    const body = anCardBody(card);
-    for (const t of grp.items) anHbar(body, t.name, t.records, grp.max, grp.color, fmtCompact);
-    g.appendChild(card);
-  }
-  sec.appendChild(g);
+  const sec = anPSection(AN_COPY.drivers.title);
+  if (AN.data.drivers.empty) sec.appendChild(anEmpty(AN_COPY.drivers.empty));
   root.appendChild(sec);
-}
-
-// ---- comparison block -------------------------------------------------------
-function anDelta(cur, prev, costLike) {
-  const p = pctDelta(cur, prev);
-  if (p === null) return { txt: cur ? "new" : "—", cls: costLike ? "an-up" : "an-up good" };
-  const up = p >= 0;
-  const cls = costLike ? (up ? "an-up" : "an-down") : (up ? "an-up good" : "an-down bad");
-  return { txt: (up ? "▲" : "▼") + Math.abs(p) + "% vs prev", cls };
-}
-
-function anCompareBlock() {
-  const C = AN.data.cmp;
-  const sec = anSection("Change · this window vs previous", `${C.curFrom} → ${C.curTo}  vs  ${C.prevFrom} → ${C.prevTo}`);
-  const dl = {
-    cost: anDelta(C.cur.cost, C.prev.cost, true),
-    tokens: anDelta(C.cur.tokens, C.prev.tokens, true),
-    prompts: anDelta(C.cur.prompts, C.prev.prompts, false),
-    sessions: anDelta(C.cur.sessions, C.prev.sessions, false),
-  };
-  if (anIsPage()) {
-    // The page's tiles are the Overview's kit KPI row, each with its delta line inside (no frame draws this state: kit parts only).
-    sec.appendChild(anKpiRow([
-      { value: usd(C.cur.cost), label: "Cost", delta: dl.cost },
-      { value: fmtCompact(C.cur.tokens), label: "Tokens", delta: dl.tokens },
-      { value: anCountText(C.cur.prompts), label: "Prompts", delta: dl.prompts },
-      { value: anCountText(C.cur.sessions), label: "Sessions", delta: dl.sessions },
-    ]));
-  } else {
-    const kpis = el("div", "an-kpis");
-    const tiles = [
-      ["cost", usd(C.cur.cost), "cost", dl.cost],
-      ["", fmtCompact(C.cur.tokens), "tokens", dl.tokens],
-      ["", String(C.cur.prompts), "prompts", dl.prompts],
-      ["", String(C.cur.sessions), "sessions", dl.sessions],
-    ];
-    for (const [cls, v, l, d] of tiles) {
-      const c = anKpi(cls, v, l);
-      const dd = el("div", "an-kdelta " + d.cls, d.txt);
-      c.appendChild(dd);
-      kpis.appendChild(c);
-    }
-    sec.appendChild(kpis);
-  }
-
-  const g = el("div", "an-grid2");
-  g.append(
-    anDiverging("Cost change by model", C.byModel.map((x) => ({ name: shortModel(x.model), cur: x.curCost, prev: x.prevCost }))),
-    anDiverging("Cost change by project", C.byProject.map((x) => ({ name: projShort(x.project), cur: x.curCost, prev: x.prevCost }))),
-  );
-  sec.appendChild(g);
-
-  const g2 = el("div", "an-grid2");
-  g2.append(anMixShift(), anDowOverlay());
-  sec.appendChild(g2);
-
-  // A static literal, set as HTML on the phone (its boxed note); the page's footnote is the same words as plain text.
-  const note = "Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week).";
-  sec.appendChild(anIsPage() ? anFootnote(note.replace(/<[^>]+>/g, "")) : anNote(note));
-  return sec;
-}
-
-function anDiverging(title, items) {
-  const box = el("div", "an-box"); box.appendChild(el("h4", null, title));
-  const rows = items.map((it) => ({ ...it, d: it.cur - it.prev })).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
-  const max = Math.max(0.01, ...rows.map((r) => Math.abs(r.d)));
-  for (const r of rows) {
-    if (Math.abs(r.d) < 0.01) continue;
-    const row = el("div", "an-divrow");
-    const nm = el("div", "nm", r.name); nm.title = r.name; row.appendChild(nm);
-    const track = el("div", "an-divtrack"); track.appendChild(el("div", "mid"));
-    const fill = el("div", "fill");
-    fill.style.width = (Math.abs(r.d) / max * 50) + "%";
-    fill.style.background = r.d >= 0 ? "var(--an-up)" : "var(--an-down)";
-    if (r.d >= 0) fill.style.left = "50%"; else fill.style.right = "50%";
-    track.appendChild(fill); row.appendChild(track);
-    row.appendChild(el("div", "val " + (r.d >= 0 ? "an-up" : "an-down"), (r.d >= 0 ? "+" : "−") + usd(Math.abs(r.d))));
-    box.appendChild(row);
-  }
-  return box;
-}
-
-function anMixShift() {
-  const C = AN.data.cmp, box = el("div", "an-box");
-  box.appendChild(el("h4", null, "Model mix shift (share of tokens)"));
-  const rows = C.byModel;
-  const curTot = rows.reduce((s, x) => s + x.curTok, 0) || 1;
-  const prevTot = rows.reduce((s, x) => s + x.prevTok, 0) || 1;
-  const cmodels = C.models || AN.data.models; // union of cur+prev for stable colours
-  const stack = (label, total, key) => {
-    const wrap = el("div", "an-mix");
-    wrap.appendChild(el("div", "an-mixlabel", label));
-    const bar = el("div", "an-mixbar");
-    for (const x of rows) {
-      const v = x[key]; if (!v) continue;
-      const seg = el("div"); seg.style.width = (v / total * 100) + "%";
-      seg.style.background = modelColor(cmodels, x.model);
-      seg.title = shortModel(x.model) + " " + Math.round(v / total * 100) + "%";
-      bar.appendChild(seg);
-    }
-    wrap.appendChild(bar); return wrap;
-  };
-  box.appendChild(stack("previous", prevTot, "prevTok"));
-  box.appendChild(stack("current", curTot, "curTok"));
-  anLegend(box, cmodels);
-  return box;
-}
-
-function anDowOverlay() {
-  const C = AN.data.cmp, d = C.dow, box = el("div", "an-box");
-  box.appendChild(el("h4", null, "Cost by day-of-week (this vs prev)"));
-  const W = 380, H = 150, pad = 26;
-  // On the page the axis text is 11px, and a label like "$12.50" no longer fits left of the plot's 26px pad: the plot starts at the
-  // cost chart's 44px gutter, the labels right-align in its 38px box and the date labels sit 6px under the plot (anPageChart's rules).
-  const page = anIsPage(), left = page ? AN_PAGE_CHART.gutter : pad;
-  const max = Math.max(1, ...d.map((x) => Math.max(x.cur, x.prev)));
-  const svg = anSvg(W, H);
-  if (page) {
-    // The cost chart's scale (anYTicks): the peak and its thirds labelled, each on its own gridline, and the baseline drawn but never
-    // labelled "$0.00".
-    for (const t of anYTicks(max, false)) {
-      const y = pad + (H - 2 * pad) * (1 - t.frac);
-      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
-      svg.appendChild(anText(AN_PAGE_CHART.labelBox, y + 4, t.text, "end"));
-    }
-    svg.appendChild(anLine(left, H - pad, W - 6, H - pad, "var(--rule)", 0.5));
-  } else {
-    for (let i = 0; i <= 2; i++) {
-      const y = pad + (H - 2 * pad) * i / 2;
-      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
-      svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
-    }
-  }
-  const xs = (i) => left + i * ((W - left - pad) / 6);
-  const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
-  const line = (key, color, dash) => {
-    let dd = "";
-    d.forEach((x, i) => { dd += (i ? "L" : "M") + xs(i).toFixed(1) + " " + ys(x[key]).toFixed(1) + " "; });
-    const p = document.createElementNS(NS, "path");
-    p.setAttribute("d", dd); p.setAttribute("fill", "none");
-    p.style.stroke = color; p.setAttribute("stroke-width", "1.6");
-    if (dash) p.setAttribute("stroke-dasharray", "3 3");
-    svg.appendChild(p);
-    d.forEach((x, i) => { const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", xs(i)); c.setAttribute("cy", ys(x[key])); c.setAttribute("r", "2.2"); c.style.fill = color; svg.appendChild(c); });
-  };
-  line("prev", "var(--muted)", true);
-  line("cur", "var(--accent)", false);
-  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + (page ? AN_PAGE_CHART.xLabelGap + 12 : 11), x.day, "middle")));
-  box.appendChild(anWrapSvg(svg));
-  const lg = el("div", "an-legend");
-  const mk = (c, t, dash) => { const s = el("span"); const i = el("i"); i.style.background = c; if (dash) i.style.opacity = ".6"; s.append(i, el("span", null, t)); return s; };
-  lg.append(mk("var(--accent)", "current", false), mk("var(--muted)", "previous", true));
-  box.appendChild(lg);
-  return box;
 }
 
 // ---- small builders ---------------------------------------------------------
@@ -1265,7 +1108,7 @@ function anKpiRow(tiles) {
     const label = el("span", "kpi-label", t.label);
     label.setAttribute("title", t.title || t.label);
     tile.append(el("span", "kpi-value", t.value), label);
-    // A tile may carry a delta line ({txt, cls} from anDelta): the Compare block's, under the label.
+    // A tile may carry a delta line ({txt, cls}), under the label.
     if (t.delta) tile.appendChild(el("div", "an-kdelta " + t.delta.cls, t.delta.txt));
     row.appendChild(tile);
   }
