@@ -123,3 +123,12 @@ func tailRel(path string) string {
 	}
 	return strings.Join(p[len(p)-n:], "/")
 }
+
+// isSubagentPath reports whether a transcript path is a subagent file,
+// `<slug>/<sid>/subagents/<any>.jsonl`, the shape legacyKeyFromRel gives to the
+// parent session. It reads the path's last four segments (as tailRel does), so
+// it needs no root and a "subagents" dir higher up the path cannot match.
+func isSubagentPath(path string) bool {
+	p := strings.Split(filepath.ToSlash(path), "/")
+	return len(p) >= 4 && p[len(p)-2] == "subagents"
+}

@@ -487,3 +487,76 @@ func TestIngestRecordsRuntimeFromRoot(t *testing.T) {
 		}
 	}
 }
+
+const (
+	mainCwdLine = `{"sessionId":"S1","cwd":"/work/main","timestamp":"2026-08-05T10:00:01Z","message":{"id":"mm1","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":1000000,"output_tokens":0}}}` + "\n"
+	subCwdLine  = `{"sessionId":"S1","cwd":"/work/main/.claude/worktrees/sub","timestamp":"2026-08-05T10:00:02Z","attributionAgent":"helper","message":{"id":"sm1","role":"assistant","model":"claude-opus-5","usage":{"input_tokens":2000000,"output_tokens":0}}}` + "\n"
+)
+
+func checkMainCwdWins(t *testing.T, s *Store) {
+	t.Helper()
+	d, ok := readDim(t, s, "S1", "-p")
+	if !ok || d.cwd != "/work/main" || d.parsed != 1 {
+		t.Errorf("dim = %+v (ok=%v), want the main file's cwd /work/main, parsed 1", d, ok)
+	}
+	// The subagent file still counts: its driver cost is stored.
+	if got := scalar(t, s, `SELECT SUM(cost_usd) FROM driver_rollup WHERE kind='agent' AND name='helper'`); got <= 0 {
+		t.Errorf("subagent driver cost missing: %v", got)
+	}
+}
+
+// <sid> sorts before <sid>.jsonl, so a walk reads the subagent files first. The
+// session's folder is still its main file's launch folder, never a subagent's,
+// on a first ingest and on the backfill of a legacy session.
+func TestSubagentNeverSetsCwdHostRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "-p", "S1", "subagents", "agent-a.jsonl"), subCwdLine)
+	writeFile(t, filepath.Join(root, "-p", "S1.jsonl"), mainCwdLine)
+	s := openTemp(t)
+	ingestRoot(s, root, nil, &IngestStats{})
+	checkMainCwdWins(t, s)
+
+	// The one-time backfill walks the same order.
+	if _, err := s.db.Exec(`UPDATE ingest_state SET backfilled=0; DELETE FROM driver_rollup; DELETE FROM session_dim`); err != nil {
+		t.Fatal(err)
+	}
+	ingestRoot(s, root, nil, &IngestStats{})
+	checkMainCwdWins(t, s)
+}
+
+func TestSubagentNeverSetsCwdBoxRoot(t *testing.T) {
+	base := t.TempDir()
+	proj := filepath.Join(base, "boxstate", "A", ".claude", "projects", "-p")
+	writeFile(t, filepath.Join(proj, "S1", "subagents", "agent-a.jsonl"), subCwdLine)
+	writeFile(t, filepath.Join(proj, "S1.jsonl"), mainCwdLine)
+	svc := boxSvc(t, base)
+	if st, err := svc.Ingest(); err != nil || st.Errors != 0 || st.Files != 2 {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+	checkMainCwdWins(t, svc.store)
+	if d, _ := readDim(t, svc.store, "S1", "-p"); d.runtime != "box" || d.rootKey != "A" {
+		t.Errorf("subagent file lost the runtime: %+v", d)
+	}
+
+	if _, err := svc.store.db.Exec(`UPDATE ingest_state SET backfilled=0; DELETE FROM driver_rollup; DELETE FROM session_dim`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Ingest(); err != nil {
+		t.Fatal(err)
+	}
+	checkMainCwdWins(t, svc.store)
+}
+
+func TestIsSubagentPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/r/-p/S1/subagents/agent-a.jsonl": true,
+		"/r/-p/S1.jsonl":                   false,
+		"/r/-p/subagents.jsonl":            false,
+		"/subagents/-p/S1.jsonl":           false,
+		"S1.jsonl":                         false,
+	} {
+		if got := isSubagentPath(p); got != want {
+			t.Errorf("isSubagentPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

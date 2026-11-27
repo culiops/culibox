@@ -470,7 +470,7 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 		}
 	}
 
-	if err := applyDimAndDrivers(tx, sessionID, project, info, p); err != nil {
+	if err := applyDimAndDrivers(tx, sessionID, project, path, info, p); err != nil {
 		return err
 	}
 
@@ -517,7 +517,7 @@ func (s *Store) ApplyBackfill(sessionID, project, path string, info RootInfo, p 
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	if err := applyDimAndDrivers(tx, sessionID, project, info, p); err != nil {
+	if err := applyDimAndDrivers(tx, sessionID, project, path, info, p); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE ingest_state SET backfilled=1 WHERE path=?`, path); err != nil {
@@ -548,9 +548,11 @@ func boolInt(b bool) int {
 // empty session id (a clamp of a shrunken file, which parsed nothing) writes
 // nothing. cwd keeps the first value, branch is replaced only by a non-empty
 // one, and runtime, account and root_key follow the ingest root. A legacy
-// parsed = 0 row becomes parsed = 1. workspace, unmatched, profile, via and
+// parsed = 0 row becomes parsed = 1. A subagent transcript never sets cwd: its
+// folder can differ from the launch folder, and the walk reads <sid>/subagents/
+// before <sid>.jsonl, so only the session's main file may set it. workspace, unmatched, profile, via and
 // via_path are resolved elsewhere and never touched here.
-func applyDimAndDrivers(tx *sql.Tx, sessionID, project string, info RootInfo, p *Parsed) error {
+func applyDimAndDrivers(tx *sql.Tx, sessionID, project, path string, info RootInfo, p *Parsed) error {
 	if sessionID == "" {
 		return nil
 	}
@@ -562,7 +564,11 @@ ON CONFLICT(session_id,project) DO UPDATE SET
   cwd=CASE WHEN session_dim.cwd='' THEN excluded.cwd ELSE session_dim.cwd END,
   branch=CASE WHEN excluded.branch<>'' THEN excluded.branch ELSE session_dim.branch END,
   runtime=excluded.runtime, account=excluded.account, root_key=excluded.root_key`
-	if _, err := tx.Exec(upsertDim, sessionID, project, p.Cwd, p.Branch, info.Runtime, info.Account, info.Key); err != nil {
+	cwd := p.Cwd
+	if isSubagentPath(path) {
+		cwd = ""
+	}
+	if _, err := tx.Exec(upsertDim, sessionID, project, cwd, p.Branch, info.Runtime, info.Account, info.Key); err != nil {
 		return fmt.Errorf("dim upsert: %w", err)
 	}
 	const upsertDriver = `
