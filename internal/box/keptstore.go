@@ -28,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,9 +38,12 @@ import (
 const (
 	keptDirName      = ".kept"
 	keptBoxesDirName = ".boxes"
-	keptHomeDirName  = "home"
-	keptClashDirName = "clash"
-	keptStateName    = "state.json"
+	// keptRetriesDirName holds, per box, how many reclaim passes kept its home
+	// for a folder too slow to check (keptReclaimRetries).
+	keptRetriesDirName = ".retries"
+	keptHomeDirName    = "home"
+	keptClashDirName   = "clash"
+	keptStateName      = "state.json"
 
 	keptStatusKept = "kept" // mounted into the profile's boxes
 	keptStatusHeld = "held" // a re-screen refused it: kept on disk, not mounted
@@ -524,4 +528,54 @@ func readKeptBoxRecord(stateRoot, box string) (keptBoxRecord, bool) {
 		return keptBoxRecord{}, false
 	}
 	return r, true
+}
+
+// readKeptRetries is how many reclaim passes in a row kept box's home for a
+// folder too slow to check: .kept/.retries/<box>, reached without a link. 0
+// when there is none, or when it is not a small plain file holding a count (on
+// macOS the VM can write it: the worst a forged one does is let a slow folder
+// go sooner or later than 24 passes).
+func readKeptRetries(stateRoot, box string) int {
+	if !isBoxName(box) {
+		return 0
+	}
+	root, err := os.OpenRoot(filepath.Join(stateRoot, stateDirName))
+	if err != nil {
+		return 0
+	}
+	defer root.Close()
+	d, _, err := keptOpenPath(root, keptDirName+"/"+keptRetriesDirName)
+	if err != nil {
+		return 0
+	}
+	defer d.Close()
+	b, err := keptReadFileAt(d, box, 32)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// writeKeptRetries writes box's count n, atomically and 0600, creating
+// .kept/.retries (0700) on the way without following a link.
+func writeKeptRetries(stateRoot, box string, n int) error {
+	if !isBoxName(box) {
+		return fmt.Errorf("box: %q is not a box name", box)
+	}
+	state := filepath.Join(stateRoot, stateDirName)
+	root, err := os.OpenRoot(state)
+	if err != nil {
+		return fmt.Errorf("box: opening %q: %w", state, err)
+	}
+	defer root.Close()
+	d, _, err := keptMkdirPath(root, keptDirName+"/"+keptRetriesDirName)
+	if err != nil {
+		return fmt.Errorf("box: %s: kept-folder retry counts: %w", box, err)
+	}
+	defer d.Close()
+	return keptWriteAtomic(d, box, []byte(strconv.Itoa(n)+"\n"))
 }

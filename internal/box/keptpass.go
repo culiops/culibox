@@ -50,6 +50,11 @@ var (
 	// keptPassMoveBudget bounds the moves under opMu: no move starts after it
 	// (one that has started stops at its own keptScreenTimeout).
 	keptPassMoveBudget = 10 * time.Second
+	// keptReclaimRetries is how many reclaim passes in a row keep a home for a
+	// folder too slow to check (ruling R8). At the next one the folder is not
+	// kept, too slow to check, and goes with the home (ruling R11): about a
+	// day at the hourly pass.
+	keptReclaimRetries = 24
 )
 
 // Test hooks. keptPassLockHook, when set, runs between the home's screens and
@@ -213,7 +218,8 @@ func (m *Manager) KeepStoppedHomes(ctx context.Context) {
 type keptPassOpts struct {
 	// reclaim: the home is removed right after a clean pass. A folder whose
 	// screen stopped on its time cap keeps the home then, for the next
-	// reclaim, instead of going with it as not kept (ruling R8).
+	// reclaim, instead of going with it as not kept (ruling R8), for
+	// keptReclaimRetries passes in a row (ruling R11).
 	reclaim bool
 	// screened holds the store keys whose kept folders this run re-screened in
 	// full already (KeepStoppedHomes); the pass then screens only what it
@@ -279,8 +285,13 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 	}
 	defer home.Close()
 
+	// The wait for the store's lock ends with the pass's budget: a forget
+	// removing a large folder holds it, and a reclaim run must go on to the
+	// next home (this one stays for the next reclaim).
 	mu := m.keptStoreLock(rec.Key)
-	mu.Lock()
+	if err := lockWithin(ctx, mu); err != nil {
+		return 0, fmt.Errorf("nothing kept: its profile's kept store is busy: %w", errKeptOutOfTime)
+	}
 	defer mu.Unlock()
 	store, err := ensureKeptStore(m.opts.StateRoot, rec.Key)
 	if err != nil {
@@ -299,6 +310,9 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 		return 0, err
 	}
 	p := &keptPass{m: m, box: box, key: rec.Key, opts: o, home: home, store: store, shome: shome, now: time.Now(), st: keptCopy(before)}
+	if o.reclaim {
+		p.retries = readKeptRetries(m.opts.StateRoot, box)
+	}
 	keptAttribute(&p.st, m.opts.Instance, rec)
 	if err := p.plan(rec.Mounts); err != nil {
 		return 0, err
@@ -314,6 +328,9 @@ func (m *Manager) keepPassWith(ctx context.Context, box string, o keptPassOpts) 
 	}
 	p.screenStore(ctx)
 	p.finish(before)
+	if o.reclaim {
+		p.countRetry()
+	}
 	if len(p.errs) > 0 {
 		return len(p.moved), p.errs
 	}
@@ -428,6 +445,10 @@ type keptPass struct {
 	drop  map[int]bool        // entries whose folder is gone from the store
 	// unchecked counts the store folders not screened in time.
 	unchecked int
+	// retries is how many reclaim passes in a row kept this home for a folder
+	// too slow to check, before this one; slow is set when this one did.
+	retries int
+	slow    bool
 }
 
 func (p *keptPass) row(rel, reason, box string) {
@@ -523,10 +544,12 @@ func (p *keptPass) screenHome(ctx context.Context, until time.Time) {
 		case ctx.Err() != nil:
 			p.notChecked(p.todo[i:]) // cut short: its result is no verdict
 			return
-		case r.Timeout && p.opts.reclaim:
-			// Slow, not refused: the home stays for the next reclaim (R8).
+		case r.Timeout && p.opts.reclaim && p.retries < keptReclaimRetries:
+			// Slow, not refused: the home stays for the next reclaim (R8),
+			// until keptReclaimRetries passes did (R11): then it is not kept.
 			p.row(c.Rel, r.Reason, p.box)
 			p.fail(c.Rel, errKeptOutOfTime)
+			p.slow = true
 		case r.Reason != "":
 			p.row(c.Rel, r.Reason, p.box)
 		case r.Dev != c.Dev || r.Ino != c.Ino:
@@ -758,6 +781,21 @@ func (p *keptPass) screenFresh(ctx context.Context, rel string, ids map[[2]uint6
 		ids[id] = true
 	}
 	return true
+}
+
+// countRetry records whether this reclaim pass kept the home for a folder too
+// slow to check: one more in a row, or none. A count that cannot be written is
+// logged; the home then gets one more pass than keptReclaimRetries says.
+func (p *keptPass) countRetry() {
+	var err error
+	if p.slow {
+		err = writeKeptRetries(p.m.opts.StateRoot, p.box, p.retries+1)
+	} else {
+		err = removeKeptRetries(p.m.opts.StateRoot, p.box)
+	}
+	if err != nil {
+		log.Printf("box: %s: counting the reclaim passes its home was kept for a slow folder: %v", p.box, err)
+	}
 }
 
 // finish saves the state when the pass changed it, then audits and logs what

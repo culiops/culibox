@@ -237,6 +237,17 @@ func (m *Manager) prepareKept(name, key string, owner keptOwner, ws Mount, extra
 // reaches it), and only a file or a link named box is unlinked. A record past a
 // link, or a directory in its place, is unreadable as a record already.
 func removeKeptBoxRecord(stateRoot, box string) error {
+	return removeKeptBoxFile(stateRoot, keptBoxesDirName, box)
+}
+
+// removeKeptRetries removes box's retry count (readKeptRetries), the same way.
+func removeKeptRetries(stateRoot, box string) error {
+	return removeKeptBoxFile(stateRoot, keptRetriesDirName, box)
+}
+
+// removeKeptBoxFile removes the file box in .kept/<sub>, as removeKeptBoxRecord
+// says.
+func removeKeptBoxFile(stateRoot, sub, box string) error {
 	if !isBoxName(box) {
 		return fmt.Errorf("box: %q is not a box name", box)
 	}
@@ -248,7 +259,7 @@ func removeKeptBoxRecord(stateRoot, box string) error {
 		return err
 	}
 	defer state.Close()
-	d, _, err := keptOpenPath(state, keptDirName+"/"+keptBoxesDirName)
+	d, _, err := keptOpenPath(state, keptDirName+"/"+sub)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errKeptLink) || errors.Is(err, errKeptNotDir) {
 		return nil
 	}
@@ -273,42 +284,49 @@ func removeKeptBoxRecord(stateRoot, box string) error {
 	return nil
 }
 
-// pruneOrphanKeptRecords removes the kept-folder records whose home is gone,
-// so .kept/.boxes cannot grow on its own: reclaimOne removes a record with its
-// home, but a home can go by other means (by hand, an older build). It holds
-// opMu, as ensure does when it makes a home and writes its record, so a box
-// created meanwhile never loses the record it just got. Only box names are
-// looked at, and only a missing home (lstat, nothing followed) counts as gone.
+// pruneOrphanKeptRecords removes the kept-folder records and retry counts
+// whose home is gone, so .kept/.boxes and .kept/.retries cannot grow on their
+// own: reclaimOne removes both with their home, but a home can go by other
+// means (by hand, an older build). It holds opMu, as ensure does when it makes
+// a home and writes its record, so a box created meanwhile never loses the
+// record it just got. Only box names are looked at, and only a missing home
+// (lstat, nothing followed) counts as gone.
 func (m *Manager) pruneOrphanKeptRecords(ctx context.Context) []error {
 	state, err := os.OpenRoot(filepath.Join(m.opts.StateRoot, stateDirName))
 	if err != nil {
 		return nil
 	}
 	defer state.Close()
-	d, _, err := keptOpenPath(state, keptDirName+"/"+keptBoxesDirName)
-	if err != nil {
-		return nil // none, or not a directory the host made: nothing of ours
-	}
-	names, err := keptReadNames(d)
-	d.Close()
-	if err != nil {
-		return []error{fmt.Errorf("box: listing the kept-folder records: %w", err)}
-	}
-	names = slices.DeleteFunc(names, func(n string) bool { return !isBoxName(n) })
-	if len(names) == 0 {
-		return nil
-	}
-	if err := m.lockOp(ctx); err != nil {
-		return nil // the reclaim is out of time; the next one prunes
-	}
-	defer m.opMu.Unlock()
 	var errs []error
-	for _, n := range names {
-		if _, err := os.Lstat(m.stateDir(n)); !errors.Is(err, fs.ErrNotExist) {
+	names := map[string][]string{} // sub → box names in it
+	for _, sub := range []string{keptBoxesDirName, keptRetriesDirName} {
+		d, _, err := keptOpenPath(state, keptDirName+"/"+sub)
+		if err != nil {
+			continue // none, or not a directory the host made: nothing of ours
+		}
+		ns, err := keptReadNames(d)
+		d.Close()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("box: listing %s/%s: %w", keptDirName, sub, err))
 			continue
 		}
-		if err := removeKeptBoxRecord(m.opts.StateRoot, n); err != nil {
-			errs = append(errs, fmt.Errorf("box: removing the kept-folder record of %s, whose home is gone: %s", n, removalCause(err)))
+		names[sub] = slices.DeleteFunc(ns, func(n string) bool { return !isBoxName(n) })
+	}
+	if len(names[keptBoxesDirName])+len(names[keptRetriesDirName]) == 0 {
+		return errs
+	}
+	if err := m.lockOp(ctx); err != nil {
+		return errs // the reclaim is out of time; the next one prunes
+	}
+	defer m.opMu.Unlock()
+	for _, sub := range []string{keptBoxesDirName, keptRetriesDirName} {
+		for _, n := range names[sub] {
+			if _, err := os.Lstat(m.stateDir(n)); !errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err := removeKeptBoxFile(m.opts.StateRoot, sub, n); err != nil {
+				errs = append(errs, fmt.Errorf("box: removing %s/%s/%s, whose home is gone: %s", keptDirName, sub, n, removalCause(err)))
+			}
 		}
 	}
 	return errs

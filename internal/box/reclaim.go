@@ -122,6 +122,9 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 
 	var out []Reclaimed
 	var errs []error
+	// One run screens each kept store's folders once, by the first of its
+	// homes to get there, not once per home.
+	keep := keptPassOpts{reclaim: true, screened: map[string]bool{}}
 	for _, e := range entries {
 		// The context bounds the file work too, not only the docker calls: a pass
 		// that is out of time stops here instead of walking the next home.
@@ -164,7 +167,7 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		// (credentials, a cap, a read error) goes with it as before.
 		why := ""
 		if age >= ttl && !kept {
-			if _, kerr := m.keepPassWith(ctx, name, keptPassOpts{reclaim: true}); kerr != nil {
+			if _, kerr := m.keepPassWith(ctx, name, keep); kerr != nil {
 				if ctx.Err() != nil {
 					break // cut short: the home stays, unreported
 				}
@@ -278,7 +281,7 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	_ = os.Remove(m.markerPath(name))
 	// The box's kept-folder record goes with its home: nothing of the box is
 	// left to keep, and a record would only cost every later forget a look.
-	if err := removeKeptBoxRecord(m.opts.StateRoot, name); err != nil {
+	if err := errors.Join(removeKeptBoxRecord(m.opts.StateRoot, name), removeKeptRetries(m.opts.StateRoot, name)); err != nil {
 		return &Reclaimed{Box: name, Age: age, Bytes: size}, fmt.Errorf("box: reclaimed %s, but its kept-folder record stays (the next pass removes it): %s", name, removalCause(err))
 	}
 	return &Reclaimed{Box: name, Age: age, Bytes: size}, nil

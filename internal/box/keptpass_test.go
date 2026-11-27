@@ -920,3 +920,155 @@ func TestReclaimScreenEntryCapDoesNotHoldHome(t *testing.T) {
 		t.Fatalf("home still there: %v", err)
 	}
 }
+
+// keptRetriesOf is the count of reclaim passes that kept box's home for a slow
+// folder: -1 when there is no count.
+func keptRetriesOf(t *testing.T, m *Manager, box string) int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(m.opts.StateRoot, stateDirName, keptDirName, keptRetriesDirName, box))
+	if os.IsNotExist(err) {
+		return -1
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("retries of %s: %q", box, b)
+	}
+	return n
+}
+
+// keptSlowScreen makes every screen of .culiops run out of its time cap.
+func keptSlowScreen(t *testing.T) {
+	t.Helper()
+	setCap(t, &keptScreenTimeout, time.Millisecond)
+	keptHook(t, &keptOpenHook, func(p string) {
+		if strings.HasPrefix(p, ".culiops/") {
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+}
+
+// A folder too slow to check keeps its home for keptReclaimRetries reclaim
+// passes (R8); at the next one it is not kept, too slow to check, and goes
+// with the home (R11).
+func TestReclaimSlowFolderRetriesCapped(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptWrite(t, home, ".culiops/y", "y") // the cap is checked between entries
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	keptSlowScreen(t)
+	for pass := 1; pass <= 24; pass++ {
+		done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+		if err != nil || len(done) != 1 || !done[0].Kept {
+			t.Fatalf("pass %d: done = %+v %v, want the home kept", pass, done, err)
+		}
+		if n := keptRetriesOf(t, m, keptTestBox); n != pass {
+			t.Fatalf("pass %d: retries %d", pass, n)
+		}
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || done[0].Kept {
+		t.Fatalf("pass 25: done = %+v %v, want the home reclaimed", done, err)
+	}
+	if _, err := os.Lstat(home); !os.IsNotExist(err) {
+		t.Fatalf("pass 25: home still there: %v", err)
+	}
+	if r, ok := keptRow(keptLoad(t, m), ".culiops"); !ok || r.Reason != "too slow to check" {
+		t.Fatalf("pass 25: row = %+v %v, want too slow to check", r, ok)
+	}
+	if n := keptRetriesOf(t, m, keptTestBox); n != -1 {
+		t.Fatalf("the count outlived the home: %d", n)
+	}
+}
+
+// The count starts again once a pass finds no folder too slow to check.
+func TestReclaimSlowFolderRetriesReset(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptWrite(t, home, ".culiops/y", "y")
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	keptSlowScreen(t)
+	for range 2 {
+		if _, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := keptRetriesOf(t, m, keptTestBox); n != 2 {
+		t.Fatalf("retries %d, want 2", n)
+	}
+	// Fast again, but its move fails: the home stays, and the count is gone.
+	keptOpenHook = nil
+	keptScreenTimeout = 10 * time.Second
+	keptHook(t, &keptMergeMove, func(*os.Root, *os.Root, string, string, keptCandidate) (int, int, error) {
+		return 0, 0, errors.New("injected")
+	})
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 1 || !done[0].Kept {
+		t.Fatalf("done = %+v %v, want the home kept for the failed move", done, err)
+	}
+	if n := keptRetriesOf(t, m, keptTestBox); n != -1 {
+		t.Fatalf("retries %d after a pass with no slow folder, want none", n)
+	}
+}
+
+// A reclaim pass waits for a busy store's lock only as long as its budget:
+// the home is kept for the next reclaim, and the sweep goes on.
+func TestReclaimPassStoreLockBounded(t *testing.T) {
+	m, _, home, _ := keptPassSetup(t)
+	keptWrite(t, home, ".culiops/x", "x")
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	setCap(t, &keptPassBudget, 200*time.Millisecond)
+	mu := m.keptStoreLock(keptTestKey)
+	mu.Lock()
+	defer mu.Unlock()
+	type res struct {
+		done []Reclaimed
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+		ch <- res{done, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil || len(r.done) != 1 || !r.done[0].Kept || !strings.Contains(r.done[0].KeptWhy, "busy") {
+			t.Fatalf("done = %+v %v, want the home kept because the store was busy", r.done, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reclaim waited on the store's lock past its pass budget")
+	}
+	if got := keptRead(t, home, ".culiops/x"); got != "x" {
+		t.Fatal("the home went")
+	}
+}
+
+// One reclaim run screens a store's kept folders once, not once per home.
+func TestReclaimScreensStoreOncePerRun(t *testing.T) {
+	m, _, _, _ := keptPassSetup(t)
+	keptSeedState(t, m, KeptState{Profile: "p", Workspace: "/w", Kept: []KeptEntry{
+		{Path: ".culiops", KeptAt: time.Now(), Status: keptStatusKept}}})
+	keptWrite(t, keptStoreHomeDir(m), ".culiops/f", "x")
+	const boxB = "ab-box-bbbbbbbbbbbb"
+	keptPassBox(t, m, boxB)
+	keptAgeHome(t, m, keptTestBox, 40*24*time.Hour)
+	keptAgeHome(t, m, boxB, 40*24*time.Hour)
+	var mu sync.Mutex
+	screens := 0
+	keptHook(t, &keptOpenHook, func(p string) {
+		if p == ".culiops/f" {
+			mu.Lock()
+			screens++
+			mu.Unlock()
+		}
+	})
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	if err != nil || len(done) != 2 {
+		t.Fatalf("done = %+v %v, want both homes reclaimed", done, err)
+	}
+	if screens != 1 {
+		t.Fatalf("the store's kept folder was screened %d times in one reclaim run, want 1", screens)
+	}
+}
