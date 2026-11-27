@@ -2365,6 +2365,19 @@ test("every class the Analytics views build has a rule or is a named hook", () =
   assert.deepStrictEqual([...used].filter((c) => !defined.has(c) && !hooks.has(c)), [], "classes with no rule");
 });
 
+test("the Workspaces table's first column shrinks to what the other six leave, and a breakdown row's path ellipsizes inside it", () => {
+  // Measured at 1280px (919px body): without this the column kept its 420px path and Median / session and Cache hit scrolled out of sight.
+  const col = /\.as-page \.an-wtbl :is\(th:first-child, td\.an-wcell\)\s*\{([^}]*)\}/.exec(DESK_CSS);
+  assert.ok(col, "the first column has a rule");
+  assert.match(col[1], /width:\s*100%/);
+  assert.match(col[1], /max-width:\s*0/);
+  const child = /\.as-page \.an-wtbl tr\.an-child td\.an-wcell\s*\{([^}]*)\}/.exec(DESK_CSS);
+  assert.ok(child, "a breakdown row's cell has a rule");
+  assert.match(child[1], /overflow:\s*hidden/);
+  assert.match(child[1], /text-overflow:\s*ellipsis/);
+  assert.match(child[1], /white-space:\s*nowrap/);
+});
+
 test("Model cells are nowrap cells: only Project wraps, so Model keeps its word width in a narrow body", () => {
   const env = analyticsEnv();
   env.page(true);

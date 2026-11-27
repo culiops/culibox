@@ -3890,6 +3890,10 @@
      The cell is two lines tall, so it takes 8px above and below instead of the row's fixed 32px; a long name or path ellipsizes. */
   #page-host > #analytics-modal.as-page .an-wtbl td.an-wcell { height: auto; padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
   #page-host > #analytics-modal.as-page .an-wcell > :is(.an-exp, .an-wtext) { display: inline-block; vertical-align: top; }
+  /* The Workspace column takes what the other six leave (width 100% with max-width 0 lets it shrink), so the table fits the page at 1280px
+     and a long name or path ellipsizes (its title carries the whole) instead of pushing Median / session and Cache hit out of sight. */
+  #page-host > #analytics-modal.as-page .an-wtbl :is(th:first-child, td.an-wcell) { width: 100%; max-width: 0; }
+  #page-host > #analytics-modal.as-page .an-wcell > .an-wtext { max-width: calc(100% - 26px); }
   #page-host > #analytics-modal.as-page .an-exp { width: 20px; height: 20px; margin: 0 2px 0 0; padding: 0; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font: inherit; line-height: 20px; text-align: center; }
   #page-host > #analytics-modal.as-page button.an-exp { cursor: pointer; }
   #page-host > #analytics-modal.as-page button.an-exp:hover { color: var(--fg); }
@@ -3901,8 +3905,8 @@
   /* An open row is one step lighter than its card (the hover step); its breakdown rows sit under it, their label indented to the name's text
      (12px cell padding + the 20px button + its 2px margin), the muted line beside the label chip. */
   #page-host > #analytics-modal.as-page .an-wtbl tr.an-open td { background: var(--hover); }
-  #page-host > #analytics-modal.as-page .an-wtbl tr.an-child td.an-wcell { padding-top: 0; padding-bottom: 0; padding-left: calc(var(--sp-3) + 22px); }
-  #page-host > #analytics-modal.as-page .an-child .an-wpath { display: inline-block; max-width: 420px; margin-left: var(--sp-2); overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+  #page-host > #analytics-modal.as-page .an-wtbl tr.an-child td.an-wcell { padding-top: 0; padding-bottom: 0; padding-left: calc(var(--sp-3) + 22px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page .an-child .an-wpath { display: inline; margin-left: var(--sp-2); }
   /* A mini bar is 70px wide (the kit .meter's 4px height and 2px radius, on its --line track) beside the figures it draws; its parts are
      placed by the script. */
   #page-host > #analytics-modal.as-page .an-mini { display: inline-flex; width: 70px; height: 4px; margin-right: var(--sp-2); border-radius: 2px; overflow: hidden; background: var(--line); vertical-align: middle; }
