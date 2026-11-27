@@ -303,6 +303,10 @@ type Options struct {
 	// stop, the removal of an idle box in a spawn's way, and the sweep's
 	// removal; nil = no notice.
 	OnStop func(name, workspace string)
+	// Audit records one row of what the keep pass did (keptpass.go): action
+	// box_kept or box_kept_held, name the store's profile, detail as the pass
+	// writes it. A failure is logged and never stops the pass; nil = no rows.
+	Audit func(action, name, detail string) error
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
 	// not the one virtiofs shows the box). ensure calls it, once, for the
@@ -462,6 +466,14 @@ type Manager struct {
 	memFallbackLogged bool
 	// locks are the macOS guard locks (Options.LockGuards); nil = off.
 	locks *guardLocks
+	// keptMu is, per kept store key, the lock a keep pass holds from reading
+	// the store's state.json to writing it back, so two passes of one store
+	// never interleave. Taken before opMu, never while holding it. The map is
+	// guarded by mu (keptStoreLock).
+	keptMu map[string]*sync.Mutex
+	// keptPasses counts the keep passes stopped() started, so a test can wait
+	// for them. Each is bounded by keptPassBudget.
+	keptPasses sync.WaitGroup
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -503,6 +515,7 @@ func New(opts Options) (*Manager, error) {
 		ownerWS:       map[string]string{},
 		ended:         map[string]endedHold{},
 		conv:          map[string]string{},
+		keptMu:        map[string]*sync.Mutex{},
 		started:       time.Now(),
 	}
 	if opts.LockGuards {
@@ -2503,12 +2516,18 @@ func (m *Manager) stopWorkspace(ctx context.Context, name string) string {
 	return ""
 }
 
-// stopped tells OnStop that box name was stopped. It runs the hook in its own
-// goroutine, so a caller holding opMu never waits on it.
+// stopped tells OnStop that box name was stopped, then runs the keep pass on
+// its home (keepPass), each in its own goroutine, so a caller holding opMu
+// never waits on them. The pass takes opMu itself once it has screened.
 func (m *Manager) stopped(name, ws string) {
 	if h := m.opts.OnStop; h != nil {
 		go h(name, ws)
 	}
+	m.keptPasses.Add(1)
+	go func() {
+		defer m.keptPasses.Done()
+		m.runKeepPass(context.Background(), name)
+	}()
 }
 
 // stopIfIdle re-checks under the lock, so a session started during the idle

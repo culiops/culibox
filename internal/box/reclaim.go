@@ -57,10 +57,15 @@ type Reclaimed struct {
 	// itself stays.
 	Caches bool
 	// Kept is true when the home is past the state TTL and would have been
-	// removed, but holds a conversation (see holdsConversations), so it stays.
-	// Caches and Bytes then say what its cache prune freed in this pass, if
-	// anything. Every pass reports every kept home.
+	// removed, but holds a conversation (see holdsConversations), or a folder
+	// to keep for its profile that the keep pass could not move (KeptWhy), so
+	// it stays. Caches and Bytes then say what its cache prune freed in this
+	// pass, if anything. Every pass reports every kept home.
 	Kept bool
+	// KeptWhy is set when the home stays because a folder to keep could not be
+	// moved into its profile's store: what keepPass said, box paths quoted.
+	// "" for a home kept for its conversations.
+	KeptWhy string
 }
 
 // ReclaimState removes the host homes of boxes that no longer exist and have not
@@ -75,6 +80,9 @@ type Reclaimed struct {
 //  2. no container of this instance still carries that name,
 //  3. no live session is counted against it,
 //  4. it is older than ttl (removed whole) or cacheTTL (caches only).
+//
+// Before a home past ttl is removed, keepPass moves its app folders into its
+// profile's kept store; one it could not move keeps the home (Kept, KeptWhy).
 //
 // Grounds 2 and 3 are checked twice: once cheaply against a snapshot to decide
 // whether a candidate is worth walking and stat-ing at all, and again — for
@@ -150,6 +158,19 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 			// guess: the home stays, unreported, and the next pass decides.
 			break
 		}
+		// Nothing keepable goes with the home: its app folders move into the
+		// profile's kept store first. A folder that could not move keeps the
+		// whole home until a later pass moves it; a folder that is not kept
+		// (credentials, a cap, a read error) goes with it as before.
+		why := ""
+		if age >= ttl && !kept {
+			if _, kerr := m.keepPass(ctx, name); kerr != nil {
+				if ctx.Err() != nil {
+					break // cut short: the home stays, unreported
+				}
+				why, kept = "a folder to keep could not be moved into its profile's store: "+kerr.Error(), true
+			}
+		}
 		switch {
 		case age >= ttl && !kept:
 			reclaimed, err = m.reclaimOne(ctx, name, dir, ttl, dirBytes(dir))
@@ -170,7 +191,7 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 			if reclaimed == nil {
 				reclaimed = &Reclaimed{Box: name, Age: age}
 			}
-			reclaimed.Kept = true
+			reclaimed.Kept, reclaimed.KeptWhy = true, why
 		}
 		// A prune can both free something and fail on another path, so the two
 		// are recorded independently.
