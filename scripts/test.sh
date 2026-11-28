@@ -44,19 +44,19 @@ bash scripts/ci/secret-scan_test.sh
 sh scripts/ci/install-grype_test.sh
 # The scan report (counts, accepted findings and their expiry, sanitising), against fixtures.
 sh scripts/ci/image-scan-report_test.sh
-# gitleaks for the rules test and the branch scan below: the one on PATH (CI installs the
-# pinned release), else the same version built from its checksum-verified module source
-# (a box has no scanner in its image; the first build takes a few minutes, then it is cached).
-if ! command -v gitleaks >/dev/null 2>&1; then
-  gitleaks_dir=$(bash scripts/ci/gitleaks-install.sh)
-  PATH="$gitleaks_dir:$PATH"
-fi
+# gitleaks for the rules test and the branch scan below, at CI's pinned version: the one
+# on PATH when it reports that version, else the same version built from its
+# checksum-verified module source (a box has no scanner in its image; the first build
+# takes a few minutes, then it is cached). A failed build stops test.sh here.
+gitleaks_dir=$(bash scripts/ci/gitleaks-install.sh)
+PATH="$gitleaks_dir:$PATH"
 bash scripts/ci/gitleaks-install_test.sh
 bash scripts/ci/branch-scan_test.sh
 # The private-identifier gitleaks rules, proven on made-up values.
 bash scripts/ci/gitleaks-rules_test.sh
-# The commits this checkout has and origin/main lacks, with .gitleaks.toml, as the host's
-# pre-push gate will scan them: a box finds a leak before its branch comes home (#381).
+# The commits this checkout has and origin/main lacks, and its uncommitted files, with
+# .gitleaks.toml, as the host's pre-push gate will scan them: a box finds a leak before its
+# branch comes home (#381).
 bash scripts/ci/branch-scan.sh
 # macOS runs only on a laptop this box cannot reach, so the darwin build must
 # fail here, not there.

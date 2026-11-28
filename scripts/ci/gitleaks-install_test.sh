@@ -55,7 +55,25 @@ if out=$(run STUB_RC=1 2>&1); then fail "a failed go install exited 0"; else pas
 case $out in *"could not build gitleaks"*) pass "and says so" ;; *) fail "message: $out" ;; esac
 if [ ! -e "$tmp/cache/culibox/gitleaks-$got/gitleaks" ]; then pass "no binary after a failed build"; else fail "binary left after a failed build"; fi
 
+# A gitleaks on PATH that reports the pinned version is used as it is (CI's release binary):
+# its directory is printed and nothing is built.
+mkdir -p "$tmp/pathbin"
+printf '#!/bin/sh\n[ "$1" = version ] && echo %s\n' "$got" >"$tmp/pathbin/gitleaks"
+chmod 755 "$tmp/pathbin/gitleaks"
+rm -rf "$tmp/cache"
+: >"$tmp/log"
+dir=$(env PATH="$tmp/pathbin:$tmp/bin:/usr/bin:/bin" XDG_CACHE_HOME="$tmp/cache" STUB_LOG="$tmp/log" bash "$script") || fail "PATH gitleaks: non-zero"
+if [ "$dir" = "$tmp/pathbin" ] && [ ! -s "$tmp/log" ]; then pass "a pinned-version gitleaks on PATH is used, nothing built"; else fail "PATH gitleaks: dir '$dir', go log: $(cat "$tmp/log")"; fi
+
+# One that reports another version (an old package-manager install) is not: the pinned one is built.
+printf '#!/bin/sh\n[ "$1" = version ] && echo 8.18.0\n' >"$tmp/pathbin/gitleaks"
+rm -rf "$tmp/cache"
+: >"$tmp/log"
+dir=$(env PATH="$tmp/pathbin:$tmp/bin:/usr/bin:/bin" XDG_CACHE_HOME="$tmp/cache" STUB_LOG="$tmp/log" bash "$script") || fail "other-version gitleaks: non-zero"
+if [ "$dir" = "$tmp/cache/culibox/gitleaks-$got" ] && [ -s "$tmp/log" ]; then pass "another version on PATH: the pinned one is built"; else fail "other version: dir '$dir'"; fi
+
 # No go at all: a clear failure, not a silent skip.
+rm -rf "$tmp/cache"
 if out=$(env PATH="/nonexistent" XDG_CACHE_HOME="$tmp/cache" /bin/bash "$script" 2>&1); then fail "no go exited 0"; else pass "no go exits non-zero"; fi
 
 [ "$fails" -eq 0 ] || { echo "gitleaks-install_test: $fails failure(s)" >&2; exit 1; }
