@@ -792,7 +792,8 @@
   <dialog id="analytics-modal" box-="square" shear-="top">
     <!-- The first three blocks are desktop only: the page's head, toolbar and Custom range row (M3.1/M3.2, the same parts as the
          Audit page). app.css hides them at base; desktop.css shows them under the page. analytics.js updates them in place. Esc ✕
-         is a [data-close] button, which initDialogs wires. Everything from the title down is the phone's modal, unchanged. -->
+         is a [data-close] button, which initDialogs wires. Everything from the title down is the phone's modal: its five tabs are the page's
+         five views (Drivers is the page's Cost drivers), and its Where select is built by analytics.js. -->
     <div class="page-head an-phead">
       <div class="page-head-text"><h1 class="page-title">Analytics</h1><p class="page-desc" id="an-pdesc"></p></div>
       <div class="page-actions"><button class="btn" id="an-rescan" type="button" title="Re-scan transcripts now"><svg data-uicon="refresh-cw" width="14" height="14" aria-hidden="true"></svg>Re-scan</button>
@@ -800,12 +801,13 @@
     </div>
     <div class="toolbar an-ptools">
       <div class="seg" id="an-pview" role="group" aria-label="View">
-        <button class="seg-item" type="button" data-antab="overview" aria-pressed="true">Overview · Cost</button>
-        <button class="seg-item" type="button" data-antab="models" aria-pressed="false">Models</button>
-        <button class="seg-item" type="button" data-antab="projects" aria-pressed="false">Projects</button>
+        <button class="seg-item" type="button" data-antab="overview" aria-pressed="true">Overview</button>
+        <button class="seg-item" type="button" data-antab="workspaces" aria-pressed="false">Workspaces</button>
+        <button class="seg-item" type="button" data-antab="drivers" aria-pressed="false">Cost drivers</button>
         <button class="seg-item" type="button" data-antab="sessions" aria-pressed="false">Sessions</button>
-        <button class="seg-item" type="button" data-antab="tools" aria-pressed="false">Tools</button>
+        <button class="seg-item" type="button" data-antab="models" aria-pressed="false">Models</button>
       </div>
+      <label class="an-where"><span class="t-sm muted">Where:</span><select class="input input-sm an-wsel" id="an-where"><option value="">All</option></select></label>
       <span class="grow"></span>
       <div class="seg" id="an-prange" role="group" aria-label="Range">
         <button class="seg-item" type="button" data-range="7d" aria-pressed="false">7d</button>
@@ -820,11 +822,11 @@
     <h2 class="pane-head dlg-title">Analytics</h2>
     <div class="dlg-head">
       <div class="dlg-tabs" id="an-tabs">
-        <button type="button" data-antab="overview" class="act">Overview · Cost</button>
-        <button type="button" data-antab="models">Models</button>
-        <button type="button" data-antab="projects">Projects</button>
+        <button type="button" data-antab="overview" class="act">Overview</button>
+        <button type="button" data-antab="workspaces">Workspaces</button>
+        <button type="button" data-antab="drivers">Drivers</button>
         <button type="button" data-antab="sessions">Sessions</button>
-        <button type="button" data-antab="tools">Tools</button>
+        <button type="button" data-antab="models">Models</button>
       </div>
       <span class="spacer"></span>
       <span id="analytics-range" class="an-caption" style="margin:0"></span>

@@ -9,6 +9,9 @@ package analytics
 import (
 	"encoding/json"
 	"io"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/culiops/culibox/internal/boxread"
 )
@@ -41,14 +44,97 @@ type AttrKey struct {
 	Name string
 }
 
+// DriverKey identifies a cost-driver bucket: what a counted message's cost is
+// attributed to on a day. Kind is one of "agent", "skill", "plugin",
+// "mcp_server", "mcp_tool"; Parent is the MCP server of an "mcp_tool", else "".
+type DriverKey struct {
+	Day    string
+	Kind   string
+	Name   string
+	Parent string
+}
+
+// DriverVal is one driver bucket's summed cost and tokens (input + output +
+// cache read + cache creation) of the counted messages that carry it.
+type DriverVal struct {
+	Cost   float64
+	Tokens int64
+}
+
 // Parsed holds the rollup deltas extracted from one transcript's bytes.
 type Parsed struct {
 	Tokens map[TokKey]*Tok
 	Attrs  map[AttrKey]int64
+	// Cwd is the first non-empty `cwd` in the parsed bytes (never replaced by a
+	// later one); Branch is the last non-empty `gitBranch`. Both are untrusted
+	// box-supplied text: control characters stripped and capped.
+	Cwd    string
+	Branch string
+	// Drivers sums each counted message's cost under every attribution it carries,
+	// keyed by the same day the message's cost has in Tokens.
+	Drivers map[DriverKey]*DriverVal
 }
 
 func newParsed() *Parsed {
-	return &Parsed{Tokens: map[TokKey]*Tok{}, Attrs: map[AttrKey]int64{}}
+	return &Parsed{
+		Tokens:  map[TokKey]*Tok{},
+		Attrs:   map[AttrKey]int64{},
+		Drivers: map[DriverKey]*DriverVal{},
+	}
+}
+
+func (p *Parsed) driver(k DriverKey) *DriverVal {
+	d := p.Drivers[k]
+	if d == nil {
+		d = &DriverVal{}
+		p.Drivers[k] = d
+	}
+	return d
+}
+
+const (
+	maxCwdBytes   = 4096 // cap on a stored `cwd`
+	maxLabelRunes = 256  // cap on a stored branch or attribution name
+)
+
+// cleanLabel makes a box-supplied name safe to store: control characters are
+// dropped, surrounding space trimmed, and the result cut to maxRunes runes.
+func cleanLabel(s string, maxRunes int) string {
+	s = strings.TrimSpace(stripControl(s))
+	n := 0
+	for i := range s {
+		if n == maxRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
+// cleanCwd drops control characters from a box-supplied folder path and cuts it
+// to maxCwdBytes at a rune boundary. It is only ever stored and shown, never
+// opened or stat'ed (the path belongs to the box's filesystem).
+func cleanCwd(s string) string {
+	s = stripControl(s)
+	if len(s) <= maxCwdBytes {
+		return s
+	}
+	cut := maxCwdBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// stripControl removes control runes. Invalid UTF-8 becomes U+FFFD (strings.Map
+// decodes it that way), so the result is always valid UTF-8.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func (p *Parsed) tok(day, model string) *Tok {
@@ -91,6 +177,9 @@ type record struct {
 	IsSidechain          bool   `json:"isSidechain"`
 	IsMeta               bool   `json:"isMeta"`
 	PromptSource         string `json:"promptSource"`
+	Cwd                  string `json:"cwd"`
+	GitBranch            string `json:"gitBranch"`
+	AttributionAgent     string `json:"attributionAgent"`
 	AttributionSkill     string `json:"attributionSkill"`
 	AttributionPlugin    string `json:"attributionPlugin"`
 	AttributionMcpServer string `json:"attributionMcpServer"`
@@ -267,6 +356,12 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 		*sessionID = rec.SessionID
 	}
 	day := dayOf(rec.Timestamp)
+	if p.Cwd == "" && rec.Cwd != "" {
+		p.Cwd = cleanCwd(rec.Cwd)
+	}
+	if b := cleanLabel(rec.GitBranch, maxLabelRunes); b != "" {
+		p.Branch = b
+	}
 
 	// Attribution counts (a record can carry several of these at once).
 	for _, a := range []struct{ kind, name string }{
@@ -310,16 +405,40 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 		t.CacheRead += cr
 		t.CacheCreation += cc
 		t.CacheWrite1h += w1h
-		t.Cost += MessageCostUSD(rec.Message.Model, MsgUsage{
+		cost := MessageCostUSD(rec.Message.Model, MsgUsage{
 			Input: in, Output: out, CacheRead: cr,
 			CacheWrite5m: cc - w1h, CacheWrite1h: w1h,
 		})
+		t.Cost += cost
+		addDrivers(p, day, &rec, cost, in+out+cr+cc)
 		*cur = rec.Message.Model
 		flushPending(*cur)
 		return
 	}
 	if isHumanPrompt(&rec) {
 		pending[day]++
+	}
+}
+
+// addDrivers adds a counted message's cost and tokens to one driver row per
+// attribution kind the record carries (an empty name means the kind is absent).
+// An MCP tool's row is parented by that record's MCP server.
+func addDrivers(p *Parsed, day string, rec *record, cost float64, tokens int64) {
+	server := cleanLabel(rec.AttributionMcpServer, maxLabelRunes)
+	for _, a := range []struct{ kind, name, parent string }{
+		{"agent", rec.AttributionAgent, ""},
+		{"skill", rec.AttributionSkill, ""},
+		{"plugin", rec.AttributionPlugin, ""},
+		{"mcp_server", rec.AttributionMcpServer, ""},
+		{"mcp_tool", rec.AttributionMcpTool, server},
+	} {
+		name := cleanLabel(a.name, maxLabelRunes)
+		if name == "" {
+			continue
+		}
+		d := p.driver(DriverKey{Day: day, Kind: a.kind, Name: name, Parent: a.parent})
+		d.Cost += cost
+		d.Tokens += tokens
 	}
 }
 

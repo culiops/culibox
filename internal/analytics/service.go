@@ -23,7 +23,12 @@ type Service struct {
 	roots    []string
 	interval time.Duration
 	boxState string     // <dataDir>/boxstate; roots inside it are walked through os.Root
+	home     string     // the user's home; its .claude/projects is the host root
+	seeded   bool       // SeedLegacyDims has run in this process
 	mu       sync.Mutex // held for the duration of one Ingest pass
+
+	// resolveEnv reads the live profiles and clone dirs; nil resolves from a zero env.
+	resolveEnv func() ResolveEnv
 
 	// costs is the all-days cost per conversation id, rebuilt after every
 	// ingest pass (see refreshCosts) so a session list reads a map, not SQL.
@@ -83,6 +88,69 @@ func (s *Service) CostOf(sids []string) float64 {
 // plain walk. Call it before Start.
 func (s *Service) SetBoxState(dir string) { s.boxState = filepath.Clean(dir) }
 
+// SetHome names the user's home directory, so a transcript under
+// <home>/.claude/projects is known to be host usage. Call it before Start.
+func (s *Service) SetHome(home string) { s.home = filepath.Clean(home) }
+
+// SetResolveEnv names the source of the live config that files a session under
+// its workspace. It is called on every pass that has a session to resolve, so a
+// profile saved after boot counts. Without it a zero env is used. Call it before
+// Start.
+func (s *Service) SetResolveEnv(f func() ResolveEnv) { s.resolveEnv = f }
+
+// resolvePending files every session that has no workspace yet, or that none
+// explained, from the config as it is now. A resolved session is not filed
+// again, except one filed by its folder name (legacy) before its transcript
+// gave it a cwd: that one is filed once more, from the cwd. It runs inside the
+// pass, after the walk
+// has added this pass's sessions. A failure is logged and does not fail the pass:
+// the rows stay pending and the next pass retries them.
+func (s *Service) resolvePending() {
+	rows, err := s.store.PendingDims()
+	if err != nil {
+		log.Printf("analytics: listing sessions to file: %v", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	known, err := s.store.KnownPaths()
+	if err != nil {
+		log.Printf("analytics: listing known folders: %v", err)
+		return
+	}
+	var env ResolveEnv
+	if s.resolveEnv != nil {
+		env = s.resolveEnv()
+	}
+	z := NewResolver(env, known) // rule 5's candidates, slugged once for the whole pass
+	failed := 0
+	for _, r := range rows {
+		if err := s.store.SetResolved(r.SessionID, r.Project, z.Resolve(r.DimIn)); err != nil {
+			if failed == 0 {
+				log.Printf("analytics: filing session %q: %v", r.SessionID, err)
+			}
+			failed++
+		}
+	}
+	if failed > 1 {
+		log.Printf("analytics: %d more sessions could not be filed", failed-1)
+	}
+}
+
+// classify says where a transcript path ran, from the root it sits under. The
+// data dir is the parent of the box-state dir. Pure string work, no stat.
+func (s *Service) classify(path string) (RootInfo, string, bool) {
+	home, dataDir := s.home, ""
+	if home == "." {
+		home = ""
+	}
+	if s.boxState != "" && s.boxState != "." {
+		dataDir = filepath.Dir(s.boxState)
+	}
+	return classifyPath(path, home, dataDir)
+}
+
 // inBoxState reports whether root lies strictly inside the box-controlled dir.
 func (s *Service) inBoxState(root string) bool {
 	if s.boxState == "" || s.boxState == "." {
@@ -102,6 +170,19 @@ func (s *Service) Ingest() (IngestStats, error) {
 		return IngestStats{}, ErrIngestBusy
 	}
 	defer s.mu.Unlock()
+	if !s.seeded {
+		// Once per process, before the first pass: sessions counted by an older
+		// version get their runtime from the path alone. It only inserts where
+		// no row exists, so doing it again would change nothing.
+		if n, err := s.store.SeedLegacyDims(s.classify); err != nil {
+			log.Printf("analytics: seeding session dims: %v", err)
+		} else {
+			s.seeded = true
+			if n > 0 {
+				log.Printf("analytics: seeded %d legacy session dims", n)
+			}
+		}
+	}
 	s.store.beginPass()
 	defer s.store.endPass()
 	var st IngestStats
@@ -115,12 +196,13 @@ func (s *Service) Ingest() (IngestStats, error) {
 		}
 		for _, root := range matches {
 			if s.inBoxState(root) {
-				ingestBoxRoot(s.store, s.boxState, root, &st)
+				ingestBoxRoot(s.store, s.boxState, root, s.classify, &st)
 				continue
 			}
-			ingestRoot(s.store, root, &st)
+			ingestRoot(s.store, root, s.classify, &st)
 		}
 	}
+	s.resolvePending()
 	s.refreshCosts()
 	return st, nil
 }
@@ -156,23 +238,35 @@ func (s *Service) Close() error { return s.store.Close() }
 
 // Query pass-throughs (the web layer never touches the store directly).
 
-func (s *Service) ByDayModel(from, to string) ([]DayModelRow, error) {
-	return s.store.ByDayModel(from, to)
+func (s *Service) ByDayModel(from, to string, w Where) ([]DayModelRow, error) {
+	return s.store.ByDayModel(from, to, w)
 }
-func (s *Service) ByModel(from, to string) ([]ModelRow, error) {
-	return s.store.ByModel(from, to)
+func (s *Service) ByModel(from, to string, w Where) ([]ModelRow, error) {
+	return s.store.ByModel(from, to, w)
 }
-func (s *Service) ByProject(from, to string) ([]ProjectRow, error) {
-	return s.store.ByProject(from, to)
+func (s *Service) ByProject(from, to string, w Where) ([]ProjectRow, error) {
+	return s.store.ByProject(from, to, w)
 }
-func (s *Service) Sessions(from, to string, limit int) ([]SessionRow, error) {
-	return s.store.Sessions(from, to, limit)
+func (s *Service) Sessions(from, to string, limit int, w Where) ([]SessionRow, error) {
+	return s.store.Sessions(from, to, limit, w)
 }
-func (s *Service) SessionCosts(from, to string) ([]SessionAggRow, error) {
-	return s.store.SessionCosts(from, to)
+func (s *Service) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
+	return s.store.SessionCosts(from, to, w)
 }
-func (s *Service) Tools(from, to string, limit int) ([]ToolRow, error) {
-	return s.store.Tools(from, to, limit)
+func (s *Service) SessionModelCosts(from, to string, w Where) ([]SessionModelCost, error) {
+	return s.store.SessionModelCosts(from, to, w)
+}
+func (s *Service) Workspaces(from, to string, w Where) ([]WorkspaceRow, error) {
+	return s.store.Workspaces(from, to, w)
+}
+func (s *Service) Drivers(from, to string, w Where) (DriversResp, error) {
+	return s.store.Drivers(from, to, w)
+}
+func (s *Service) WhereOptions(from, to string) ([]WhereOption, error) {
+	return s.store.WhereOptions(from, to)
+}
+func (s *Service) Tools(from, to string, limit int, w Where) ([]ToolRow, error) {
+	return s.store.Tools(from, to, limit, w)
 }
 
 // DefaultRoots are the transcript roots used when the config sets none: the
@@ -195,10 +289,13 @@ func DefaultRoots(home, dataDir string) []string {
 // from from to to the read offsets stored for from (Store.RewritePathPrefix), so
 // the next pass does not count it again under its new path. The box layer calls
 // it before each move it makes out of a box home into a conversations folder
-// (#330). It does not wait for a running pass: no container writes the file it
-// moves, so a pass usually has nothing new to read from it; one that reads it
-// at that moment can leave lines written since its last pass to be counted
-// again, once (accepted: waiting here would hold up the spawn).
+// (#330). It does not wait for a running pass (waiting would hold up the
+// spawn): the carried offsets also go into that pass's state cache, so when it
+// reaches the new path it reads on from them, not from 0. Accepted: a pass
+// that is loading its cache at the very moment of the carry misses it and
+// counts the moved file's totals again, once. Its drivers count once too if
+// the file is not yet backfilled; if it is already backfilled, its drivers
+// double along with the rollup totals.
 func (s *Service) CarryOffsets(from, to string) error {
 	_, err := s.store.RewritePathPrefix(from, to)
 	return err

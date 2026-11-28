@@ -59,7 +59,7 @@ func TestIngestSparseNoNewlineBounded(t *testing.T) {
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	var st IngestStats
-	ingestRoot(s, root, &st)
+	ingestRoot(s, root, nil, &st)
 	runtime.ReadMemStats(&after)
 	if d := after.TotalAlloc - before.TotalAlloc; d > 64<<20 {
 		t.Errorf("ingest allocated %d MiB for a newline-free file, want < 64", d>>20)
@@ -67,7 +67,7 @@ func TestIngestSparseNoNewlineBounded(t *testing.T) {
 	if st.Errors != 0 {
 		t.Errorf("errors=%d", st.Errors)
 	}
-	_, off, _, _, err := s.State(path)
+	_, off, _, _, _, err := s.State(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestIngestSparseNoNewlineBounded(t *testing.T) {
 	}
 
 	st = IngestStats{}
-	ingestRoot(s, root, &st)
+	ingestRoot(s, root, nil, &st)
 	if st.BytesRead != 0 || st.Files != 0 {
 		t.Fatalf("second pass re-read the file: %+v", st)
 	}

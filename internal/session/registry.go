@@ -587,3 +587,35 @@ func (m *Manager) liveClaudeIDs() []string {
 	}
 	return ids
 }
+
+// AgentSessionIndex maps each agent conversation id of a live session to that
+// session's culibox id, so a figure keyed by conversation (analytics) can link to
+// the session that still holds it. Every id a session has had since spawn counts
+// (a /clear starts a new one), plus its current one. An exited session is left
+// out, as the session list marks it (Info.Exited): there is nothing to open. A
+// fresh map on every call.
+func (m *Manager) AgentSessionIndex() map[string]string {
+	m.mu.Lock()
+	ss := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		ss = append(ss, s)
+	}
+	m.mu.Unlock()
+	out := map[string]string{}
+	for _, s := range ss {
+		s.mu.Lock()
+		if s.exited {
+			s.mu.Unlock()
+			continue
+		}
+		ids := slices.Clone(s.claudeSessionIDs)
+		if s.claudeSessionID != "" {
+			ids = append(ids, s.claudeSessionID)
+		}
+		s.mu.Unlock()
+		for _, id := range ids {
+			out[id] = s.ID
+		}
+	}
+	return out
+}

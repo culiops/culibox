@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDayOf(t *testing.T) {
@@ -336,5 +337,132 @@ func TestUnsafeMessageIDsCountPerRecordAndAreNotRemembered(t *testing.T) {
 	_, _, _, _, seen, _ = parseTranscript(strings.NewReader(""), []string{long, "a b", "msg_ok"})
 	if len(seen) != 1 || seen[0] != "msg_ok" {
 		t.Fatalf("loaded seen = %v want [msg_ok]", seen)
+	}
+}
+
+func TestParseCwdFirstNonEmpty(t *testing.T) {
+	in := `{"type":"summary","sessionId":"S1"}
+{"type":"user","sessionId":"S1","cwd":"/a","timestamp":"2026-08-05T10:00:00Z"}
+{"type":"user","sessionId":"S1","cwd":"/a/sub","timestamp":"2026-08-05T10:00:01Z"}
+`
+	p, _, _, err := ParseTranscript(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Cwd != "/a" {
+		t.Errorf("Cwd = %q, want /a (first non-empty, never replaced)", p.Cwd)
+	}
+}
+
+func TestParseBranchLast(t *testing.T) {
+	in := `{"type":"user","sessionId":"S1","gitBranch":"main"}
+{"type":"user","sessionId":"S1","gitBranch":""}
+{"type":"user","sessionId":"S1","gitBranch":"feat/x"}
+`
+	p, _, _, err := ParseTranscript(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Branch != "feat/x" {
+		t.Errorf("Branch = %q, want feat/x (last non-empty)", p.Branch)
+	}
+}
+
+func TestParseDriversSumEqualsMessageCost(t *testing.T) {
+	const day = "2026-08-05"
+	usage := `{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}`
+	in := `{"type":"assistant","sessionId":"S1","timestamp":"2026-08-05T10:00:00Z","message":{"id":"msg_A","role":"assistant","model":"claude-opus-5-5","usage":` + usage + `},"attributionSkill":"s1","attributionPlugin":"p1","attributionMcpServer":"playwright","attributionMcpTool":"browser_close"}
+{"type":"assistant","sessionId":"S1","timestamp":"2026-08-05T10:00:05Z","message":{"id":"msg_B","role":"assistant","model":"claude-opus-5-5","usage":` + usage + `},"attributionAgent":"general-purpose"}
+`
+	p, _, _, err := ParseTranscript(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MessageCostUSD("claude-opus-5-5", MsgUsage{Input: 10, Output: 20, CacheRead: 1000})
+	if want <= 0 {
+		t.Fatalf("test needs a priced model, cost = %v", want)
+	}
+	for _, k := range []DriverKey{
+		{day, "skill", "s1", ""},
+		{day, "plugin", "p1", ""},
+		{day, "mcp_server", "playwright", ""},
+		{day, "mcp_tool", "browser_close", "playwright"},
+		{day, "agent", "general-purpose", ""},
+	} {
+		d := p.Drivers[k]
+		if d == nil {
+			t.Errorf("no driver row for %+v", k)
+			continue
+		}
+		if math.Abs(d.Cost-want) > 1e-12 || d.Tokens != 1030 {
+			t.Errorf("%+v = {%v, %d}, want {%v, 1030}", k, d.Cost, d.Tokens, want)
+		}
+	}
+	// Message A has no agent row; the only agent row is message B's.
+	for k := range p.Drivers {
+		if k.Kind == "agent" && k.Name != "general-purpose" {
+			t.Errorf("unexpected agent row %+v", k)
+		}
+	}
+	if len(p.Drivers) != 5 {
+		t.Errorf("got %d driver rows, want 5: %+v", len(p.Drivers), p.Drivers)
+	}
+}
+
+func TestParseDriversDedupedMessage(t *testing.T) {
+	line := `{"type":"assistant","sessionId":"S1","timestamp":"2026-08-05T10:00:00Z","message":{"id":"msg_A","role":"assistant","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}},"attributionSkill":"s1"}
+`
+	p, _, _, err := ParseTranscript(strings.NewReader(line + line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Drivers[DriverKey{"2026-08-05", "skill", "s1", ""}]
+	if d == nil || d.Tokens != 1030 {
+		t.Fatalf("driver = %+v, want one message's 1030 tokens", d)
+	}
+	want := MessageCostUSD("claude-opus-5-5", MsgUsage{Input: 10, Output: 20, CacheRead: 1000})
+	if math.Abs(d.Cost-want) > 1e-12 {
+		t.Errorf("cost = %v, want %v (once)", d.Cost, want)
+	}
+}
+
+func TestCleanLabel(t *testing.T) {
+	if got := cleanLabel("a\x1b[31mb\n", maxLabelRunes); got != "a[31mb" {
+		t.Errorf("cleanLabel = %q, want %q", got, "a[31mb")
+	}
+	if got := cleanLabel("  padded  ", maxLabelRunes); got != "padded" {
+		t.Errorf("cleanLabel = %q, want trimmed", got)
+	}
+	long := strings.Repeat("é", 1000)
+	if got := cleanLabel(long, maxLabelRunes); utf8.RuneCountInString(got) != 256 {
+		t.Errorf("runes = %d, want 256", utf8.RuneCountInString(got))
+	}
+}
+
+func TestParseHostileLabelsAreCleanAndCapped(t *testing.T) {
+	// A ~1 MB cwd of 3-byte runes: the cut at 4096 bytes lands mid-rune.
+	cwd := strings.Repeat("€", 350_000)
+	in := `{"type":"assistant","sessionId":"S1","timestamp":"2026-08-05T10:00:00Z","cwd":"/x\u001b[31m` + cwd + `","gitBranch":"b\u001b[31m` + strings.Repeat("y", 1000) + `","message":{"id":"msg_A","role":"assistant","model":"claude-opus-5-5","usage":{"input_tokens":1}},"attributionSkill":"s\nk` + strings.Repeat("z", 1000) + `","attributionMcpServer":"srv\n","attributionMcpTool":"tool\n"}
+`
+	p, _, _, err := ParseTranscript(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Cwd == "" {
+		t.Fatal("Cwd empty (line over the reader cap?)")
+	}
+	if len(p.Cwd) > maxCwdBytes || len(p.Cwd) < maxCwdBytes-3 || !utf8.ValidString(p.Cwd) || !strings.HasPrefix(p.Cwd, "/x[31m€") {
+		t.Errorf("Cwd len=%d valid=%v", len(p.Cwd), utf8.ValidString(p.Cwd))
+	}
+	if utf8.RuneCountInString(p.Branch) != 256 || strings.ContainsRune(p.Branch, 0x1b) {
+		t.Errorf("Branch not clean/capped: %d runes", utf8.RuneCountInString(p.Branch))
+	}
+	for k := range p.Drivers {
+		if utf8.RuneCountInString(k.Name) > 256 || strings.ContainsAny(k.Name+k.Parent, "\n\x1b") {
+			t.Errorf("driver key not clean/capped: %+v", k)
+		}
+	}
+	if p.Drivers[DriverKey{"2026-08-05", "mcp_tool", "tool", "srv"}] == nil {
+		t.Errorf("mcp_tool row with cleaned parent missing: %+v", p.Drivers)
 	}
 }

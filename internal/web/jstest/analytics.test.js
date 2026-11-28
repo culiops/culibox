@@ -4,11 +4,14 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
-  foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
-  prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
-  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
-  anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+  topSessionsByCost, distinctSessions,
+  prevWindow, pctDelta, modelColor, collapseZeroCost, pricedModelIds,
+  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort, anWsName,
+  anModelFold, anPct, anSessionRow,
   anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
+  median, cacheHit, kpiDelta, anOverviewKpis, anWorkspaceRows, anDriverCards, anModelMedians, AN_COPY,
+  anWhereText, anTabKey, anWhereLabel, anWhereOptions, anDeltaParts, anPerPrompt, anModelTableRow,
+  anWorkspaceRowModel, anWorkspaceTiles, anDriverTiles, anCoverageText, anWorkspaceBars,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -75,35 +78,6 @@ test("normModels: derives tokens + out/prompt, cost-descending", () => {
   assert.equal(out[1].outPerPrompt, 5);
 });
 
-test("foldProjects: per-project totals + model mix, cost-descending, top-N", () => {
-  const rows = [
-    { project: "alpha", model: "a", input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 5 },
-    { project: "alpha", model: "b", input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 3 },
-    { project: "beta", model: "a", input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 4 },
-  ];
-  const out = foldProjects(rows, 0);
-  assert.equal(out.length, 2);
-  assert.equal(out[0].project, "alpha");
-  assert.ok(Math.abs(out[0].cost - 8) < 1e-9);
-  assert.deepEqual(Object.keys(out[0].byModel).sort(), ["a", "b"]);
-  // top-N cap
-  assert.equal(foldProjects(rows, 1).length, 1);
-});
-
-test("sessionCostBuckets: buckets distinct sessions by cost", () => {
-  const rows = [
-    { sessionId: "S1", project: "p", costUsd: 0.5 }, // <$1
-    { sessionId: "S1", project: "p", costUsd: 0.2 }, // same session → $0.7 total, still <$1
-    { sessionId: "S2", project: "p", costUsd: 7 },   // $5–15
-    { sessionId: "S3", project: "p", costUsd: 50 },  // $40+
-  ];
-  const b = sessionCostBuckets(rows);
-  const by = Object.fromEntries(b.map((x) => [x.label, x.count]));
-  assert.equal(by["<$1"], 1);
-  assert.equal(by["$5–15"], 1);
-  assert.equal(by["$40+"], 1);
-});
-
 test("topSessionsByCost + distinctSessions: aggregate across day/model rows", () => {
   const rows = [
     { sessionId: "S1", project: "p", day: "2026-08-05", model: "a", input: 100, costUsd: 2, prompts: 1 },
@@ -129,19 +103,6 @@ test("pctDelta: percent change, null when no baseline", () => {
   assert.equal(pctDelta(120, 100), 20);
   assert.equal(pctDelta(80, 100), -20);
   assert.equal(pctDelta(5, 0), null);
-});
-
-test("dowBuckets: sums cost per weekday Mon..Sun", () => {
-  // 2026-08-03 is a Monday, 2026-08-09 a Sunday.
-  const rows = [
-    { day: "2026-08-03", costUsd: 2 }, // Mon → idx 0
-    { day: "2026-08-03", costUsd: 1 }, // Mon → idx 0
-    { day: "2026-08-09", costUsd: 4 }, // Sun → idx 6
-  ];
-  const d = dowBuckets(rows);
-  assert.equal(d[0], 3);
-  assert.equal(d[6], 4);
-  assert.equal(d[3], 0);
 });
 
 test("collapseZeroCost: folds $0 models into one 'other (unpriced)' row, keeps prompts", () => {
@@ -251,59 +212,43 @@ const SESS_ROWS = [
   { sessionId: "2cf1c405bbbb", project: "-home-dev-acme-web-frontend", day: "2026-10-30", model: "claude-opus-5-5", input: 100, output: 20, cacheRead: 500, cacheCreation: 0, prompts: 4, costUsd: 90 },
   { sessionId: "9d3dc2afcccc", project: "-home-dev-acme-web-frontend", day: "2026-10-26", model: "claude-opus-5-5", input: 1, output: 1, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 70.14 },
 ];
-// The data the view reads, folded the way anLoad folds it (topSessions, byProject, sessionCount).
+// The data the view reads (topSessions, sessionCount).
 const sessionData = (rows) => ({
   sessionCount: distinctSessions(rows),
   topSessions: topSessionsByCost(rows, 18),
-  byProject: foldProjects(rows, 14),
 });
 
-test("anSessionKpis: sessions in the window, the costliest session by its project, the costliest project by its cost", () => {
-  const d = sessionData(SESS_ROWS);
+test("anSessionKpis: sessions in the window, the costliest session by its workspace, the median per session", () => {
+  const d = { ...sessionData(SESS_ROWS), median: 1.5 };
   assert.equal(d.sessionCount, 3);
   assert.deepEqual(anSessionKpis(d).map((t) => ({ value: t.value, label: t.label })), [
     { value: "3", label: "Sessions in this window" },
     { value: "$121", label: "Costliest session · acme-api" },
-    { value: "$160", label: "Costliest project · acme-web-frontend" },
+    { value: "$1.50", label: "Median per session" },
   ]);
-  // The values are today's formatters on today's data: usd of the top session's cost, usd of the top project's COST.
-  assert.equal(usd(d.topSessions[0].cost), "$121");
-  assert.equal(usd(d.byProject[0].cost), "$160");
+  // A session that carries its own workspace names that, not the folder.
+  const ws = anSessionKpis({ ...d, topSessions: [{ project: "-x-y", workspace: "culiops-agent-box", cost: 86.1 }] });
+  assert.equal(ws[1].label, "Costliest session · culiops-agent-box");
   // A window of 1,420 sessions reads 1,420, not 1k.
   assert.equal(anSessionKpis({ ...d, sessionCount: 1420 })[0].value, "1,420");
   assert.equal(anSessionKpis({ ...d, sessionCount: 12500 })[0].value, fmtCompact(12500));
 });
 
-test("anSessionKpis: no sessions or projects gives a dash and the plain label", () => {
-  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], byProject: [] });
+test("anSessionKpis: no sessions gives a dash and the plain label; a nameless session leaves no dangling separator", () => {
+  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], median: null });
   assert.deepEqual(tiles.map((t) => ({ value: t.value, label: t.label })), [
     { value: "0", label: "Sessions in this window" },
     { value: "—", label: "Costliest session" },
-    { value: "—", label: "Costliest project" },
+    { value: "—", label: "Median per session" },
   ]);
-  // A session or project with no name (a row with an empty project) does not leave a dangling " · " in the label.
-  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], byProject: [{ project: "", cost: 3 }] });
-  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Costliest project"]);
+  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], median: 3 });
+  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Median per session"]);
   assert.deepEqual(nameless.map((t) => t.value), ["1", "$3.00", "$3.00"]);
 });
 
 // ---- the data both builders share (the phone's modal and the desktop page): one preparation, two sets of DOM ----
 
-test("anToolGroups: a group per kind in the order met, ten rows at most, the kind's colour, the accent for an unknown kind", () => {
-  const tools = [];
-  for (let i = 1; i <= 12; i++) tools.push({ kind: "skill", name: "s" + i, records: i });
-  tools.push({ kind: "mcp_server", name: "docs", records: 3 }, { kind: "plugin", name: "p", records: 0 }, { kind: "novel", name: "n", records: 2 }, { kind: "mcp_tool", name: "t", records: 1 });
-  const groups = anToolGroups(tools);
-  assert.deepEqual(groups.map((g) => g.kind), ["skill", "mcp_server", "plugin", "novel", "mcp_tool"]);
-  assert.deepEqual(groups.map((g) => g.color), ["var(--an-2)", "var(--an-3)", "var(--an-4)", "var(--accent)", "var(--an-1)"]);
-  assert.equal(groups[0].items.length, 10);
-  assert.deepEqual(groups[0].items.map((t) => t.name), ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"], "the first ten, in the order given");
-  assert.deepEqual(groups.map((g) => g.max), [10, 3, 1, 2, 1], "the longest bar in the group's own rows; never under 1");
-  assert.deepEqual(anToolGroups([]), []);
-  assert.deepEqual(anToolGroups(undefined), []);
-});
-
-test("anModelFold, anModelCells and anPct: the Models figures", () => {
+test("anModelFold and anPct: the Models figures", () => {
   const rows = normModels([
     { model: "claude-opus-5-5", input: 4100, output: 200, cacheRead: 6100, cacheCreation: 0, prompts: 4, sessions: 4, costUsd: 4300 },
     { model: "<synthetic>", prompts: 41, sessions: 3 },
@@ -315,8 +260,6 @@ test("anModelFold, anModelCells and anPct: the Models figures", () => {
   assert.equal(f.totalTokens, 10400);
   assert.equal(f.maxTokens, 10400);
   assert.equal(f.maxCost, 4300);
-  assert.deepEqual({ ...anModelCells(f.rows[0], f) }, { cost: "$4.3k", pct: "100%", tokens: "10k", prompts: "4", outPerPrompt: "50", cache: "59%" });
-  assert.deepEqual({ ...anModelCells(f.rows[1], f) }, { cost: "$0.00", pct: "0%", tokens: "0", prompts: "68", outPerPrompt: "0", cache: "0%" }, "no tokens: a 0% cache share, not NaN");
   assert.equal(anPct(1, 3), "33%");
   assert.equal(anPct(2, 3), "67%");
   // Nothing priced and nothing counted: totals and maxima stay at 1, so no bar or share divides by zero.
@@ -324,30 +267,60 @@ test("anModelFold, anModelCells and anPct: the Models figures", () => {
   assert.deepEqual([none.rows.length, none.totalCost, none.totalTokens, none.maxTokens, none.maxCost], [0, 1, 1, 1, 1]);
 });
 
-test("anProjectBars and anProjectRow: the stacked bars' segments (dearest model first) and the detail row", () => {
-  const byProject = foldProjects([
-    { project: "-home-dev-acme-api", model: "a", input: 10, prompts: 2, costUsd: 1 },
-    { project: "-home-dev-acme-api", model: "b", input: 5, prompts: 1, costUsd: 3 },
-    { project: "-home-dev-acme-web", model: "a", input: 1500, prompts: 7, costUsd: 2 },
-  ], 14);
-  const bars = anProjectBars(byProject, ["a", "b"]);
-  assert.equal(bars.max, 4);
-  assert.deepEqual(bars.bars.map((b) => [b.name, b.cost]), [["acme-api", 4], ["acme-web", 2]]);
-  assert.deepEqual(bars.bars[0].segs.map((g) => ({ ...g })), [
-    { v: 3, c: "var(--an-2)", t: "b $3.00" },
-    { v: 1, c: "var(--an-1)", t: "a $1.00" },
+test("anWorkspaceBars: the top workspaces by cost, each bar split host then box in the --an-6 and --an-1 slots, scaled to the longest", () => {
+  const rows = [
+    { name: "small", cost: 10, hostCost: 10, boxCost: 0 },
+    { name: "big", cost: 100, hostCost: 31, boxCost: 69 },
+    { name: "mid", cost: 50, hostCost: 0, boxCost: 50 },
+  ];
+  const b = anWorkspaceBars(rows, 2);
+  assert.equal(b.max, 100);
+  assert.deepEqual(b.bars.map((x) => [x.name, x.cost]), [["big", 100], ["mid", 50]], "dearest first, capped");
+  assert.deepEqual(b.bars[0].segs.map((g) => ({ ...g })), [
+    { v: 31, c: "var(--an-6)", t: "host $31.00" },
+    { v: 69, c: "var(--an-1)", t: "box $69.00" },
   ]);
-  assert.deepEqual({ ...anProjectRow(byProject[1]) }, { name: "acme-web", cost: "$2.00", tokens: "2k", prompts: "7" });
-  assert.deepEqual(anProjectBars([], []).bars, []);
-  assert.equal(anProjectBars([], []).max, 1);
+  assert.deepEqual(rows.map((r) => r.name), ["small", "big", "mid"], "the input is not reordered");
+  assert.equal(anWorkspaceBars(rows).bars.length, 3, "no limit shows them all");
+  // Nothing at all: no bars, and a longest bar of 1 so no width divides by zero.
+  assert.deepEqual([anWorkspaceBars([]).bars, anWorkspaceBars([]).max], [[], 1]);
+  assert.equal(anWorkspaceBars([{ name: "free", cost: 0, hostCost: 0, boxCost: 0 }]).max, 1);
+});
+
+test("the phone's tab strip is Overview · Workspaces · Drivers · Sessions · Models, keyed like the page's views", () => {
+  const html = readStatic("index.html");
+  const strip = /<div class="dlg-tabs" id="an-tabs">([\s\S]*?)<\/div>/.exec(html)[1];
+  const tabs = [...strip.matchAll(/<button type="button" data-antab="(\w+)"[^>]*>([^<]*)<\/button>/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(tabs, [["overview", "Overview"], ["workspaces", "Workspaces"], ["drivers", "Drivers"], ["sessions", "Sessions"], ["models", "Models"]]);
+  assert.deepEqual(tabs.map((t) => t[0]), ["overview", "workspaces", "drivers", "sessions", "models"]);
+  assert.deepEqual(tabs.map((t) => anTabKey(t[0])), tabs.map((t) => t[0]), "each key is its own view");
+  // The page's seg carries the same keys in the same order.
+  const seg = /<div class="seg" id="an-pview"[^>]*>([\s\S]*?)<\/div>/.exec(html)[1];
+  assert.deepEqual([...seg.matchAll(/data-antab="(\w+)"/g)].map((m) => m[1]), tabs.map((t) => t[0]));
 });
 
 test("anSessionRow: one session's cells as text; mixed is flagged, a single model is short", () => {
   const top = topSessionsByCost(SESS_ROWS, 18);
-  assert.deepEqual({ ...anSessionRow(top[0]) }, { sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121" });
+  assert.deepEqual({ ...anSessionRow(top[0]) }, {
+    sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121",
+    workspace: "acme-api", workspacePath: "", where: "unknown", box: false, branch: "", liveId: "", clickable: false,
+  });
   const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
   assert.equal(single.model, "opus-5-5");
   assert.equal(single.mixed, false);
+});
+
+test("anWsName: a session's workspace shows as its folder's name, and the Costliest session tile names it the same way", () => {
+  assert.equal(anWsName("/home/u/box-clones/culiops-agent-box-prd"), "culiops-agent-box-prd");
+  assert.equal(anWsName("/home/u/work/"), "work");
+  assert.equal(anWsName("-home-claude-box-clones-old-proj"), "box-clones-old-proj"); // an unmatched row: its slug, as the Workspaces row names it
+  assert.equal(anWsName("acme-ledger"), "acme-ledger");
+  assert.equal(anWsName(""), "");
+  const row = anSessionRow({ sid: "a1c3e507", day: "2026-11-12", project: "-x-y", workspace: "/home/u/work/acme-ledger", cost: 5, model: "claude-opus-5-5", runtime: "host" });
+  assert.equal(row.workspace, "acme-ledger");
+  assert.equal(row.workspacePath, "/home/u/work/acme-ledger");
+  const k = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "-x-y", workspace: "/home/u/work/acme-ledger", cost: 5 }], median: 5 });
+  assert.equal(k[1].label, "Costliest session · acme-ledger");
 });
 
 // ---- the cost chart's y labels and the legend (UI plan 5 Task 6; digest-design §A2, §B6) ----
@@ -455,73 +428,10 @@ function anPage(page) {
   new vm.Script(ICON_SRC + "\n" + readStatic("analytics.js"), { filename: "analytics.js" }).runInContext(ctx);
   return { ctx, doc };
 }
-const toolRows = (kinds) => kinds.map((k, i) => ({ kind: k, name: "n" + i, records: 5 + i }));
-function toolCards(page, kinds) {
-  const { ctx, doc } = anPage(page);
-  vm.runInContext("AN.data = { tools: " + JSON.stringify(toolRows(kinds)) + " }", ctx);
-  const root = new Node("div", doc);
-  ctx.anTools(root);
-  return root.querySelectorAll(".an-card");
-}
-
-test("a Tools card head draws the glyph of its declared kind at 16, inside the heading before the kind word", () => {
-  const want = { mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" };
-  const kinds = Object.keys(want);
-  const cards = toolCards(true, kinds);
-  assert.equal(cards.length, 4);
-  cards.forEach((c, i) => {
-    const head = c.querySelector(".card-head");
-    const h3 = head.querySelector("h3");
-    assert.equal(h3.textContent, kinds[i], "the words are the kind, unchanged");
-    assert.equal(head.querySelectorAll("svg").length, 1, kinds[i]);
-    assert.equal(h3.children[0].tag, "svg", "the glyph is the heading's first child");
-    assert.equal(h3.children[0].getAttribute("data-icon"), want[kinds[i]], kinds[i]);
-    assert.equal(h3.children[0].getAttribute("width"), "16");
-    assert.equal(h3.children[0].getAttribute("aria-hidden"), "true");
-    assert.equal(head.children.length, 1, "the head holds only the heading (no sibling glyph for the flex gap to push away)");
-  });
-});
-
-test("the Tools glyph is 6px from its word: a margin on the h3's glyph, in the desktop page's rules", () => {
-  const css = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.match(css, /#page-host > #analytics-modal\.as-page \.an-card \.card-head > h3 > \.ui-icon \{ margin-right: 6px; \}/);
-});
-
-test("anToolGroups: a hostile kind gets the default colour string, never a function", () => {
-  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
-    const [g] = anToolGroups([{ kind, name: "x", records: 3 }]);
-    assert.equal(g.kind, kind);
-    assert.equal(g.color, "var(--accent)", kind);
-    assert.equal(g.items.length, 1);
-  }
-  assert.equal(anToolGroups([{ kind: "skill", name: "x", records: 1 }])[0].color, "var(--an-2)");
-});
-
-test("a Tools card head of an unknown kind keeps its words and draws no glyph", () => {
-  const kinds = ["constructor", "__proto__", "toString", "weird"];
-  const cards = toolCards(true, kinds);
-  assert.equal(cards.length, 4, "a card per group");
-  for (const c of cards) assert.equal(c.querySelector(".card-head").querySelector("svg"), null);
-  assert.equal(cards[0].querySelector(".card-head h3").textContent, "constructor");
-});
-
-test("the Tools card rows stay plain", () => {
-  const cards = toolCards(true, ["skill", "mcp_server"]);
-  for (const c of cards) assert.equal(c.querySelector(".an-card-body").querySelector("svg"), null);
-});
-
-test("the phone's Tools boxes (not the page) draw no glyph", () => {
-  const { ctx, doc } = anPage(false);
-  vm.runInContext("AN.data = { tools: " + JSON.stringify(toolRows(["skill", "plugin", "mcp_tool", "mcp_server"])) + " }", ctx);
-  const root = new Node("div", doc);
-  ctx.anTools(root);
-  assert.equal(root.querySelectorAll("svg").length, 0);
-  assert.equal(root.querySelectorAll("h4").length, 4);
-});
 
 test("card titles stay plain: a titled card (the Overview's h2s) has no glyph", () => {
   const { ctx } = anPage(true);
-  for (const t of ["Cost over time", "Cost by model", "Cost by project"]) {
+  for (const t of ["Cost over time", "Cost by model", "Cost by workspace"]) {
     const card = ctx.anCard(t, "", "h2");
     assert.equal(card.querySelectorAll("svg").length, 0, t);
   }
@@ -575,4 +485,596 @@ test("anRescan: a rejected request leaves the glyph and the word in place and th
   assert.equal(b.textContent, "Re-scan");
   assert.equal(b.querySelectorAll("svg").length, 1);
   assert.equal(b.disabled, false);
+});
+
+// ---- Analytics v3: the shared preparation of workspaces, cost drivers, medians and cache hit ----
+
+test("median: null for none, the middle value, the mean of the two middle values for an even count; the input is not reordered", () => {
+  assert.equal(median([]), null);
+  assert.equal(median(undefined), null);
+  assert.equal(median([3]), 3);
+  assert.equal(median([1, 9, 2, 4]), 3);
+  assert.equal(median([10, 2, 7]), 7);
+  const xs = [9, 1, 5];
+  median(xs);
+  assert.deepEqual(xs, [9, 1, 5]);
+});
+
+test("cacheHit: a ratio from the three token counts or from cacheRead and cacheDenom; null when the denominator is 0", () => {
+  assert.equal(cacheHit({ cacheRead: 0, cacheDenom: 0 }), null);
+  assert.equal(cacheHit({ cacheRead: 0, input: 0, cacheCreation: 0 }), null);
+  assert.equal(cacheHit({ cacheRead: 96, cacheDenom: 100 }), 0.96);
+  assert.equal(cacheHit({ cacheRead: 60, input: 20, cacheCreation: 20 }), 0.6);
+  assert.equal(cacheHit({}), null);
+  assert.equal(cacheHit(null), null);
+});
+
+test("kpiDelta: percent for counts and dollars, points for the cache ratio, null with no baseline", () => {
+  assert.equal(kpiDelta(1.12, 1, "pct").text, "▲ 12%");
+  assert.equal(kpiDelta(1.12, 1, "pct").dir, "up");
+  assert.equal(kpiDelta(0.5, 1, "pct").text, "▼ 50%");
+  assert.equal(kpiDelta(0.5, 1, "pct").dir, "down");
+  assert.equal(kpiDelta(0.957, 0.961, "pt").text, "▼ 0.4 pt");
+  assert.equal(kpiDelta(0.961, 0.957, "pt").text, "▲ 0.4 pt");
+  assert.equal(kpiDelta(5, 0, "pct"), null);
+  assert.equal(kpiDelta(5, null, "pct"), null);
+  assert.equal(kpiDelta(null, 5, "pct"), null);
+  assert.equal(kpiDelta(0.9, null, "pt"), null);
+  assert.equal(kpiDelta(null, 0.9, "pt"), null);
+  assert.equal(kpiDelta(1, 1, "pct").dir, "flat");
+});
+
+test("anOverviewKpis: the four tiles of §3.1, labels exactly, no delta without Compare", () => {
+  const d = { costByDay: { totals: { cost: 112 } }, sessionCount: 50, median: 1.5, cache: 0.957 };
+  const tiles = anOverviewKpis(d, null);
+  assert.deepEqual(tiles.map((t) => t.label), ["API value", "Sessions", "Median per session", "Cache hit"]);
+  assert.deepEqual(tiles.map((t) => t.value), ["$112", "50", "$1.50", "95.7%"]);
+  for (const t of tiles) assert.equal(t.delta, null);
+});
+
+test("anOverviewKpis: with Compare each tile has its change; only the first says 'vs the N days before'; cache hit is in points", () => {
+  const d = { costByDay: { totals: { cost: 112 } }, sessionCount: 60, median: 2, cache: 0.957 };
+  const cmp = { days: 30, prev: { cost: 100, sessions: 50, median: 2.5, cache: 0.961 } };
+  const t = anOverviewKpis(d, cmp);
+  assert.equal(t[0].delta.text, "▲ 12% vs the 30 days before");
+  assert.equal(t[0].delta.dir, "up");
+  assert.equal(t[1].delta.text, "▲ 20%");
+  assert.equal(t[2].delta.text, "▼ 20%");
+  assert.equal(t[3].delta.text, "▼ 0.4 pt");
+});
+
+test("anOverviewKpis: no baseline for a tile leaves that tile without a delta, and an empty window shows dashes", () => {
+  const d = { costByDay: { totals: { cost: 0 } }, sessionCount: 0, median: null, cache: null };
+  const t = anOverviewKpis(d, { days: 7, prev: { cost: 0, sessions: 0, median: null, cache: null } });
+  assert.deepEqual(t.map((x) => x.value), ["$0.00", "0", "—", "—"]);
+  for (const x of t) assert.equal(x.delta, null);
+});
+
+test("anDriverCards: percentages are over the covered total; the muted last row takes the rest; coverage is covered/total", () => {
+  const r = anDriverCards({ total: 100, coveredTotal: 10, agent: [{ name: "general-purpose", costUsd: 7 }], skill: [], plugin: [], mcp: [] });
+  assert.equal(r.empty, false);
+  assert.equal(r.coverage, 0.1);
+  assert.deepEqual(r.cards.map((c) => c.kind), ["agent", "skill", "plugin", "mcp"]);
+  const agent = r.cards[0];
+  assert.deepEqual(agent.rows.map((x) => [x.name, x.cost, x.pct, x.muted, x.sub]), [
+    ["general-purpose", 7, 70, false, false],
+    ["main agent (no subagent)", 3, 30, true, false],
+  ]);
+  assert.equal(agent.max, 7);
+  assert.equal(agent.title, "Subagents");
+  assert.equal(agent.caption, "main agent vs subagents");
+  assert.deepEqual(r.cards[1].rows.map((x) => [x.name, x.cost, x.pct, x.muted]), [["outside any skill", 10, 100, true]]);
+  assert.deepEqual(r.cards[2].rows.map((x) => x.name), ["outside any plugin"]);
+  assert.deepEqual(r.cards[3].rows.map((x) => x.name), ["outside any MCP tool"]);
+  assert.equal(r.cards[1].max, 0, "no named row, no bar");
+});
+
+test("anDriverCards: full coverage has no coverage line; an overshoot clamps the muted row at zero", () => {
+  assert.equal(anDriverCards({ total: 10, coveredTotal: 10, agent: [], skill: [], plugin: [], mcp: [] }).coverage, null);
+  const r = anDriverCards({ total: 10, coveredTotal: 10, agent: [{ name: "a", costUsd: 6 }, { name: "b", costUsd: 6 }], skill: [], plugin: [], mcp: [] });
+  const last = r.cards[0].rows[r.cards[0].rows.length - 1];
+  assert.equal(last.muted, true);
+  assert.equal(last.cost, 0);
+  assert.equal(last.pct, 0);
+});
+
+test("anDriverCards: MCP servers are followed by their tools (indented rows); the muted row is the rest of the covered total", () => {
+  const r = anDriverCards({
+    total: 20, coveredTotal: 20, agent: [], skill: [], plugin: [],
+    mcp: [{ server: "docs", costUsd: 8, tools: [{ name: "search", costUsd: 5 }, { name: "fetch", costUsd: 2 }] }, { server: "db", costUsd: 4, tools: [] }],
+  });
+  const mcp = r.cards[3];
+  assert.equal(mcp.caption, "server → its tools");
+  assert.deepEqual(mcp.rows.map((x) => [x.name, x.cost, x.sub, x.muted]), [
+    ["docs", 8, false, false], ["search", 5, true, false], ["fetch", 2, true, false], ["db", 4, false, false],
+    ["outside any MCP tool", 8, false, true],
+  ]);
+  assert.equal(mcp.max, 8);
+  assert.equal(mcp.rows[4].pct, 40);
+});
+
+test("anDriverCards: no covered value is the empty state, never NaN or 0% tiles or a divide by zero", () => {
+  const dead = [
+    { total: 100, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] },
+    { total: 0, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] },
+    { total: 5, coveredTotal: 0, agent: [{ name: "x", costUsd: 0 }], skill: [], plugin: [], mcp: [] },
+    {}, null, undefined,
+  ];
+  for (const resp of dead) {
+    const r = anDriverCards(resp);
+    assert.equal(r.empty, true);
+    assert.equal(r.coverage, null);
+    assert.deepEqual(r.cards, []);
+    assert.ok(!JSON.stringify(r).includes("NaN"));
+  }
+});
+
+test("anDriverCards: a name is kept as data, unescaped, newline and markup included", () => {
+  const r = anDriverCards({ total: 10, coveredTotal: 10, agent: [{ name: "a\nb", costUsd: 4 }], skill: [{ name: "<b>x</b>", costUsd: 1 }], plugin: [], mcp: [{ server: "s\x1b[31m", costUsd: 1, tools: [{ name: "t\"'", costUsd: 1 }] }] });
+  assert.equal(r.cards[0].rows[0].name, "a\nb");
+  assert.equal(r.cards[1].rows[0].name, "<b>x</b>");
+  assert.equal(r.cards[3].rows[0].name, "s\x1b[31m");
+  assert.equal(r.cards[3].rows[1].name, "t\"'");
+});
+
+const WS_RESP = {
+  from: "2026-11-01", to: "2026-11-27",
+  workspaces: [
+    {
+      workspace: "/home/u2/acme", name: "acme", unmatched: false, costUsd: 100, sessions: 4, hostCost: 31, boxCost: 69,
+      byModel: { opus: 75, haiku: 25 }, cacheRead: 90, cacheDenom: 100, sessionCosts: [10, 20, 30, 40],
+      children: [
+        { runtime: "host", profile: "", via: "", label: "host", path: "/home/u2/acme", costUsd: 31, sessions: 1, cacheRead: 9, cacheDenom: 10, sessionCosts: [31] },
+        { runtime: "box", profile: "work", via: "clone", label: "box · work", path: "/home/agent/acme", costUsd: 69, sessions: 3, cacheRead: 0, cacheDenom: 0, sessionCosts: [10, 19, 40] },
+      ],
+    },
+    { workspace: "-home-x-old", name: "old", unmatched: true, costUsd: 0, sessions: 1, hostCost: 0, boxCost: 0, byModel: {}, cacheRead: 0, cacheDenom: 0, sessionCosts: [], children: [] },
+  ],
+};
+
+test("anWorkspaceRows: host and box shares add to 100, the model mix is dearest first, medians and cache hit come from the row's own figures", () => {
+  const [a, old] = anWorkspaceRows(WS_RESP);
+  assert.equal(a.name, "acme");
+  assert.equal(a.path, "/home/u2/acme");
+  assert.equal(a.unmatched, false);
+  assert.equal(a.cost, 100);
+  assert.equal(a.sessions, 4);
+  assert.equal(a.hostPct + a.boxPct, 100);
+  assert.deepEqual([a.hostPct, a.boxPct], [31, 69]);
+  assert.deepEqual(a.mix.map((m) => [m.model, m.share]), [["opus", 0.75], ["haiku", 0.25]]);
+  assert.equal(a.median, 25);
+  assert.equal(a.cacheHit, 0.9);
+  assert.equal(a.children.length, 2);
+  assert.deepEqual(
+    a.children.map((c) => [c.runtime, c.profile, c.via, c.label, c.path, c.cost, c.sessions, c.median, c.cacheHit]),
+    [["host", "", "", "host", "/home/u2/acme", 31, 1, 31, 0.9], ["box", "work", "clone", "box · work", "/home/agent/acme", 69, 3, 19, null]],
+  );
+  // an unmatched row passes through, says why it has no path, and has no shares or medians to invent
+  assert.equal(old.unmatched, true);
+  assert.equal(old.name, "old");
+  assert.equal(old.path, "unmatched · folder no longer known");
+  assert.deepEqual([old.hostPct, old.boxPct, old.median, old.cacheHit], [0, 0, null, null]);
+  assert.deepEqual(old.mix, []);
+});
+
+test("anWorkspaceRows: odd splits still add to 100; no response is no rows", () => {
+  const r = anWorkspaceRows({ workspaces: [{ workspace: "w", name: "w", unmatched: false, costUsd: 3, sessions: 1, hostCost: 1, boxCost: 2, byModel: { m: 3 }, cacheRead: 0, cacheDenom: 0, sessionCosts: [3], children: [] }] })[0];
+  assert.equal(r.hostPct + r.boxPct, 100);
+  assert.deepEqual(anWorkspaceRows(null), []);
+  assert.deepEqual(anWorkspaceRows({}), []);
+  assert.deepEqual(anWorkspaceRows({ workspaces: [] }), []);
+});
+
+test("anModelMedians: each model's median over its own per-session cost", () => {
+  const rows = [
+    { sessionId: "s1", project: "p", model: "opus", costUsd: 5 },
+    { sessionId: "s2", project: "p", model: "opus", costUsd: 3 },
+    { sessionId: "s1", project: "p", model: "haiku", costUsd: 1 },
+  ];
+  assert.deepEqual({ ...anModelMedians(rows) }, { opus: 4, haiku: 1 });
+  assert.deepEqual({ ...anModelMedians([]) }, {});
+  assert.deepEqual({ ...anModelMedians(undefined) }, {});
+});
+
+test("anModelMedians: rows of one session and model are one session's cost; a model named like a prototype key is data", () => {
+  const rows = [
+    { sessionId: "s1", project: "p", model: "opus", costUsd: 2 },
+    { sessionId: "s1", project: "p", model: "opus", costUsd: 3 },
+    { sessionId: "s2", project: "p", model: "opus", costUsd: 1 },
+    { sessionId: "s1", project: "p", model: "constructor", costUsd: 4 },
+  ];
+  const m = anModelMedians(rows);
+  assert.equal(m.opus, 3);
+  assert.equal(m.constructor, 4);
+});
+
+test("AN_COPY: the workspaces table has seven columns, Host · Box being one; the Models Sessions tooltip is the plan's wording", () => {
+  assert.deepEqual(AN_COPY.workspaces.columns, ["Workspace", "API value", "Sessions", "Host · Box", "Model mix", "Median / session", "Cache hit"]);
+  assert.equal(AN_COPY.workspaces.columns.length, 7);
+  assert.equal(AN_COPY.models.sessionsTitle, "A session that used several models counts once in each.");
+});
+
+// ---- Analytics v3, the page: Where, the views, sessions that open (Task 10) ----
+
+test("anSessionRow: a row with a liveId is clickable, a row without one is not", () => {
+  const base = { sid: "7f3a91c2", day: "2026-11-26", project: "-home-dev-x", model: "claude-opus-5-5", tokens: 10, cost: 1, prompts: 2 };
+  assert.equal(anSessionRow({ ...base, liveId: "s-123" }).clickable, true);
+  assert.equal(anSessionRow({ ...base, liveId: "s-123" }).liveId, "s-123");
+  assert.equal(anSessionRow({ ...base, liveId: "" }).clickable, false);
+  assert.equal(anSessionRow(base).clickable, false);
+  assert.equal(anSessionRow({ ...base, liveId: undefined }).clickable, false);
+});
+
+test("topSessionsByCost: a session carries its workspace, runtime, profile, branch and liveId from the rows that have them", () => {
+  const rows = [
+    { sessionId: "S1xxxxxxxx", project: "p", day: "2026-11-01", model: "a", costUsd: 2, prompts: 1, workspace: "", runtime: "", branch: "" },
+    { sessionId: "S1xxxxxxxx", project: "p", day: "2026-11-02", model: "a", costUsd: 3, prompts: 1, workspace: "ws", runtime: "box", profile: "prd", branch: "feat/x", liveId: "live-1" },
+    { sessionId: "S2xxxxxxxx", project: "p", day: "2026-11-02", model: "a", costUsd: 1, prompts: 1 },
+  ];
+  const [a, b] = topSessionsByCost(rows, 10);
+  assert.deepEqual([a.workspace, a.runtime, a.profile, a.branch, a.liveId], ["ws", "box", "prd", "feat/x", "live-1"]);
+  assert.deepEqual([b.workspace, b.runtime, b.profile, b.branch, b.liveId], ["", "", "", "", ""]);
+});
+
+test("anWhereText: host, box with its profile, box with none, a session with no runtime", () => {
+  assert.equal(anWhereText("host", ""), "host");
+  assert.equal(anWhereText("box", "prd"), "box · prd");
+  assert.equal(anWhereText("box", ""), "box · unnamed");
+  assert.equal(anWhereText("", ""), "unknown");
+  assert.equal(anSessionRow({ sid: "a", project: "p", model: "m", runtime: "box", profile: "dev" }).box, true);
+  assert.equal(anSessionRow({ sid: "a", project: "p", model: "m", runtime: "host" }).box, false);
+});
+
+test("anWhereLabel: the option's label, then its window's API value", () => {
+  assert.equal(anWhereLabel({ label: "Box · prd", cost: 2100 }), "Box · prd · $2.1k");
+  assert.equal(anWhereLabel({ label: "Box · prd", costUsd: 2100 }), "Box · prd · $2.1k", "the API's own field name");
+  assert.equal(anWhereLabel({ label: "All", costUsd: 0 }), "All · $0.00");
+});
+
+test("anWhereOptions: one entry per API option; a chosen key the window no longer lists stays selectable at $0.00", () => {
+  const opts = [{ key: "", label: "All", costUsd: 4300 }, { key: "host", label: "Host", costUsd: 1300 }, { key: "box:prd", label: "Box · prd", costUsd: 2100 }];
+  assert.deepEqual(anWhereOptions(opts, ""), [{ key: "", text: "All · $4.3k" }, { key: "host", text: "Host · $1.3k" }, { key: "box:prd", text: "Box · prd · $2.1k" }]);
+  assert.equal(anWhereOptions(opts, "box:prd").length, 3);
+  const gone = anWhereOptions(opts, "box:old");
+  assert.deepEqual(gone[3], { key: "box:old", text: "Box · old · $0.00" });
+  assert.deepEqual(anWhereOptions([], ""), [{ key: "", text: "All" }], "before the first load there is still All");
+  assert.deepEqual(anWhereOptions(undefined, "host").map((o) => o.key), ["", "host"]);
+});
+
+test("anTabKey: the five views, and the old projects and tools keys still open Workspaces and Cost drivers", () => {
+  for (const k of ["overview", "workspaces", "drivers", "sessions", "models"]) assert.equal(anTabKey(k), k);
+  assert.equal(anTabKey("projects"), "workspaces");
+  assert.equal(anTabKey("tools"), "drivers");
+  assert.equal(anTabKey("nonsense"), "overview");
+  assert.equal(anTabKey(undefined), "overview");
+  assert.equal(anTabKey("__proto__"), "overview");
+});
+
+test("anDeltaParts: the figure and the window it is against split apart", () => {
+  assert.deepEqual(anDeltaParts("▲ 12% vs the 30 days before"), { lead: "▲ 12%", rest: " vs the 30 days before" });
+  assert.deepEqual(anDeltaParts("▼ 0.4 pt"), { lead: "▼ 0.4 pt", rest: "" });
+});
+
+test("anPerPrompt: dollars per prompt, three decimals under a cent, a dash with no prompts", () => {
+  assert.equal(anPerPrompt(42, 100), "$0.42");
+  assert.equal(anPerPrompt(0.4, 100), "$0.004");
+  assert.equal(anPerPrompt(5, 0), "—");
+});
+
+test("anModelTableRow: a model's cells; other (unpriced) has dashes for every value and keeps its sessions and tokens", () => {
+  const rows = collapseZeroCost(normModels([
+    { model: "claude-opus-5-5", input: 40, output: 10, cacheRead: 950, cacheCreation: 10, prompts: 100, sessions: 12, costUsd: 30 },
+    { model: "claude-fable-5-1", input: 100, output: 5, cacheRead: 0, cacheCreation: 0, prompts: 2, sessions: 6, costUsd: 0 },
+  ]));
+  const fold = anModelFold(rows);
+  const med = { "claude-opus-5-5": 2.31 };
+  const opus = anModelTableRow(rows[0], fold, med);
+  assert.deepEqual({ ...opus }, { other: false, cost: "$30.00", pct: "100%", sessions: "12", median: "$2.31", perPrompt: "$0.30", cache: "95.0%", tokens: "1k" });
+  const other = anModelTableRow(rows[1], fold, med);
+  assert.deepEqual({ ...other }, { other: true, cost: "—", pct: "—", sessions: "6", median: "—", perPrompt: "—", cache: "—", tokens: "105" });
+  // a priced model with no median entry or no cache read shows dashes, not NaN
+  const lone = anModelTableRow({ model: "m", cost: 1, sessions: 1, prompts: 0, tokens: 0, input: 0, cacheRead: 0, cacheCreation: 0 }, fold, {});
+  assert.deepEqual([lone.median, lone.perPrompt, lone.cache], ["—", "—", "—"]);
+});
+
+test("anWorkspaceRows keeps the host and box costs the Overview's split bars draw", () => {
+  const a = anWorkspaceRows(WS_RESP)[0];
+  assert.deepEqual([a.hostCost, a.boxCost], [31, 69]);
+});
+
+// ---- Analytics v3, Task 11: the desktop Workspaces and Cost drivers views ----
+
+const kid = (o) => ({ runtime: "host", profile: "", via: "", label: "host", path: "/w/acme", cost: 1, sessions: 1, median: 1, cacheHit: 0.5, ...o });
+const wsRow = (children, o) => ({ name: "acme", path: "/w/acme", unmatched: false, cost: 10, sessions: 3, hostPct: 20, boxPct: 80, mix: [], median: 2, cacheHit: 0.9, children, ...o });
+
+test("anWorkspaceRowModel: a row with several children is expandable, one with a single child (or none) is not", () => {
+  const three = anWorkspaceRowModel(wsRow([kid(), kid({ label: "box · prd", runtime: "box", path: "/b/acme" }), kid({ label: "worktrees (2)", path: "/w/acme/.claude/worktrees/*" })]));
+  assert.equal(three.expandable, true);
+  assert.equal(three.children.length, 3);
+  assert.equal(anWorkspaceRowModel(wsRow([kid()])).expandable, false);
+  assert.equal(anWorkspaceRowModel(wsRow([])).expandable, false);
+  assert.equal(anWorkspaceRowModel(wsRow([kid(), kid()])).expandable, true);
+});
+
+test("anWorkspaceRowModel: the row's cells are the strings the table prints", () => {
+  const c = anWorkspaceRowModel(wsRow([], { cost: 1210, sessions: 1420, hostPct: 22, boxPct: 78, median: 1.92, cacheHit: 0.958 })).cells;
+  assert.deepEqual([c.name, c.path, c.cost, c.sessions, c.split, c.median, c.cache], ["acme", "/w/acme", "$1.2k", "1,420", "22% · 78%", "$1.92", "95.8%"]);
+  assert.equal(c.unmatched, false);
+  const none = anWorkspaceRowModel(wsRow([], { cost: 0, sessions: 1, hostPct: 0, boxPct: 0, median: null, cacheHit: null })).cells;
+  assert.deepEqual([none.split, none.median, none.cache], ["—", "—", "—"]);
+  const un = anWorkspaceRowModel(wsRow([], { unmatched: true, path: "unmatched · folder no longer known" })).cells;
+  assert.equal(un.unmatched, true);
+  assert.equal(un.path, "unmatched · folder no longer known");
+});
+
+test("anWorkspaceRowModel: a box child says 'clone · {path}' whenever its path is not the workspace's, whatever its via says", () => {
+  const m = anWorkspaceRowModel(wsRow([
+    kid(),
+    kid({ runtime: "box", label: "box · prd", via: "inplace", path: "/home/agent/acme-clone" }),
+    kid({ runtime: "box", label: "box · unnamed", via: "clone", path: "/w/acme" }),
+    kid({ label: "worktrees (2)", path: "/w/acme/.claude/worktrees/*" }),
+  ]));
+  assert.deepEqual(m.children.map((x) => [x.label, x.line, x.kind]), [
+    ["host", "/w/acme", "host"],
+    ["box · prd", "clone · /home/agent/acme-clone", "box"],
+    ["box · unnamed", "", "box"],
+    ["worktrees (2)", "/w/acme/.claude/worktrees/*", "other"],
+  ]);
+  const c = m.children[0];
+  assert.deepEqual([c.cost, c.sessions, c.median, c.cache], ["$1.00", "1", "$1.00", "50.0%"]);
+});
+
+test("anWorkspaceTiles: count, host / box share of the API value, the costliest workspace", () => {
+  const rows = [wsRow([], { name: "a", cost: 100, hostCost: 31, boxCost: 69 }), wsRow([], { name: "b", cost: 300, hostCost: 300, boxCost: 0 })];
+  const t = anWorkspaceTiles(rows);
+  assert.deepEqual(t.map((x) => x.label), ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace · b"]);
+  assert.deepEqual(t.map((x) => x.value), ["2", "83% · 17%", "$300"]);
+  const none = anWorkspaceTiles([]);
+  assert.deepEqual(none.map((x) => x.value), ["0", "—", "—"]);
+  assert.equal(none[2].label, "Costliest workspace");
+});
+
+const DRV = {
+  total: 5000, coveredTotal: 4000,
+  agent: [{ name: "general-purpose", costUsd: 3080 }],
+  skill: [{ name: "s:one", costUsd: 100 }],
+  plugin: [{ name: "culiops", costUsd: 61 }, { name: "superpowers", costUsd: 405 }],
+  mcp: [{ server: "claude-design", costUsd: 61, tools: [] }, { server: "playwright", costUsd: 323, tools: [{ name: "browser_close", costUsd: 57 }] }],
+};
+
+test("anDriverTiles: the share of API value that ran in subagents, the costliest plugin and the costliest MCP server", () => {
+  const t = anDriverTiles(DRV);
+  assert.deepEqual(t.map((x) => x.value), ["77%", "$405", "$323"]);
+  assert.deepEqual(t.map((x) => x.label), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · playwright"]);
+});
+
+test("anDriverTiles: a kind with no rows has a dash; with no covered value every tile is a dash and nothing is NaN", () => {
+  const t = anDriverTiles({ ...DRV, plugin: [] });
+  assert.equal(t[1].value, "—");
+  assert.equal(t[1].label, "Costliest plugin");
+  assert.deepEqual(anDriverTiles({ ...DRV, agent: [] }).map((x) => x.value), ["—", "$405", "$323"]);
+  const e = anDriverTiles({ total: 10, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] });
+  assert.deepEqual(e.map((x) => x.value), ["—", "—", "—"]);
+  assert.deepEqual(anDriverTiles(null).map((x) => x.value), ["—", "—", "—"]);
+  assert.ok(!JSON.stringify(e).includes("NaN"));
+});
+
+test("anDriverCards / anDriverTiles: the API's fold row (other: N more) counts in the sums but is no name: no bar, never the costliest", () => {
+  const resp = {
+    total: 100, coveredTotal: 100,
+    agent: [{ name: "Explore", costUsd: 10 }, { name: "other (60 more)", costUsd: 30, other: true }],
+    skill: [], plugin: [{ name: "superpowers", costUsd: 5 }, { name: "other (9 more)", costUsd: 20, other: true }],
+    mcp: [
+      { server: "docs", costUsd: 8, tools: [{ name: "search", costUsd: 3 }, { name: "other (4 more)", costUsd: 4, other: true }] },
+      { server: "other (7 more)", costUsd: 40, tools: [], other: true },
+    ],
+  };
+  const r = anDriverCards(resp);
+  const agent = r.cards[0], plugin = r.cards[2], mcp = r.cards[3];
+  assert.deepEqual(agent.rows.map((x) => [x.name, x.cost, x.muted, !!x.other]), [
+    ["Explore", 10, false, false], ["other (60 more)", 30, true, true], ["main agent (no subagent)", 60, true, false],
+  ]);
+  assert.equal(agent.max, 10, "the fold row sets no bar scale");
+  assert.equal(plugin.max, 5);
+  assert.deepEqual(mcp.rows.map((x) => [x.name, x.sub, x.muted]), [
+    ["docs", false, false], ["search", true, false], ["other (4 more)", true, true], ["other (7 more)", false, true],
+    ["outside any MCP tool", false, true],
+  ]);
+  assert.equal(mcp.rows[4].cost, 52, "the rest is covered minus every server row, fold included");
+  assert.equal(mcp.max, 8);
+  const t = anDriverTiles(resp);
+  assert.deepEqual(t.map((x) => x.value), ["40%", "$5.00", "$8.00"], "subagent share counts the fold; costliest skips it");
+  assert.deepEqual(t.map((x) => x.label), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · docs"]);
+});
+
+test("anCoverageText: whole percent floored (never 100 for 0.996), '<1' for a sliver, nothing at full or no coverage", () => {
+  assert.equal(anCoverageText(0.996), "Based on 99% of this window's API value: sessions whose transcripts are still on disk.");
+  assert.match(anCoverageText(0.5), /^Based on 50% of/);
+  assert.match(anCoverageText(0.29), /^Based on 29% of/, "0.29 * 100 is 28.999999999999996 in floating point");
+  assert.match(anCoverageText(0.0004), /^Based on <1% of/);
+  assert.match(anCoverageText(0.01), /^Based on 1% of/);
+  assert.equal(anCoverageText(null), "");
+  assert.equal(anCoverageText(1), "");
+  assert.equal(anCoverageText(0), "");
+});
+
+// The two page builders on a fake document.
+function anDraw(fn, data) {
+  const { ctx, doc } = anPage(true);
+  vm.runInContext("AN.data = " + JSON.stringify(data), ctx);
+  const root = new Node("div", doc);
+  ctx[fn](root);
+  return { ctx, doc, root };
+}
+const allNodes = (n, out = []) => { for (const c of n.children) { out.push(c); allNodes(c, out); } return out; };
+const trText = (tr) => tr.querySelectorAll("td").map((td) => td.textContent);
+
+const WS_PAGE = () => ({
+  models: ["opus", "haiku"],
+  workspaces: anWorkspaceRows(WS_RESP),
+});
+
+test("anWorkspacesPage: tiles, the seven columns, a row per workspace, the footnote", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  assert.deepEqual(root.querySelectorAll(".kpi-label").map((n) => n.textContent), ["Workspaces in this window", "Host · Box, share of API value", "Costliest workspace · acme"]);
+  assert.deepEqual(root.querySelectorAll("th").map((n) => n.textContent), AN_COPY.workspaces.columns);
+  assert.deepEqual(root.querySelectorAll("th").map((n) => n.className), ["", "num", "num", "", "", "num", "num"]);
+  assert.equal(root.querySelectorAll("tr").length - 1, 2, "acme and old (children are not drawn closed)");
+  assert.equal(root.querySelector(".an-foot").textContent, AN_COPY.workspaces.note);
+});
+
+test("anWorkspacesPage: the workspace cell is the name in mono with its path muted under it; an unmatched row is tagged and says why", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  const rows = root.querySelectorAll("tr").slice(1);
+  const a = rows[0], old = rows[1];
+  assert.equal(a.querySelector(".an-wname").textContent, "acme");
+  assert.ok(a.querySelector(".an-wname").className.includes("mono"));
+  assert.equal(a.querySelector(".an-wpath").textContent, "/home/u2/acme");
+  assert.equal(a.querySelector(".an-wtag"), null);
+  assert.equal(old.querySelector(".an-wname").textContent, "old");
+  assert.equal(old.querySelector(".an-wtag").textContent, "unmatched");
+  assert.equal(old.querySelector(".an-wpath").textContent, "unmatched · folder no longer known");
+  assert.deepEqual(trText(a).slice(1), ["$100", "4", "31% · 69%", "", "$25.00", "90.0%"]);
+});
+
+test("anWorkspacesPage: Host · Box and Model mix are mini bars: host --an-6 then box --an-1, models from the --an palette", () => {
+  const { root } = anDraw("anWorkspacesPage", WS_PAGE());
+  const a = root.querySelectorAll("tr")[1];
+  const [split, mix] = a.querySelectorAll(".an-mini");
+  assert.deepEqual(split.children.map((i) => [i.style.width, i.style.background]), [["31%", "var(--an-6)"], ["69%", "var(--an-1)"]]);
+  assert.deepEqual(mix.children.map((i) => i.style.width), ["75%", "25%"]);
+  assert.ok(mix.children.every((i) => /^var\(--an-[1-7]\)$/.test(i.style.background)), mix.children.map((i) => i.style.background).join());
+  // a row with no cost draws an empty track
+  const old = root.querySelectorAll("tr")[2];
+  assert.equal(old.querySelectorAll(".an-mini").every((m) => m.children.length === 0), true);
+});
+
+test("anWorkspacesPage: the expand button is aria-expanded with ▸/▾, child rows follow its row, focus stays on it, a second press closes", () => {
+  const { root, doc } = anDraw("anWorkspacesPage", WS_PAGE());
+  const btn = root.querySelector("button");
+  assert.equal(btn.getAttribute("aria-expanded"), "false");
+  assert.equal(btn.textContent, "▸");
+  assert.equal(root.querySelectorAll("button").length, 1, "only the row with two or more children has one");
+  btn.focus();
+  btn.click();
+  assert.equal(btn.getAttribute("aria-expanded"), "true");
+  assert.equal(btn.textContent, "▾");
+  assert.equal(doc.activeElement, btn);
+  const rows = root.querySelectorAll("tr");
+  assert.equal(rows.length, 1 + 1 + 2 + 1, "head, acme, its two children, old");
+  assert.ok(rows[2].className.includes("an-child") && rows[3].className.includes("an-child"));
+  assert.deepEqual(trText(rows[2]), ["host/home/u2/acme", "$31.00", "1", "", "", "$31.00", "90.0%"]);
+  assert.deepEqual(trText(rows[3]), ["box · workclone · /home/agent/acme", "$69.00", "3", "", "", "$19.00", "—"]);
+  assert.equal(rows[4].querySelector(".an-wname").textContent, "old");
+  btn.click();
+  assert.equal(btn.getAttribute("aria-expanded"), "false");
+  assert.equal(btn.textContent, "▸");
+  assert.equal(root.querySelectorAll("tr").length, 3);
+  assert.equal(doc.activeElement, btn);
+});
+
+test("anWorkspacesPage: names and paths are text, whatever they hold (a newline stays one text node, markup stays markup)", () => {
+  const resp = { workspaces: [{ workspace: "/p/<img src=x onerror=1>", name: "a\nb<b>x</b>", unmatched: false, costUsd: 5, sessions: 1, hostCost: 5, boxCost: 0, byModel: { m: 5 }, cacheRead: 0, cacheDenom: 0, sessionCosts: [5],
+    children: [{ runtime: "box", profile: "p\n<i>", via: "clone", label: "box · p\n<i>", path: "/c/<u>", costUsd: 2, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [2] }, { runtime: "host", profile: "", via: "", label: "host", path: "/p/<img src=x onerror=1>", costUsd: 3, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [3] }] }] };
+  const { root } = anDraw("anWorkspacesPage", { models: ["m"], workspaces: anWorkspaceRows(resp) });
+  root.querySelector("button").click();
+  const nm = root.querySelector(".an-wname");
+  assert.equal(nm.textContent, "a\nb<b>x</b>");
+  assert.equal(nm.children.length, 0, "one text value, no child elements");
+  assert.equal(root.querySelector(".an-wpath").textContent, "/p/<img src=x onerror=1>");
+  assert.equal(allNodes(root).filter((n) => ["img", "b", "u"].includes(n.tag)).length, 0);
+  const child = root.querySelectorAll(".an-child")[0];
+  assert.equal(child.querySelector(".chip").textContent, "box · p\n<i>");
+  assert.equal(child.querySelector(".an-wpath").textContent, "clone · /c/<u>");
+});
+
+test("the Workspaces and Cost drivers builders never use innerHTML", () => {
+  const src = readStatic("analytics.js");
+  for (const fn of ["anWorkspacesPage", "anDriversPage", "anDriverRow", "anWsChildRow"]) {
+    const at = src.indexOf("function " + fn);
+    assert.ok(at >= 0, fn);
+    const end = src.indexOf("\n}\n", at);
+    assert.ok(!/innerHTML|insertAdjacentHTML/.test(src.slice(at, end)), fn);
+  }
+});
+
+const DRV_PAGE = (resp) => ({ drivers: anDriverCards(resp), driverTiles: anDriverTiles(resp) });
+
+test("anDriversPage: three tiles, four cards in order with their captions, the footnote; no coverage line at full coverage", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 }));
+  assert.deepEqual(root.querySelectorAll(".kpi-label").map((n) => n.textContent), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · playwright"]);
+  assert.deepEqual(root.querySelectorAll(".kpi-value").map((n) => n.textContent), ["77%", "$405", "$323"]);
+  assert.equal(root.querySelector(".an-cov"), null);
+  assert.deepEqual(root.querySelectorAll(".an-card h2").map((n) => n.textContent), ["Subagents", "Skills", "Plugins", "MCP"]);
+  assert.deepEqual(root.querySelectorAll(".an-card .card-head .muted").map((n) => n.textContent), ["main agent vs subagents", "server → its tools"]);
+  assert.equal(root.querySelectorAll(".an-dgrid .an-card").length, 4);
+  assert.equal(root.querySelector(".an-foot").textContent, AN_COPY.drivers.note);
+});
+
+test("anDriversPage: under 100% coverage one muted line says so, floored (0.996 is 99%)", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 / 0.996 }));
+  assert.equal(root.querySelector(".an-cov").textContent, "Based on 99% of this window's API value: sessions whose transcripts are still on disk.");
+  const { root: r2 } = anDraw("anDriversPage", DRV_PAGE({ ...DRV, total: 4000 / 0.4 }));
+  assert.match(r2.querySelector(".an-cov").textContent, /^Based on 40% of/);
+});
+
+test("anDriversPage: rows are name · bar · value · %; the muted last row has no bar fill; MCP tool rows are indented", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE(DRV));
+  const cards = root.querySelectorAll(".an-dgrid .an-card");
+  const agent = cards[0].querySelectorAll(".an-hrow");
+  assert.equal(agent.length, 2);
+  assert.deepEqual(agent[0].children.map((c) => c.textContent), ["general-purpose", "", "$3.1k", "77%"]);
+  assert.equal(agent[0].querySelectorAll(".meter i").length, 1);
+  assert.equal(agent[0].querySelector(".meter i").style.width, "100%");
+  assert.deepEqual(agent[1].children.map((c) => c.textContent), ["main agent (no subagent)", "", "$920", "23%"]);
+  assert.equal(agent[1].querySelectorAll(".meter i").length, 0);
+  assert.ok(agent[1].className.includes("an-mut"));
+  const mcp = cards[3].querySelectorAll(".an-hrow");
+  assert.deepEqual(mcp.map((r) => r.children[0].textContent), ["claude-design", "playwright", "browser_close", "outside any MCP tool"]);
+  assert.deepEqual(mcp.map((r) => r.className.includes("an-sub")), [false, false, true, false]);
+  assert.equal(mcp[1].querySelector(".meter i").style.width, "100%");
+  assert.equal(mcp[0].querySelector(".meter i").style.width.slice(0, 4), "18.8");
+});
+
+test("anDriversPage: a card with only its muted row draws no bar and divides by nothing", () => {
+  const { root } = anDraw("anDriversPage", DRV_PAGE({ total: 10, coveredTotal: 10, agent: [], skill: [], plugin: [], mcp: [] }));
+  const nodes = allNodes(root);
+  assert.equal(nodes.filter((n) => n.tag === "i").length, 0);
+  assert.ok(!nodes.some((n) => /NaN|Infinity/.test(JSON.stringify(n.style) + n.textContent)));
+  assert.deepEqual(root.querySelectorAll(".kpi-value").map((n) => n.textContent), ["—", "—", "—"]);
+});
+
+test("anDriversPage: names are text, a newline stays one text node", () => {
+  const resp = { total: 10, coveredTotal: 10, agent: [{ name: "a\nb<b>", costUsd: 4 }], skill: [], plugin: [], mcp: [{ server: "s<i>", costUsd: 1, tools: [{ name: "t\n<u>", costUsd: 1 }] }] };
+  const { root } = anDraw("anDriversPage", DRV_PAGE(resp));
+  const names = root.querySelectorAll(".an-hrow").map((r) => r.children[0]);
+  assert.ok(names.some((n) => n.textContent === "a\nb<b>" && n.children.length === 0));
+  assert.ok(names.some((n) => n.textContent === "t\n<u>" && n.children.length === 0));
+  assert.equal(allNodes(root).filter((n) => ["b", "u"].includes(n.tag)).length, 0);
+});
+
+test("anDriversPage: no covered value shows the empty-state sentence and no tiles, bars or percentages", () => {
+  const resp = { total: 10, coveredTotal: 0, agent: [], skill: [], plugin: [], mcp: [] };
+  const { root } = anDraw("anDriversPage", DRV_PAGE(resp));
+  assert.equal(root.querySelector(".an-empty").textContent, AN_COPY.drivers.empty);
+  assert.equal(root.querySelector(".kpi-row"), null);
+  assert.equal(root.querySelector(".an-card"), null);
+  assert.ok(!/NaN|0%/.test(root.textContent));
+});
+
+test("anCoverageText: one ulp short of full coverage still says 99%, never 100%", () => {
+  assert.match(anCoverageText(1 - Number.EPSILON), /^Based on 99% of/);
+  assert.match(anCoverageText(0.9999999999999998), /^Based on 99% of/);
+  assert.match(anCoverageText(0.999999999), /^Based on 99% of/);
+});
+
+test("anWorkspaceRowModel: an unmatched workspace's box child is compared with the real path, not the 'unmatched' sentence", () => {
+  const row = anWorkspaceRows({ workspaces: [{
+    workspace: "/gone/acme", name: "acme", unmatched: true, costUsd: 2, sessions: 2, hostCost: 0, boxCost: 2, byModel: {}, cacheRead: 0, cacheDenom: 0, sessionCosts: [1, 1],
+    children: [
+      { runtime: "box", profile: "p", via: "inplace", label: "box · p", path: "/gone/acme", costUsd: 1, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [1] },
+      { runtime: "box", profile: "q", via: "clone", label: "box · q", path: "/clone/acme", costUsd: 1, sessions: 1, cacheRead: 0, cacheDenom: 0, sessionCosts: [1] },
+    ] }] })[0];
+  assert.equal(row.path, "unmatched · folder no longer known");
+  assert.deepEqual(anWorkspaceRowModel(row).children.map((c) => c.line), ["", "clone · /clone/acme"]);
 });

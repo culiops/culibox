@@ -71,7 +71,7 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 	}
 	transcript := e.legacy + "/boxstate/b/.claude/projects/p/a.jsonl"
 	p := &analytics.Parsed{Tokens: map[analytics.TokKey]*analytics.Tok{}, Attrs: map[analytics.AttrKey]int64{}}
-	if err := st.Apply("S1", "proj", transcript, p, 10, 10, 1, nil); err != nil {
+	if err := st.Apply("S1", "proj", transcript, analytics.RootInfo{}, p, true, 10, 10, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
@@ -101,10 +101,10 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 	}
 	defer st.Close()
 	moved := strings.Replace(transcript, e.legacy, e.newRoot, 1)
-	if _, _, ok, _, err := st.State(moved); err != nil || !ok {
+	if _, _, ok, _, _, err := st.State(moved); err != nil || !ok {
 		t.Errorf("analytics ingest row not rewritten to %s: ok=%v err=%v", moved, ok, err)
 	}
-	if _, _, ok, _, err := st.State(transcript); err != nil || !ok {
+	if _, _, ok, _, _, err := st.State(transcript); err != nil || !ok {
 		t.Errorf("legacy analytics ingest row dropped (R12 copies): ok=%v err=%v", ok, err)
 	}
 	// A second start has nothing to move.
@@ -606,7 +606,7 @@ func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
 		defer st.Close()
 		tr := e.legacy + "/boxstate/b/.claude/projects/p/a.jsonl"
 		p := &analytics.Parsed{Tokens: map[analytics.TokKey]*analytics.Tok{}, Attrs: map[analytics.AttrKey]int64{}}
-		if err := st.Apply("S1", "proj", tr, p, 10, 10, 1, nil); err != nil {
+		if err := st.Apply("S1", "proj", tr, analytics.RootInfo{}, p, true, 10, 10, 1, nil); err != nil {
 			t.Fatal(err)
 		}
 		return tr
@@ -635,7 +635,7 @@ func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer st.Close()
-		_, _, ok, _, err := st.State(path)
+		_, _, ok, _, _, err := st.State(path)
 		if err != nil {
 			t.Fatal(err)
 		}

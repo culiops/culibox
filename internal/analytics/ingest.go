@@ -39,6 +39,18 @@ func stemSessionID(path string) string {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl")
 }
 
+// infoOf is where a transcript path ran, from the root it sits under; a nil
+// classifier, or a path under no known root, gives the zero RootInfo.
+func infoOf(cl classifier, path string) RootInfo {
+	if cl == nil {
+		return RootInfo{}
+	}
+	if info, _, ok := cl(path); ok {
+		return info
+	}
+	return RootInfo{}
+}
+
 // ingestFile reads the new bytes of one transcript (from the recorded offset to
 // EOF) and applies the resulting rollup deltas. Incremental and idempotent:
 //   - size == offset  → nothing new, no-op.
@@ -47,8 +59,8 @@ func stemSessionID(path string) string {
 //     append-only transcripts). Rollups are additive with no path dimension to
 //     reverse, so re-reading from 0 would DOUBLE-count. Instead clamp the offset
 //     down to the new size and do not re-add; log it so a real rotation is visible.
-func ingestFile(s *Store, path, project string, st *IngestStats) error {
-	return ingestOpened(s, path, project, st, 0, func() (*os.File, error) {
+func ingestFile(s *Store, path, project string, info RootInfo, st *IngestStats) error {
+	return ingestOpened(s, path, project, info, st, 0, func() (*os.File, error) {
 		return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	})
 }
@@ -66,7 +78,7 @@ var boxMaxReadPerPass int64 = 1 << 30
 // ingestOpened is ingestFile with the open supplied by the caller, so a box
 // tree can be opened through an os.Root. path is only the store key and log
 // label; it is never opened here. maxRead > 0 caps the bytes read this pass.
-func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64, open func() (*os.File, error)) error {
+func ingestOpened(s *Store, path, project string, info RootInfo, st *IngestStats, maxRead int64, open func() (*os.File, error)) error {
 	// Open first, then decide from the fd: roots may include box-written trees,
 	// so a FIFO must not block the open and a symlink must not redirect it.
 	// Size and mtime come from the opened fd, never from a separate path stat.
@@ -84,16 +96,24 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	}
 	size, mtime := fi.Size(), fi.ModTime().Unix()
 
-	_, offset, _, seen, err := s.State(path)
+	_, offset, known, seen, backfilled, err := s.State(path)
 	if err != nil {
 		return err
+	}
+	// A file counted before schema v3 has no session or driver data for the
+	// bytes already read. Parse them once, with a fresh dedupe, and store only
+	// the dims and drivers: session_rollup must not see these bytes again.
+	if known && !backfilled && offset > 0 {
+		if err := backfillOpened(s, f, path, project, info, size, offset, maxRead); err != nil {
+			return err
+		}
 	}
 	if size == offset {
 		return nil
 	}
 	if size < offset {
 		log.Printf("analytics: %q shrank (%d < %d); clamping offset, not re-ingesting", path, size, offset)
-		return s.Apply("", project, path, newParsed(), size, size, mtime, seen)
+		return s.Apply("", project, path, info, newParsed(), false, size, size, mtime, seen)
 	}
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
@@ -117,13 +137,35 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	if consumed > 0 { // a size bump that was only a partial trailing line isn't a "file ingested"
 		st.Files++
 	}
-	return s.Apply(sessionID, project, path, parsed, size, offset+consumed, mtime, seen)
+	return s.Apply(sessionID, project, path, info, parsed, offset == 0, size, offset+consumed, mtime, seen)
+}
+
+// backfillOpened parses the bytes of the already-open file that an earlier
+// version counted, [0, min(offset, size, cap)), and stores their session dims and
+// cost drivers. Box files are read through the same opened descriptor, never by
+// path. It leaves the file position at 0: the caller seeks before it reads on.
+func backfillOpened(s *Store, f *os.File, path, project string, info RootInfo, size, offset, maxRead int64) error {
+	n := min(offset, size)
+	if maxRead > 0 {
+		n = min(n, maxRead)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	p, sessionID, _, _, _, err := parseTranscript(io.LimitReader(f, n), nil)
+	if err != nil {
+		return err
+	}
+	if sessionID == "" {
+		sessionID = stemSessionID(path)
+	}
+	return s.ApplyBackfill(sessionID, project, path, info, p)
 }
 
 // ingestRoot walks one root recursively and ingests every *.jsonl under a slug
 // dir. Errors on individual files are counted and logged, never fatal — one
 // unreadable transcript must not stop the pass.
-func ingestRoot(s *Store, root string, st *IngestStats) {
+func ingestRoot(s *Store, root string, cl classifier, st *IngestStats) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			st.Errors++
@@ -141,7 +183,7 @@ func ingestRoot(s *Store, root string, st *IngestStats) {
 			return nil // a jsonl directly in the root, not under a project slug
 		}
 		st.Scanned++
-		if err := ingestFile(s, path, project, st); err != nil {
+		if err := ingestFile(s, path, project, infoOf(cl, path), st); err != nil {
 			st.Errors++
 			log.Printf("analytics: ingest %q: %q", path, err.Error())
 		}
@@ -159,7 +201,7 @@ func ingestRoot(s *Store, root string, st *IngestStats) {
 // path keys and double-count them). Each file is opened through the root with
 // O_NOFOLLOW|O_NONBLOCK and then fstat'd, like ingestFile. The store key stays
 // the plain absolute path, so existing offsets remain valid.
-func ingestBoxRoot(s *Store, boxStateDir, root string, st *IngestStats) {
+func ingestBoxRoot(s *Store, boxStateDir, root string, cl classifier, st *IngestStats) {
 	rel, err := filepath.Rel(boxStateDir, root)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return
@@ -209,7 +251,7 @@ func ingestBoxRoot(s *Store, boxStateDir, root string, st *IngestStats) {
 		}
 		path := filepath.Join(boxDir, filepath.FromSlash(p))
 		st.Scanned++
-		err = ingestOpened(s, path, project, st, boxMaxReadPerPass, func() (*os.File, error) {
+		err = ingestOpened(s, path, project, infoOf(cl, path), st, boxMaxReadPerPass, func() (*os.File, error) {
 			// os.Root follows a symlink that stays inside the root even with
 			// O_NOFOLLOW, so the final component is checked explicitly.
 			if fi, lerr := br.Lstat(p); lerr != nil || fi.Mode()&os.ModeSymlink != 0 {

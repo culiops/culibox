@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -736,5 +737,36 @@ func TestConcurrentNotesPersistTheWholeHistory(t *testing.T) {
 	if len(ids) != 40 || !complete || !slices.Equal(md.ClaudeSessionIDs, ids) || !md.CostComplete || md.ClaudeSessionID != claudeSIDOf(s) {
 		t.Fatalf("sidecar diverged: mem %d ids complete=%v, disk %d ids complete=%v sid=%q/%q",
 			len(ids), complete, len(md.ClaudeSessionIDs), md.CostComplete, md.ClaudeSessionID, claudeSIDOf(s))
+	}
+}
+
+func TestAgentSessionIndex(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sleep", "30"}, bin: "/usr/bin/claude"}
+	m, _ := newCtlManager(t, l)
+	spawn := func() *Session {
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+		return s
+	}
+	a, b, gone := spawn(), spawn(), spawn()
+	m.noteClaudeSessionID(a, a.ID, "aaaa-1")
+	m.noteClaudeSessionID(a, a.ID, "aaaa-2") // a /clear: both belong to a
+	m.noteClaudeSessionID(b, b.ID, "bbbb-1")
+	m.noteClaudeSessionID(gone, gone.ID, "gone-1")
+	gone.mu.Lock()
+	gone.status, gone.exited = statusExited, true
+	gone.mu.Unlock()
+
+	got := m.AgentSessionIndex()
+	want := map[string]string{"aaaa-1": a.ID, "aaaa-2": a.ID, "bbbb-1": b.ID}
+	if !maps.Equal(got, want) {
+		t.Fatalf("AgentSessionIndex() = %v, want %v (the exited session must be absent)", got, want)
+	}
+	got["zzz"] = "x"
+	if _, ok := m.AgentSessionIndex()["zzz"]; ok {
+		t.Fatal("the index must be a fresh map each call")
 	}
 }

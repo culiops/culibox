@@ -218,6 +218,9 @@ type Server struct {
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
 	Analytics *analytics.Service
+	// AgentIndex maps an agent conversation id to the culibox session that holds
+	// it live, so a top-sessions row can open that session. Nil → no row links.
+	AgentIndex AgentSessionIndexer
 
 	// Audit reads audit.db for the Audit page. Nil → the feature is off: no
 	// routes registered, "audit": false in /api/meta. AuditRetentionDays is the
@@ -448,6 +451,9 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/analytics/sessions", s.handleAnalyticsSessions)
 		protected.HandleFunc("/api/analytics/session-costs", s.handleAnalyticsSessionCosts)
 		protected.HandleFunc("/api/analytics/tools", s.handleAnalyticsTools)
+		protected.HandleFunc("/api/analytics/workspaces", s.handleAnalyticsWorkspaces)
+		protected.HandleFunc("/api/analytics/drivers", s.handleAnalyticsDrivers)
+		protected.HandleFunc("/api/analytics/where", s.handleAnalyticsWhere)
 		protected.HandleFunc("/api/analytics/ingest", s.handleAnalyticsIngest)
 	}
 

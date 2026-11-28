@@ -35,6 +35,7 @@ type Store struct {
 type fileState struct {
 	size, offset int64
 	seen         string // space-joined message ids, as stored
+	backfilled   bool   // driver and dim data cover every byte before offset
 }
 
 const schema = `
@@ -43,7 +44,8 @@ CREATE TABLE IF NOT EXISTS ingest_state (
   size INTEGER NOT NULL,
   read_offset INTEGER NOT NULL,
   mtime INTEGER NOT NULL,
-  seen_ids TEXT NOT NULL DEFAULT ''
+  seen_ids TEXT NOT NULL DEFAULT '',
+  backfilled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS session_rollup (
   day TEXT NOT NULL,
@@ -70,6 +72,39 @@ CREATE TABLE IF NOT EXISTS attribution_rollup (
 );
 CREATE INDEX IF NOT EXISTS idx_session_day ON session_rollup(day);
 CREATE INDEX IF NOT EXISTS idx_attr_day ON attribution_rollup(day);
+` + schemaV3Tables
+
+// schemaV3Tables are the tables schema version 3 adds. They are a separate
+// constant because the v2 -> v3 migration runs them alone, on top of a DB whose
+// other tables must stay exactly as they are.
+const schemaV3Tables = `
+CREATE TABLE IF NOT EXISTS session_dim (
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  cwd        TEXT NOT NULL DEFAULT '',
+  branch     TEXT NOT NULL DEFAULT '',
+  runtime    TEXT NOT NULL DEFAULT '',
+  account    TEXT NOT NULL DEFAULT '',
+  root_key   TEXT NOT NULL DEFAULT '',
+  workspace  TEXT NOT NULL DEFAULT '',
+  unmatched  INTEGER NOT NULL DEFAULT 0,
+  profile    TEXT NOT NULL DEFAULT '',
+  via        TEXT NOT NULL DEFAULT '',
+  via_path   TEXT NOT NULL DEFAULT '',
+  parsed     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, project)
+);
+CREATE TABLE IF NOT EXISTS driver_rollup (
+  day TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  parent TEXT NOT NULL DEFAULT '',
+  cost_usd REAL NOT NULL DEFAULT 0,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, session_id, project, kind, name, parent)
+);
 `
 
 // Open opens (creating if needed) the analytics DB at path and ensures the schema.
@@ -97,23 +132,40 @@ func Open(path string) (*Store, error) {
 // schemaVersion is the PRAGMA user_version this code writes. Version 2 stores the
 // per-message cost and the 1h cache-write split, and counts each message once;
 // rollups written before that (version 0) are ~2x inflated and are rebuilt.
-const schemaVersion = 2
+// Version 3 adds session_dim, driver_rollup and ingest_state.backfilled and keeps
+// every existing row.
+const schemaVersion = 3
 
-// migrate brings a DB to schemaVersion. A DB from before v2 is not converted: its
-// numbers are wrong, so the analytics tables are dropped and the next ingest pass
-// rebuilds them from the transcripts on disk (ingest_state is empty, so every
-// transcript is read from offset 0). The old DB is first copied to
-// <path>.pre-dedupe.bak through SQLite (VACUUM INTO — a consistent snapshot that
-// includes the WAL, safe while the DB is live). The backup is made once and never
-// overwritten. If it cannot be made, nothing is dropped and the error is returned.
+// migrate brings a DB to schemaVersion.
+//
+// A DB from before v2 is not converted: its numbers are wrong, so the analytics
+// tables are dropped and the next ingest pass rebuilds them from the transcripts
+// on disk (ingest_state is empty, so every transcript is read from offset 0). The
+// old DB is first copied to <path>.pre-dedupe.bak through SQLite (VACUUM INTO — a
+// consistent snapshot that includes the WAL, safe while the DB is live). The
+// backup is made once and never overwritten. If it cannot be made, nothing is
+// dropped and the error is returned. That path creates the current (v3) schema.
+//
+// A v2 DB is only added to: its session_rollup history may outlive the
+// transcripts it came from, so nothing is dropped or rewritten (migrateV2ToV3).
 func migrate(db *sql.DB, path string) error {
 	var version int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
-	if version >= schemaVersion {
+	switch {
+	case version >= schemaVersion:
 		return nil
+	case version < 2:
+		return migrateRebuild(db, path)
+	default:
+		return migrateV2ToV3(db, path)
 	}
+}
+
+// migrateRebuild is the pre-v2 path: back up, drop the analytics tables, create
+// the current schema. A brand-new DB takes it too, with nothing to back up or drop.
+func migrateRebuild(db *sql.DB, path string) error {
 	var existing int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('ingest_state','session_rollup','attribution_rollup')`).Scan(&existing); err != nil {
 		return fmt.Errorf("inspect schema: %w", err)
@@ -148,6 +200,41 @@ func migrate(db *sql.DB, path string) error {
 	if rebuilt {
 		log.Printf("analytics: schema v2 — rebuilt rollups from transcripts (backup %s)", path+".pre-dedupe.bak")
 	}
+	return nil
+}
+
+// migrateV2ToV3 adds session_dim, driver_rollup and ingest_state.backfilled and
+// sets user_version = 3, in one transaction, after a one-time backup to
+// <path>.pre-v3.bak. Nothing is dropped; existing rows get backfilled = 0.
+func migrateV2ToV3(db *sql.DB, path string) error {
+	bak := path + ".pre-v3.bak"
+	if err := backupOnce(db, bak); err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(schemaV3Tables); err != nil {
+		return fmt.Errorf("schema v3 tables: %w", err)
+	}
+	var has int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ingest_state') WHERE name='backfilled'`).Scan(&has); err != nil {
+		return fmt.Errorf("inspect ingest_state: %w", err)
+	}
+	if has == 0 {
+		if _, err := tx.Exec(`ALTER TABLE ingest_state ADD COLUMN backfilled INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add ingest_state.backfilled: %w", err)
+		}
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("analytics: schema v3 — added session and cost-driver tables, kept all rows (backup %s)", bak)
 	return nil
 }
 
@@ -246,9 +333,11 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 		return 0, err
 	}
 	var n int64
+	carried := make(map[string]fileState, len(from))
 	for _, p := range from {
-		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids)
-SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
+		to := newRoot + p[len(oldRoot):]
+		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids,backfilled)
+SELECT ?,size,read_offset,mtime,seen_ids,backfilled FROM ingest_state WHERE path=?`, to, p)
 		if err != nil {
 			return 0, fmt.Errorf("analytics: copy %q: %w", p, err)
 		}
@@ -257,10 +346,34 @@ SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoo
 			return 0, err
 		}
 		n += k
+		var fs fileState
+		var bf int
+		if err := tx.QueryRow(`SELECT size, read_offset, seen_ids, backfilled FROM ingest_state WHERE path=?`, to).
+			Scan(&fs.size, &fs.offset, &fs.seen, &bf); err != nil {
+			return 0, fmt.Errorf("analytics: read copy %q: %w", to, err)
+		}
+		fs.backfilled = bf != 0
+		carried[to] = fs
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	// A pass may be running (adoption does not wait for it, see
+	// Service.CarryOffsets). Its cache was loaded before these rows existed, so
+	// without them it would read each moved transcript from 0 when it reaches
+	// the new path and count it again. A key the cache already has is newer
+	// than this copy (Apply wrote it) and is kept. Accepted: a pass whose
+	// beginPass read the table before this commit but installed its cache after
+	// it misses the copy (the window is the cache load itself).
+	s.stMu.Lock()
+	if s.states != nil {
+		for to, fs := range carried {
+			if _, ok := s.states[to]; !ok {
+				s.states[to] = fs
+			}
+		}
+	}
+	s.stMu.Unlock()
 	return int(n), nil
 }
 
@@ -276,29 +389,32 @@ const rewritePrefixQuery = `SELECT path FROM ingest_state WHERE path = ? OR (pat
 
 func underRoot(root string) []any { return []any{root, root + "/", root + "0"} }
 
-// State returns the recorded size and read offset for a transcript path, and the
+// State returns the recorded size and read offset for a transcript path, the
 // message ids already counted near that offset (oldest first), which let a
-// message split across two ingest batches be counted once.
-func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, err error) {
+// message split across two ingest batches be counted once, and whether the
+// session and cost-driver data already cover every byte before the offset
+// (backfilled; false for a file counted before schema v3).
+func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, backfilled bool, err error) {
 	s.stMu.Lock()
 	if s.states != nil {
 		st, found := s.states[path]
 		s.stMu.Unlock()
 		if !found {
-			return 0, 0, false, nil, nil
+			return 0, 0, false, nil, false, nil
 		}
-		return st.size, st.offset, true, strings.Fields(st.seen), nil
+		return st.size, st.offset, true, strings.Fields(st.seen), st.backfilled, nil
 	}
 	s.stMu.Unlock()
 	var ids string
-	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids FROM ingest_state WHERE path=?`, path)
-	switch err = row.Scan(&size, &offset, &ids); err {
+	var bf int
+	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids, backfilled FROM ingest_state WHERE path=?`, path)
+	switch err = row.Scan(&size, &offset, &ids, &bf); err {
 	case nil:
-		return size, offset, true, strings.Fields(ids), nil
+		return size, offset, true, strings.Fields(ids), bf != 0, nil
 	case sql.ErrNoRows:
-		return 0, 0, false, nil, nil
+		return 0, 0, false, nil, false, nil
 	default:
-		return 0, 0, false, nil, err
+		return 0, 0, false, nil, false, err
 	}
 }
 
@@ -306,7 +422,7 @@ func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, 
 // until endPass. Passes are serialized by Service.mu, so nothing else writes
 // ingest_state meanwhile. On error State keeps querying the DB.
 func (s *Store) beginPass() {
-	rows, err := s.db.Query(`SELECT path, size, read_offset, seen_ids FROM ingest_state`)
+	rows, err := s.db.Query(`SELECT path, size, read_offset, seen_ids, backfilled FROM ingest_state`)
 	if err != nil {
 		return
 	}
@@ -315,9 +431,11 @@ func (s *Store) beginPass() {
 	for rows.Next() {
 		var p string
 		var fs fileState
-		if rows.Scan(&p, &fs.size, &fs.offset, &fs.seen) != nil {
+		var bf int
+		if rows.Scan(&p, &fs.size, &fs.offset, &fs.seen, &bf) != nil {
 			return
 		}
+		fs.backfilled = bf != 0
 		m[p] = fs
 	}
 	if rows.Err() != nil {
@@ -337,7 +455,12 @@ func (s *Store) endPass() {
 // Apply writes one transcript batch's rollup deltas AND the new ingest_state row
 // in a single transaction, so a crash can never advance the offset without the
 // matching rows (or vice versa). session_id and project tag every delta row.
-func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64, seen []string) error {
+//
+// It also records the session's dims (folder, branch, where it ran: info comes
+// from the ingest root) and adds the cost-driver deltas. fromZero says this read
+// started at offset 0: it parsed the whole file, drivers included, so the row is
+// marked backfilled; any other row keeps the mark it has.
+func (s *Store) Apply(sessionID, project, path string, info RootInfo, p *Parsed, fromZero bool, size, offset, mtime int64, seen []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -373,11 +496,29 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 		}
 	}
 
+	if err := applyDimAndDrivers(tx, sessionID, project, path, info, p); err != nil {
+		return err
+	}
+
+	// Where this read started decides the mark: from 0 the parse saw every
+	// byte, so drivers are complete; else keep what the row has. The row's
+	// stored offset cannot tell: a row carried to this path while the pass ran
+	// holds the old path's offset although this read began at 0.
+	backfilled := fromZero
+	var oldBF int
+	switch err := tx.QueryRow(`SELECT backfilled FROM ingest_state WHERE path=?`, path).Scan(&oldBF); err {
+	case nil:
+		backfilled = fromZero || oldBF != 0
+	case sql.ErrNoRows:
+	default:
+		return fmt.Errorf("state read: %w", err)
+	}
+
 	const upsertState = `
-INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES(?,?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids`
+INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids,backfilled) VALUES(?,?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids, backfilled=excluded.backfilled`
 	// seen ids are whitespace-free by construction (safeMsgID), so Join/Fields round-trips.
-	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " ")); err != nil {
+	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " "), boolInt(backfilled)); err != nil {
 		return fmt.Errorf("state upsert: %w", err)
 	}
 
@@ -386,10 +527,234 @@ ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_of
 	}
 	s.stMu.Lock()
 	if s.states != nil {
-		s.states[path] = fileState{size: size, offset: offset, seen: strings.Join(seen, " ")}
+		s.states[path] = fileState{size: size, offset: offset, seen: strings.Join(seen, " "), backfilled: backfilled}
 	}
 	s.stMu.Unlock()
 	return nil
+}
+
+// ApplyBackfill adds the session dims and cost-driver deltas of a file's bytes
+// that were counted before schema v3 (parsed with a fresh dedupe by the caller)
+// and marks the file backfilled, in one transaction. It never writes
+// session_rollup or attribution_rollup, and never moves the read offset, so it
+// cannot change a total.
+func (s *Store) ApplyBackfill(sessionID, project, path string, info RootInfo, p *Parsed) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if err := applyDimAndDrivers(tx, sessionID, project, path, info, p); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE ingest_state SET backfilled=1 WHERE path=?`, path); err != nil {
+		return fmt.Errorf("backfill mark: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.stMu.Lock()
+	if s.states != nil {
+		if st, ok := s.states[path]; ok {
+			st.backfilled = true
+			s.states[path] = st
+		}
+	}
+	s.stMu.Unlock()
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// applyDimAndDrivers upserts a session's dims and adds its driver deltas. An
+// empty session id (a clamp of a shrunken file, which parsed nothing) writes
+// nothing. cwd keeps the first value, branch is replaced only by a non-empty
+// one, and runtime, account and root_key follow the ingest root. A legacy
+// parsed = 0 row becomes parsed = 1. A subagent transcript never sets cwd: its
+// folder can differ from the launch folder, and the walk reads <sid>/subagents/
+// before <sid>.jsonl, so only the session's main file may set it. workspace, unmatched, profile, via and
+// via_path are resolved elsewhere and never touched here.
+func applyDimAndDrivers(tx *sql.Tx, sessionID, project, path string, info RootInfo, p *Parsed) error {
+	if sessionID == "" {
+		return nil
+	}
+	const upsertDim = `
+INSERT INTO session_dim(session_id,project,cwd,branch,runtime,account,root_key,parsed)
+VALUES(?,?,?,?,?,?,?,1)
+ON CONFLICT(session_id,project) DO UPDATE SET
+  parsed=1,
+  cwd=CASE WHEN session_dim.cwd='' THEN excluded.cwd ELSE session_dim.cwd END,
+  branch=CASE WHEN excluded.branch<>'' THEN excluded.branch ELSE session_dim.branch END,
+  runtime=excluded.runtime, account=excluded.account, root_key=excluded.root_key`
+	cwd := p.Cwd
+	if isSubagentPath(path) {
+		cwd = ""
+	}
+	if _, err := tx.Exec(upsertDim, sessionID, project, cwd, p.Branch, info.Runtime, info.Account, info.Key); err != nil {
+		return fmt.Errorf("dim upsert: %w", err)
+	}
+	const upsertDriver = `
+INSERT INTO driver_rollup(day,session_id,project,kind,name,parent,cost_usd,tokens)
+VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(day,session_id,project,kind,name,parent) DO UPDATE SET
+  cost_usd=cost_usd+excluded.cost_usd,
+  tokens=tokens+excluded.tokens`
+	for k, v := range p.Drivers {
+		if _, err := tx.Exec(upsertDriver, k.Day, sessionID, project, k.Kind, k.Name, k.Parent, v.Cost, v.Tokens); err != nil {
+			return fmt.Errorf("driver upsert: %w", err)
+		}
+	}
+	return nil
+}
+
+// SeedLegacyDims gives every session counted before schema v3 a session_dim row
+// with parsed = 0, derived from its ingest_state path alone: the project and
+// session id from the path's tail, runtime/account/key from the root classify
+// finds. A path under no known root still gets a row, with runtime ”. A row
+// that exists is left as it is, except that a parsed = 0 row with no runtime
+// takes the runtime, account and key of a later path of the same session under
+// a known root. It returns how many rows it inserted or so completed; a second
+// call changes none.
+func (s *Store) SeedLegacyDims(classify func(path string) (RootInfo, string, bool)) (int, error) {
+	rows, err := s.db.Query(`SELECT path FROM ingest_state ORDER BY path`)
+	if err != nil {
+		return 0, err
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	n := 0
+	for _, path := range paths {
+		var info RootInfo
+		rel := ""
+		if classify != nil {
+			var ok bool
+			if info, rel, ok = classify(path); !ok {
+				info, rel = RootInfo{}, ""
+			}
+		}
+		if rel == "" {
+			rel = tailRel(path)
+		}
+		sid, project, ok := legacyKeyFromRel(rel)
+		if !ok {
+			continue
+		}
+		// A row seeded with no runtime (a path under no known root, e.g. the
+		// old root of a data-root move, which sorts first) takes the runtime of
+		// a later path of the same session that has one. Nothing else changes.
+		res, err := tx.Exec(`INSERT INTO session_dim(session_id,project,runtime,account,root_key,parsed) VALUES(?,?,?,?,?,0)
+ON CONFLICT(session_id,project) DO UPDATE SET runtime=excluded.runtime, account=excluded.account, root_key=excluded.root_key
+WHERE session_dim.parsed=0 AND session_dim.runtime='' AND excluded.runtime<>''`,
+			sid, project, info.Runtime, info.Account, info.Key)
+		if err != nil {
+			return 0, fmt.Errorf("seed dim: %w", err)
+		}
+		k, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		n += int(k)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// DimRow is a session_dim row waiting for its workspace: the key and what
+// Resolve reads.
+type DimRow struct {
+	SessionID, Project string
+	DimIn
+}
+
+// PendingDims is every session with no workspace yet (an empty one), one no
+// workspace explained (unmatched = 1), and one filed by its slug (via legacy)
+// whose transcript has since given it a cwd: a session first read before any
+// line with a cwd gets one more resolution, from the cwd, which never says
+// legacy. Any other resolved row is a snapshot and is never listed again.
+func (s *Store) PendingDims() ([]DimRow, error) {
+	rows, err := s.db.Query(`SELECT session_id,project,cwd,runtime,root_key FROM session_dim
+WHERE workspace='' OR unmatched=1 OR (via='legacy' AND parsed=1 AND cwd<>'') ORDER BY session_id,project`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DimRow
+	for rows.Next() {
+		var r DimRow
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Cwd, &r.Runtime, &r.RootKey); err != nil {
+			return nil, err
+		}
+		r.DimIn.Project = r.Project
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// KnownPath is a folder an earlier session points at and where that session
+// ran ("host", "box" or "").
+type KnownPath struct{ Path, Runtime string }
+
+// KnownPaths is every folder earlier sessions point at, for the slug match of a
+// session that carries no cwd: the workspace of each matched row and the cwd of
+// each parsed one, each with the runtime of the row it came from (a folder that
+// rows of two runtimes point at is listed once per runtime). An unmatched row's
+// workspace is only its slug, so it is left out.
+func (s *Store) KnownPaths() ([]KnownPath, error) {
+	rows, err := s.db.Query(`SELECT workspace, runtime FROM session_dim WHERE workspace<>'' AND unmatched=0
+UNION
+SELECT cwd, runtime FROM session_dim WHERE cwd<>'' AND parsed=1
+ORDER BY 1, 2`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KnownPath
+	for rows.Next() {
+		var k KnownPath
+		if err := rows.Scan(&k.Path, &k.Runtime); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// SetResolved writes the resolution of one session: workspace, unmatched,
+// profile, via and via_path, and nothing else. The WHERE clause skips a row that
+// already holds exactly these values, so an unmatched session retried every pass
+// costs a read, not a write.
+func (s *Store) SetResolved(sessionID, project string, r Resolved) error {
+	_, err := s.db.Exec(`UPDATE session_dim SET workspace=?,unmatched=?,profile=?,via=?,via_path=?
+WHERE session_id=? AND project=? AND (workspace<>? OR unmatched<>? OR profile<>? OR via<>? OR via_path<>?)`,
+		r.Workspace, boolInt(r.Unmatched), r.Profile, r.Via, r.ViaPath, sessionID, project,
+		r.Workspace, boolInt(r.Unmatched), r.Profile, r.Via, r.ViaPath)
+	return err
 }
 
 // --- query types --------------------------------------------------------------
@@ -461,6 +826,21 @@ type SessionAggRow struct {
 	CacheCreation int64   `json:"cacheCreation"`
 	Prompts       int64   `json:"prompts"`
 	Cost          float64 `json:"costUsd"`
+	// From session_dim; empty when the session has no dim row. Workspace is the
+	// project slug for a session no workspace explains, as Workspaces files it.
+	Workspace string `json:"workspace"`
+	Runtime   string `json:"runtime"`
+	Profile   string `json:"profile"`
+	Branch    string `json:"branch"`
+}
+
+// SessionModelCost is one model's cost within one session over the window: the
+// grouped row SessionCosts sees before it folds a multi-model session to "mixed".
+type SessionModelCost struct {
+	SessionID string  `json:"sessionId"`
+	Project   string  `json:"project"`
+	Model     string  `json:"model"`
+	Cost      float64 `json:"costUsd"`
 }
 
 // ToolRow is one attribution aggregate across the window.
@@ -471,12 +851,14 @@ type ToolRow struct {
 }
 
 // ByDayModel returns per-(day,model) token/prompt aggregates in [from,to] (inclusive).
-func (s *Store) ByDayModel(from, to string) ([]DayModelRow, error) {
+// Every query below takes a Where; the zero Where is every session.
+func (s *Store) ByDayModel(from, to string, w Where) ([]DayModelRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT day, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY day, model ORDER BY day, model`, from, to)
+SELECT r.day, r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.day, r.model ORDER BY r.day, r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -495,13 +877,14 @@ GROUP BY day, model ORDER BY day, model`, from, to)
 // ByModel returns one row per model across the whole window, with a
 // distinct-session count (session identity is (session_id, project), matching
 // the rollup PK) and a dollar cost. Ordered by cost descending.
-func (s *Store) ByModel(from, to string) ([]ModelRow, error) {
+func (s *Store) ByModel(from, to string, w Where) ([]ModelRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd),
-  COUNT(DISTINCT session_id || char(31) || project)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY model`, from, to)
+SELECT r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd),
+  COUNT(DISTINCT r.session_id || char(31) || r.project)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -524,12 +907,13 @@ GROUP BY model`, from, to)
 // ByProject returns per-(project, model) aggregates over the window, each with a
 // dollar cost. The frontend sums rows for a project total and uses the per-model
 // split for the mix. Ordered by cost descending.
-func (s *Store) ByProject(from, to string) ([]ProjectRow, error) {
+func (s *Store) ByProject(from, to string, w Where) ([]ProjectRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT project, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY project, model`, from, to)
+SELECT r.project, r.model,
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.project, r.model`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,12 +931,13 @@ GROUP BY project, model`, from, to)
 
 // Sessions returns per-(day,session,project,model) rows in [from,to], newest day
 // first, with tokens/prompt derived (0 when a row has no prompts).
-func (s *Store) Sessions(from, to string, limit int) ([]SessionRow, error) {
+func (s *Store) Sessions(from, to string, limit int, w Where) ([]SessionRow, error) {
+	src, and, wargs := w.source("session_rollup")
 	rows, err := s.db.Query(`
-SELECT day, session_id, project, model, input_tokens, output_tokens, cache_read, cache_creation, prompts, cost_usd
-FROM session_rollup WHERE day BETWEEN ? AND ?
-ORDER BY day DESC, (input_tokens+output_tokens+cache_read+cache_creation) DESC
-LIMIT ?`, from, to, limit)
+SELECT r.day, r.session_id, r.project, r.model, r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation, r.prompts, r.cost_usd
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+ORDER BY r.day DESC, (r.input_tokens+r.output_tokens+r.cache_read+r.cache_creation) DESC
+LIMIT ?`, append(append([]any{from, to}, wargs...), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -579,12 +964,14 @@ LIMIT ?`, from, to, limit)
 // (no day-ordered LIMIT), so the Sessions view's distinct count, cost histogram,
 // and top-by-cost list stay correct on wide windows. Bounded by fleet size
 // (one grouped row per session/model), so it does not need a cap.
-func (s *Store) SessionCosts(from, to string) ([]SessionAggRow, error) {
+func (s *Store) SessionCosts(from, to string, w Where) ([]SessionAggRow, error) {
+	src, and, wargs := w.joined("session_rollup")
 	rows, err := s.db.Query(`
-SELECT session_id, project, model, MAX(day),
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
-FROM session_rollup WHERE day BETWEEN ? AND ?
-GROUP BY session_id, project, model`, from, to)
+SELECT r.session_id, r.project, r.model, MAX(r.day),
+  SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read), SUM(r.cache_creation), SUM(r.prompts), SUM(r.cost_usd),
+  COALESCE(d.workspace,''), COALESCE(d.runtime,''), COALESCE(d.profile,''), COALESCE(d.branch,'')
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.session_id, r.project, r.model, d.workspace, d.runtime, d.profile, d.branch`, append([]any{from, to}, wargs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -596,16 +983,19 @@ GROUP BY session_id, project, model`, from, to)
 	byKey := make(map[string]*acc)
 	order := []string{}
 	for rows.Next() {
-		var sid, project, model, day string
+		var sid, project, model, day, ws, runtime, profile, branch string
 		var in, out, cr, cc, prompts int64
 		var cost float64
-		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts, &cost); err != nil {
+		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts, &cost,
+			&ws, &runtime, &profile, &branch); err != nil {
 			return nil, err
 		}
+		ws, _ = workspaceOf(project, ws, false)
 		k := sid + "\x1f" + project
 		a := byKey[k]
 		if a == nil {
-			a = &acc{row: SessionAggRow{SessionID: sid, Project: project}, models: map[string]struct{}{}}
+			a = &acc{row: SessionAggRow{SessionID: sid, Project: project,
+				Workspace: ws, Runtime: runtime, Profile: profile, Branch: branch}, models: map[string]struct{}{}}
 			byKey[k] = a
 			order = append(order, k)
 		}
@@ -639,6 +1029,45 @@ GROUP BY session_id, project, model`, from, to)
 	return out, nil
 }
 
+// SessionModelCosts returns one row per (session, model) over the window, the
+// grouped rows SessionCosts folds. Bounded by sessions x models. Costliest first.
+func (s *Store) SessionModelCosts(from, to string, w Where) ([]SessionModelCost, error) {
+	src, and, wargs := w.source("session_rollup")
+	rows, err := s.db.Query(`
+SELECT r.session_id, r.project, r.model, SUM(r.cost_usd)
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.session_id, r.project, r.model`, append([]any{from, to}, wargs...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SessionModelCost{}
+	for rows.Next() {
+		var r SessionModelCost
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Model, &r.Cost); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Cost != b.Cost {
+			return a.Cost > b.Cost
+		}
+		if a.SessionID != b.SessionID {
+			return a.SessionID < b.SessionID
+		}
+		if a.Project != b.Project {
+			return a.Project < b.Project
+		}
+		return a.Model < b.Model
+	})
+	return out, nil
+}
+
 // ConversationCosts returns the total cost per conversation id (session_id)
 // over every day it ran. It is the whole history, not a window: a session's
 // price is what its conversations cost since they began.
@@ -661,11 +1090,12 @@ func (s *Store) ConversationCosts() (map[string]float64, error) {
 }
 
 // Tools returns attribution aggregates (skill/plugin/mcp) in [from,to], busiest first.
-func (s *Store) Tools(from, to string, limit int) ([]ToolRow, error) {
+func (s *Store) Tools(from, to string, limit int, w Where) ([]ToolRow, error) {
+	src, and, wargs := w.source("attribution_rollup")
 	rows, err := s.db.Query(`
-SELECT kind, name, SUM(records) AS r
-FROM attribution_rollup WHERE day BETWEEN ? AND ?
-GROUP BY kind, name ORDER BY r DESC LIMIT ?`, from, to, limit)
+SELECT r.kind, r.name, SUM(r.records) AS n
+FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+GROUP BY r.kind, r.name ORDER BY n DESC LIMIT ?`, append(append([]any{from, to}, wargs...), limit)...)
 	if err != nil {
 		return nil, err
 	}
