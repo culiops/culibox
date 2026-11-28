@@ -224,6 +224,12 @@ jobs:
       # failure instead of a skip.
       - name: Test the private-identifier rules
         run: GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh
+      # The branch scan a box runs through scripts/test.sh (#381), end to end with the
+      # scanner above, and the offline test of how a box builds that scanner.
+      - name: Test the branch scan
+        run: |
+          bash scripts/ci/gitleaks-install_test.sh
+          BRANCH_SCAN_TEST_REQUIRE=1 bash scripts/ci/branch-scan_test.sh
       # What is scanned, and why a force-push scans a range since the newest tag, is in
       # scripts/ci/secret-scan.sh. BEFORE reaches it through env, never interpolated.
       - name: Scan for secrets

@@ -1248,6 +1248,10 @@ func TestCIWorkflow(t *testing.T) {
 		// The custom private-identifier rules are tested with the pinned scanner, and
 		// the run fails (not skips) when the scanner is missing.
 		"GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh",
+		// The box's branch scan and its scanner build (#381): the end-to-end case runs
+		// with the pinned scanner and fails (not skips) without it.
+		"bash scripts/ci/gitleaks-install_test.sh",
+		"BRANCH_SCAN_TEST_REQUIRE=1 bash scripts/ci/branch-scan_test.sh",
 		"sha256sum -c",
 	} {
 		if !strings.Contains(wf, want) {
