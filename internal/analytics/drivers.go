@@ -127,7 +127,7 @@ SELECT kind, '', parent, SUM(c), COUNT(*) FROM k
 			return resp, err
 		}
 		if n > 0 {
-			fold := NamedCost{fmt.Sprintf("other (%d more)", n), c, true}
+			fold := NamedCost{Name: fmt.Sprintf("other (%d more)", n), Cost: c, Other: true}
 			switch kind {
 			case "mcp_server":
 				serverFold = &MCPServerCost{Server: fold.Name, Cost: c, Other: true, Tools: []NamedCost{}}
