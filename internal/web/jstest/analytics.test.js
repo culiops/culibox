@@ -859,6 +859,34 @@ test("anDriverTiles: a kind with no rows has a dash; with no covered value every
   assert.ok(!JSON.stringify(e).includes("NaN"));
 });
 
+test("anDriverCards / anDriverTiles: the API's fold row (other: N more) counts in the sums but is no name: no bar, never the costliest", () => {
+  const resp = {
+    total: 100, coveredTotal: 100,
+    agent: [{ name: "Explore", costUsd: 10 }, { name: "other (60 more)", costUsd: 30, other: true }],
+    skill: [], plugin: [{ name: "superpowers", costUsd: 5 }, { name: "other (9 more)", costUsd: 20, other: true }],
+    mcp: [
+      { server: "docs", costUsd: 8, tools: [{ name: "search", costUsd: 3 }, { name: "other (4 more)", costUsd: 4, other: true }] },
+      { server: "other (7 more)", costUsd: 40, tools: [], other: true },
+    ],
+  };
+  const r = anDriverCards(resp);
+  const agent = r.cards[0], plugin = r.cards[2], mcp = r.cards[3];
+  assert.deepEqual(agent.rows.map((x) => [x.name, x.cost, x.muted, !!x.other]), [
+    ["Explore", 10, false, false], ["other (60 more)", 30, true, true], ["main agent (no subagent)", 60, true, false],
+  ]);
+  assert.equal(agent.max, 10, "the fold row sets no bar scale");
+  assert.equal(plugin.max, 5);
+  assert.deepEqual(mcp.rows.map((x) => [x.name, x.sub, x.muted]), [
+    ["docs", false, false], ["search", true, false], ["other (4 more)", true, true], ["other (7 more)", false, true],
+    ["outside any MCP tool", false, true],
+  ]);
+  assert.equal(mcp.rows[4].cost, 52, "the rest is covered minus every server row, fold included");
+  assert.equal(mcp.max, 8);
+  const t = anDriverTiles(resp);
+  assert.deepEqual(t.map((x) => x.value), ["40%", "$5.00", "$8.00"], "subagent share counts the fold; costliest skips it");
+  assert.deepEqual(t.map((x) => x.label), ["Of API value ran in subagents", "Costliest plugin · superpowers", "Costliest MCP server · docs"]);
+});
+
 test("anCoverageText: whole percent floored (never 100 for 0.996), '<1' for a sliver, nothing at full or no coverage", () => {
   assert.equal(anCoverageText(0.996), "Based on 99% of this window's API value: sessions whose transcripts are still on disk.");
   assert.match(anCoverageText(0.5), /^Based on 50% of/);

@@ -477,14 +477,15 @@ function anWorkspaceBars(rows, limit) {
 // anDriverCards: /drivers → {empty, coverage, cards}. Four cards (agent, skill, plugin, mcp), each rows of {name, cost, pct, muted,
 // sub} and `max`, the largest named row (0 when none, so no bar is drawn). Percentages are whole percents of CoveredTotal, the API
 // value of the sessions that have driver data, so usage that exists only in rollups never counts as "main agent" or "outside".
-// The muted last row is the rest: CoveredTotal minus the kind's rows, never below 0. An MCP server's tools follow it as `sub`
+// The muted last row is the rest: CoveredTotal minus the kind's rows, never below 0. A fold row from the API (`other`: the names
+// past its cap, "other (N more)") is muted too and draws no bar, yet counts in the sum. An MCP server's tools follow it as `sub`
 // rows. `coverage` is CoveredTotal / Total when under 1, else null. With no covered value there is nothing to divide by:
 // {empty: true, coverage: null, cards: []}.
 function anDriverCards(resp) {
   const total = (resp && resp.total) || 0, covered = (resp && resp.coveredTotal) || 0;
   if (!(covered > 0)) return { empty: true, coverage: null, cards: [] };
   const pct = (v) => Math.round(v / covered * 100);
-  const row = (name, cost, muted, sub) => ({ name, cost, pct: pct(cost), muted, sub });
+  const row = (name, cost, muted, sub, other) => Object.assign({ name, cost, pct: pct(cost), muted, sub }, other ? { other: true } : {});
   const cards = ["agent", "skill", "plugin", "mcp"].map((kind) => {
     const C = AN_COPY.drivers.cards[kind];
     const rows = [];
@@ -492,13 +493,13 @@ function anDriverCards(resp) {
     if (kind === "mcp") {
       for (const s of resp.mcp || []) {
         sum += s.costUsd || 0;
-        rows.push(row(s.server, s.costUsd || 0, false, false));
-        for (const t of s.tools || []) rows.push(row(t.name, t.costUsd || 0, false, true));
+        rows.push(row(s.server, s.costUsd || 0, !!s.other, false, s.other));
+        for (const t of s.tools || []) rows.push(row(t.name, t.costUsd || 0, !!t.other, true, t.other));
       }
     } else {
-      for (const x of resp[kind] || []) { sum += x.costUsd || 0; rows.push(row(x.name, x.costUsd || 0, false, false)); }
+      for (const x of resp[kind] || []) { sum += x.costUsd || 0; rows.push(row(x.name, x.costUsd || 0, !!x.other, false, x.other)); }
     }
-    const max = rows.reduce((m, r) => Math.max(m, r.cost), 0);
+    const max = rows.reduce((m, r) => (r.muted ? m : Math.max(m, r.cost)), 0);
     rows.push(row(C.rest, Math.max(0, covered - sum), true, false));
     return { kind, title: C.title, caption: C.caption, rows, max };
   });
@@ -564,9 +565,9 @@ function anDriverTiles(resp) {
   const r = anDriverCards(resp);
   const named = (kind) => {
     const card = r.cards.find((c) => c.kind === kind);
-    return card ? card.rows.filter((x) => !x.muted && !x.sub) : [];
+    return card ? card.rows.filter((x) => (!x.muted || x.other) && !x.sub) : [];
   };
-  const top = (rows) => rows.reduce((t, x) => (!t || x.cost > t.cost ? x : t), null);
+  const top = (rows) => rows.reduce((t, x) => (x.other || (t && x.cost <= t.cost) ? t : x), null);
   const agents = named("agent");
   const sub = agents.reduce((s, x) => s + x.cost, 0);
   const plugin = top(named("plugin")), mcp = top(named("mcp"));

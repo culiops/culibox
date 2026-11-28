@@ -9,6 +9,8 @@ import (
 type NamedCost struct {
 	Name string  `json:"name"`
 	Cost float64 `json:"costUsd"`
+	// Other marks the one fold row of a list: the names past its cap.
+	Other bool `json:"other,omitempty"`
 }
 
 // MCPServerCost is one MCP server and the tools called under it. Cost is the
@@ -16,6 +18,7 @@ type NamedCost struct {
 type MCPServerCost struct {
 	Server string      `json:"server"`
 	Cost   float64     `json:"costUsd"`
+	Other  bool        `json:"other,omitempty"` // the fold row of the servers past the cap
 	Tools  []NamedCost `json:"tools"`
 }
 
@@ -124,10 +127,10 @@ SELECT kind, '', parent, SUM(c), COUNT(*) FROM k
 			return resp, err
 		}
 		if n > 0 {
-			fold := NamedCost{fmt.Sprintf("other (%d more)", n), c}
+			fold := NamedCost{fmt.Sprintf("other (%d more)", n), c, true}
 			switch kind {
 			case "mcp_server":
-				serverFold = &MCPServerCost{Server: fold.Name, Cost: c, Tools: []NamedCost{}}
+				serverFold = &MCPServerCost{Server: fold.Name, Cost: c, Other: true, Tools: []NamedCost{}}
 			case "mcp_tool":
 				server(parent)
 				toolFolds[parent] = fold
@@ -138,16 +141,16 @@ SELECT kind, '', parent, SUM(c), COUNT(*) FROM k
 		}
 		switch kind {
 		case "agent":
-			resp.Agent = append(resp.Agent, NamedCost{name, c})
+			resp.Agent = append(resp.Agent, NamedCost{Name: name, Cost: c})
 		case "skill":
-			resp.Skill = append(resp.Skill, NamedCost{name, c})
+			resp.Skill = append(resp.Skill, NamedCost{Name: name, Cost: c})
 		case "plugin":
-			resp.Plugin = append(resp.Plugin, NamedCost{name, c})
+			resp.Plugin = append(resp.Plugin, NamedCost{Name: name, Cost: c})
 		case "mcp_server":
 			server(name).Cost += c
 		case "mcp_tool":
 			m := server(parent)
-			m.Tools = append(m.Tools, NamedCost{name, c})
+			m.Tools = append(m.Tools, NamedCost{Name: name, Cost: c})
 		}
 	}
 	if err := rows.Err(); err != nil {
