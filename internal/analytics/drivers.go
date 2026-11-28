@@ -1,6 +1,9 @@
 package analytics
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // NamedCost is one agent, skill or plugin with its cost.
 type NamedCost struct {
@@ -38,8 +41,16 @@ func sortNamed(l []NamedCost) {
 	})
 }
 
+// driversPerKind and driversToolsPerServer bound the cost-drivers response:
+// names past them fold into one "other (N more)" row (Drivers).
+const (
+	driversPerKind        = 50
+	driversToolsPerServer = 25
+)
+
 // Drivers returns the window's cost per agent, skill, plugin and MCP server
-// (with its tools), narrowed by w.
+// (with its tools), narrowed by w. Each list keeps its costliest names and
+// folds the rest into one last row, so a list's costs still add up.
 func (s *Store) Drivers(from, to string, w Where) (DriversResp, error) {
 	resp := DriversResp{Agent: []NamedCost{}, Skill: []NamedCost{}, Plugin: []NamedCost{}, MCP: []MCPServerCost{}}
 
@@ -55,10 +66,39 @@ func (s *Store) Drivers(from, to string, w Where) (DriversResp, error) {
 	}
 
 	src, and, wargs := w.source("driver_rollup")
+	// The cap runs in SQL so a transcript that invents names by the million
+	// never reaches Go memory or the response: per kind the costliest
+	// driversPerKind names, per kept server its costliest driversToolsPerServer
+	// tools, and one fold row (name '', n > 0) per kind or server for the rest.
+	// Servers rank over every server key, a tool-only parent included at cost 0,
+	// by cost then name, as the sort below does. Tools of a folded server are
+	// left out: the page never sums tools, only servers.
+	args := append([]any{from, to}, wargs...)
+	args = append(args, driversPerKind, driversToolsPerServer, driversPerKind, driversPerKind, driversToolsPerServer, driversPerKind)
 	rows, err := s.db.Query(`
-SELECT r.kind, r.name, r.parent, SUM(r.cost_usd)
-FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
-GROUP BY r.kind, r.name, r.parent`, append([]any{from, to}, wargs...)...)
+WITH g AS (
+  SELECT r.kind AS kind, r.name AS name, CASE WHEN r.kind = 'mcp_tool' THEN r.parent ELSE '' END AS parent, SUM(r.cost_usd) AS c
+  FROM `+src+` WHERE r.day BETWEEN ? AND ?`+and+`
+  GROUP BY 1, 2, 3),
+srv AS (
+  SELECT server, SUM(sc) AS sc FROM (
+    SELECT name AS server, c AS sc FROM g WHERE kind = 'mcp_server'
+    UNION ALL SELECT parent, 0 FROM g WHERE kind = 'mcp_tool') GROUP BY server),
+sr AS (SELECT server, ROW_NUMBER() OVER (ORDER BY sc DESC, server) AS srn FROM srv),
+k AS (
+  SELECT g.kind, g.name, g.parent, g.c,
+    CASE WHEN g.kind = 'mcp_server' THEN s1.srn
+         ELSE ROW_NUMBER() OVER (PARTITION BY g.kind, g.parent ORDER BY g.c DESC, g.name) END AS rn,
+    CASE WHEN g.kind = 'mcp_tool' THEN s2.srn ELSE 0 END AS prn
+  FROM g
+  LEFT JOIN sr s1 ON g.kind = 'mcp_server' AND s1.server = g.name
+  LEFT JOIN sr s2 ON g.kind = 'mcp_tool' AND s2.server = g.parent)
+SELECT kind, name, parent, c, 0 FROM k
+  WHERE prn <= ? AND rn <= CASE WHEN kind = 'mcp_tool' THEN ? ELSE ? END
+UNION ALL
+SELECT kind, '', parent, SUM(c), COUNT(*) FROM k
+  WHERE prn <= ? AND rn > CASE WHEN kind = 'mcp_tool' THEN ? ELSE ? END
+  GROUP BY kind, parent`, args...)
 	if err != nil {
 		return resp, err
 	}
@@ -72,11 +112,29 @@ GROUP BY r.kind, r.name, r.parent`, append([]any{from, to}, wargs...)...)
 		}
 		return m
 	}
+	// Fold rows go last in their list whatever their cost: they are not a name.
+	folds := map[string]NamedCost{}
+	toolFolds := map[string]NamedCost{}
+	var serverFold *MCPServerCost
 	for rows.Next() {
 		var kind, name, parent string
 		var c float64
-		if err := rows.Scan(&kind, &name, &parent, &c); err != nil {
+		var n int
+		if err := rows.Scan(&kind, &name, &parent, &c, &n); err != nil {
 			return resp, err
+		}
+		if n > 0 {
+			fold := NamedCost{fmt.Sprintf("other (%d more)", n), c}
+			switch kind {
+			case "mcp_server":
+				serverFold = &MCPServerCost{Server: fold.Name, Cost: c, Tools: []NamedCost{}}
+			case "mcp_tool":
+				server(parent)
+				toolFolds[parent] = fold
+			default:
+				folds[kind] = fold
+			}
+			continue
 		}
 		switch kind {
 		case "agent":
@@ -95,11 +153,21 @@ GROUP BY r.kind, r.name, r.parent`, append([]any{from, to}, wargs...)...)
 	if err := rows.Err(); err != nil {
 		return resp, err
 	}
-	sortNamed(resp.Agent)
-	sortNamed(resp.Skill)
-	sortNamed(resp.Plugin)
-	for _, m := range servers {
+	withFold := func(l []NamedCost, kind string) []NamedCost {
+		sortNamed(l)
+		if f, ok := folds[kind]; ok {
+			l = append(l, f)
+		}
+		return l
+	}
+	resp.Agent = withFold(resp.Agent, "agent")
+	resp.Skill = withFold(resp.Skill, "skill")
+	resp.Plugin = withFold(resp.Plugin, "plugin")
+	for p, m := range servers {
 		sortNamed(m.Tools)
+		if f, ok := toolFolds[p]; ok {
+			m.Tools = append(m.Tools, f)
+		}
 		resp.MCP = append(resp.MCP, *m)
 	}
 	sort.Slice(resp.MCP, func(i, j int) bool {
@@ -108,5 +176,8 @@ GROUP BY r.kind, r.name, r.parent`, append([]any{from, to}, wargs...)...)
 		}
 		return resp.MCP[i].Server < resp.MCP[j].Server
 	})
+	if serverFold != nil {
+		resp.MCP = append(resp.MCP, *serverFold)
+	}
 	return resp, nil
 }
