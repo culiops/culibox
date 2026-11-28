@@ -23,6 +23,15 @@ need_gitleaks() {
   fi
 }
 
+# A checkout git cannot read (no repo, or one it refuses to use) is a failure: without
+# this the steps below would read as "nothing to scan".
+if ! git rev-parse --git-dir >/dev/null; then
+  echo "branch-scan: git cannot read this checkout" >&2
+  exit 1
+fi
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
 rc=0
 base_ref=${AB_SCAN_BASE:-origin/main}
 case $base_ref in
@@ -50,20 +59,20 @@ else
   echo "branch-scan: commits SKIPPED ($base_ref is not in this clone)" >&2
 fi
 
-# 2. Uncommitted files, copied by their paths into a temp dir and scanned there, so the
-# path rules of .gitleaks.toml see the same repo-relative paths.
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+# 2. Uncommitted files (the working copy), copied by their paths into a temp dir and
+# scanned there, so the path rules of .gitleaks.toml see the same repo-relative paths.
+# The list is built in plain commands, not a process substitution, so a git failure
+# stops the script (set -e) instead of reading as an empty list.
+git ls-files -z -m -o --exclude-standard >"$tmp/list"
+git diff -z --cached --name-only --diff-filter=d >>"$tmp/list"
+sort -zu "$tmp/list" >"$tmp/files"
 n=0
 while IFS= read -r -d '' f; do
   [ -f "$f" ] && [ ! -L "$f" ] || continue
-  mkdir -p "$tmp/tree/$(dirname "$f")"
-  cp "$f" "$tmp/tree/$f"
+  mkdir -p -- "$tmp/tree/$(dirname -- "$f")"
+  cp -- "$f" "$tmp/tree/$f"
   n=$((n + 1))
-done < <({
-  git ls-files -z -m -o --exclude-standard
-  git diff -z --cached --name-only --diff-filter=d
-} | sort -zu)
+done <"$tmp/files"
 if [ "$n" -gt 0 ]; then
   need_gitleaks
   echo "branch-scan: scanning $n uncommitted file(s) with .gitleaks.toml"

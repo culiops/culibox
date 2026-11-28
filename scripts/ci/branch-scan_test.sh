@@ -106,6 +106,21 @@ case $out in *SKIPPED*) pass "and says SKIPPED" ;; *) fail "skip message: $out" 
 if grep -q '^dir ' "$tmp/log"; then pass "no base: uncommitted files still scanned"; else fail "no base: tree not scanned"; fi
 rm -f "$repo/untracked.txt"
 
+# A checkout git cannot read (no repo here, or one it refuses) fails, never "nothing to scan".
+mkdir -p "$tmp/norepo/scripts/ci"
+cp "$script" "$tmp/norepo/scripts/ci/"
+echo x >"$tmp/norepo/leak.txt"
+: >"$tmp/log"
+if out=$(env PATH="$tmp/bin:/usr/bin:/bin" STUB_LOG="$tmp/log" GIT_CEILING_DIRECTORIES="$tmp" bash "$tmp/norepo/scripts/ci/branch-scan.sh" 2>&1); then
+  fail "no git repo exited 0: $out"
+else pass "no git repo fails"; fi
+
+# A file whose name starts with a dash is copied as a file, not read as an option.
+echo d >"$repo/-rf"
+: >"$tmp/log"
+if out=$(run 2>&1) && grep -q -- '-rf' "$tmp/log"; then pass "a dash-named file is scanned"; else fail "dash-named file: $out"; fi
+rm -f "$repo/-rf"
+
 # AB_SCAN_BASE picks another base, passed on as its commit id; an option-like one is refused.
 : >"$tmp/log"
 if run AB_SCAN_BASE="$base" >/dev/null 2>&1 && grep -q -- "--log-opts=$base..HEAD -m" "$tmp/log"; then pass "AB_SCAN_BASE is the base"; else fail "AB_SCAN_BASE: $(cat "$tmp/log")"; fi
